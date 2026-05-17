@@ -50,6 +50,12 @@ target_include_directories(stb INTERFACE third_party/stb)
 # --- App ----------------------------------------------------------------------
 add_executable(voxel_engine
   src/main.cpp
+  src/core/input.cpp
+  src/gfx/camera.cpp
+  src/gfx/cube.cpp
+  src/gfx/mesh.cpp
+  src/gfx/shader.cpp
+  src/gfx/texture.cpp
 )
 
 target_include_directories(voxel_engine PRIVATE src)
