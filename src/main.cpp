@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -78,8 +79,70 @@ static void fill_test_terrain(world::Chunk& c) {
     }
 }
 
+// Sum the world-space area of every emitted quad. Greedy and naive must
+// agree on total area for any visible surface (greedy just merges them
+// into fewer larger rectangles). A mismatch means greedy dropped or
+// duplicated faces.
+static double total_quad_area(const world::ChunkMeshData& m) {
+    double area = 0.0;
+    for (size_t i = 0; i + 5 < m.indices.size(); i += 6) {
+        const auto& a = m.vertices[m.indices[i + 0]].position;
+        const auto& b = m.vertices[m.indices[i + 1]].position;
+        const auto& c = m.vertices[m.indices[i + 2]].position;
+        glm::vec3 ab = b - a;
+        glm::vec3 ac = c - a;
+        // Each quad is 2 tris; the second tri's area = first's for an axis-
+        // aligned rectangle, so doubling the cross length is the rectangle.
+        area += glm::length(glm::cross(ab, ac));
+    }
+    return area;
+}
+
+static int run_bench() {
+    world::Chunk chunk;
+    fill_test_terrain(chunk);
+
+    constexpr int kRuns = 25;
+    double naive_total = 0.0, greedy_total = 0.0;
+    world::ChunkMeshData last_naive, last_greedy;
+    for (int i = 0; i < kRuns; ++i) {
+        last_naive  = world::build_chunk_mesh_naive(chunk);
+        last_greedy = world::build_chunk_mesh_greedy(chunk);
+        naive_total  += last_naive.build_ms;
+        greedy_total += last_greedy.build_ms;
+    }
+
+    int naive_quads  = last_naive.quad_count;
+    int greedy_quads = last_greedy.quad_count;
+    size_t naive_tris  = last_naive.indices.size()  / 3;
+    size_t greedy_tris = last_greedy.indices.size() / 3;
+    double naive_area  = total_quad_area(last_naive);
+    double greedy_area = total_quad_area(last_greedy);
+
+    std::printf("==== chunk mesher benchmark (%d runs, sine-bumped terrain) ====\n", kRuns);
+    std::printf("naive : quads=%6d  tris=%6zu  area=%.1f  avg build=%6.3f ms\n",
+                naive_quads, naive_tris, naive_area, naive_total / kRuns);
+    std::printf("greedy: quads=%6d  tris=%6zu  area=%.1f  avg build=%6.3f ms\n",
+                greedy_quads, greedy_tris, greedy_area, greedy_total / kRuns);
+    if (greedy_quads > 0 && greedy_tris > 0) {
+        std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris\n",
+                    static_cast<double>(naive_quads) / greedy_quads,
+                    static_cast<double>(naive_tris)  / greedy_tris);
+    }
+    double area_err = std::abs(naive_area - greedy_area);
+    std::printf("area  : naive=%.4f  greedy=%.4f  diff=%.4f  %s\n",
+                naive_area, greedy_area, area_err,
+                area_err < 0.001 ? "[ok: greedy preserves surface area]"
+                                 : "[FAIL: greedy lost or duplicated faces]");
+    return (area_err < 0.001) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
 int main(int argc, char** argv) {
-    (void)argc;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--bench") {
+            return run_bench();
+        }
+    }
 
     glfwSetErrorCallback(glfw_error);
     if (!glfwInit()) {
@@ -144,22 +207,30 @@ int main(int argc, char** argv) {
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
 
-    // Build a single test chunk with sine-bumped terrain and mesh it
-    // with the naive mesher. This is the perf baseline that greedy will
-    // be compared against in the next commit.
+    // Build the test chunk with both mesher variants so we can print
+    // a side-by-side benchmark on startup. The greedy result is what
+    // we actually render.
     world::Chunk chunk;
     fill_test_terrain(chunk);
-    auto mesh_data = world::build_chunk_mesh_naive(chunk);
+
+    auto naive  = world::build_chunk_mesh_naive(chunk);
+    auto greedy = world::build_chunk_mesh_greedy(chunk);
+
+    std::printf("[mesh:naive ] quads=%6d  tris=%6zu  build=%6.2f ms\n",
+                naive.quad_count,  naive.indices.size()  / 3, naive.build_ms);
+    std::printf("[mesh:greedy] quads=%6d  tris=%6zu  build=%6.2f ms\n",
+                greedy.quad_count, greedy.indices.size() / 3, greedy.build_ms);
+
+    double quad_ratio = naive.quad_count > 0
+        ? static_cast<double>(naive.quad_count) / greedy.quad_count : 0.0;
+    double tri_ratio = greedy.indices.empty() ? 0.0
+        : static_cast<double>(naive.indices.size()) / greedy.indices.size();
+    std::printf("[mesh:ratio ] %.1fx fewer quads  |  %.1fx fewer tris  (greedy vs naive)\n",
+                quad_ratio, tri_ratio);
 
     gfx::Mesh chunk_mesh;
-    chunk_mesh.upload(mesh_data.vertices, mesh_data.indices);
-
-    std::printf("[mesh:naive] solid=%d  quads=%d  verts=%zu  tris=%zu  build=%.2f ms\n",
-                chunk.solid_count(),
-                mesh_data.quad_count,
-                mesh_data.vertices.size(),
-                mesh_data.indices.size() / 3,
-                mesh_data.build_ms);
+    chunk_mesh.upload(greedy.vertices, greedy.indices);
+    const auto& mesh_data = greedy;
 
     gfx::FlyCamera cam;
     cam.set_position({8.0f, 16.0f, 28.0f});
@@ -232,7 +303,7 @@ int main(int argc, char** argv) {
         if (now - last_time >= 1.0) {
             char title[192];
             std::snprintf(title, sizeof(title),
-                          "voxel_engine  |  %d fps  |  pos %.1f %.1f %.1f  |  tris %zu (naive)",
+                          "voxel_engine  |  %d fps  |  pos %.1f %.1f %.1f  |  tris %zu (greedy)",
                           frame_count,
                           cam.position().x, cam.position().y, cam.position().z,
                           mesh_data.indices.size() / 3);
