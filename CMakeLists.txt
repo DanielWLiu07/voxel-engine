@@ -56,6 +56,7 @@ add_executable(voxel_engine
   src/gfx/mesh.cpp
   src/gfx/shader.cpp
   src/gfx/texture.cpp
+  src/world/chunk_mesh.cpp
 )
 
 target_include_directories(voxel_engine PRIVATE src)

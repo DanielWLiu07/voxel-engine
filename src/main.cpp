@@ -5,11 +5,13 @@
 
 #include "core/input.h"
 #include "gfx/camera.h"
-#include "gfx/cube.h"
 #include "gfx/mesh.h"
 #include "gfx/shader.h"
 #include "gfx/texture.h"
+#include "world/chunk.h"
+#include "world/chunk_mesh.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +53,29 @@ static std::vector<std::uint8_t> make_checker_rgba(int size, int cells) {
         }
     }
     return px;
+}
+
+// Fill a chunk with a sine-bumped terrain surface. Bedrock at y=0..base,
+// then grass on top of a sine-warped surface. Good visual test for mesher.
+static void fill_test_terrain(world::Chunk& c) {
+    using namespace world;
+    constexpr int base = 8;
+    for (int z = 0; z < kChunkSizeZ; ++z) {
+        for (int x = 0; x < kChunkSizeX; ++x) {
+            float fx = static_cast<float>(x);
+            float fz = static_cast<float>(z);
+            float h = std::sin(fx * 0.45f) * 2.0f
+                    + std::cos(fz * 0.6f)  * 2.0f
+                    + std::sin((fx + fz) * 0.2f) * 1.5f;
+            int height = base + static_cast<int>(std::round(h));
+            for (int y = 0; y <= height; ++y) {
+                BlockId b = BlockId::Stone;
+                if (y == height) b = BlockId::Grass;
+                else if (y >= height - 2) b = BlockId::Dirt;
+                c.set(x, y, z, b);
+            }
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -115,16 +140,30 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    gfx::Mesh cube;
-    gfx::build_unit_cube(cube);
-
     gfx::Texture2D tex;
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
 
+    // Build a single test chunk with sine-bumped terrain and mesh it
+    // with the naive mesher. This is the perf baseline that greedy will
+    // be compared against in the next commit.
+    world::Chunk chunk;
+    fill_test_terrain(chunk);
+    auto mesh_data = world::build_chunk_mesh_naive(chunk);
+
+    gfx::Mesh chunk_mesh;
+    chunk_mesh.upload(mesh_data.vertices, mesh_data.indices);
+
+    std::printf("[mesh:naive] solid=%d  quads=%d  verts=%zu  tris=%zu  build=%.2f ms\n",
+                chunk.solid_count(),
+                mesh_data.quad_count,
+                mesh_data.vertices.size(),
+                mesh_data.indices.size() / 3,
+                mesh_data.build_ms);
+
     gfx::FlyCamera cam;
-    cam.set_position({8.0f, 4.0f, 12.0f});
-    cam.set_yaw_pitch(-110.0f, -15.0f);
+    cam.set_position({8.0f, 16.0f, 28.0f});
+    cam.set_yaw_pitch(-110.0f, -25.0f);
 
     core::Input input;
     input.attach(window);
@@ -132,9 +171,6 @@ int main(int argc, char** argv) {
 
     std::printf("[input] WASD = move, Space/LCtrl = up/down, mouse = look\n");
     std::printf("[input] Tab = toggle mouse capture, ESC = quit\n");
-
-    constexpr int kGridX = 12;
-    constexpr int kGridZ = 12;
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
@@ -165,7 +201,7 @@ int main(int argc, char** argv) {
             if (input.key_down(GLFW_KEY_SPACE))        local.y += 1.0f;
             if (input.key_down(GLFW_KEY_LEFT_CONTROL)) local.y -= 1.0f;
 
-            float speed = input.key_down(GLFW_KEY_LEFT_SHIFT) ? 16.0f : 6.0f;
+            float speed = input.key_down(GLFW_KEY_LEFT_SHIFT) ? 32.0f : 8.0f;
             cam.move_local(local, speed, dt);
         }
 
@@ -177,34 +213,29 @@ int main(int argc, char** argv) {
 
         glm::mat4 view = cam.view_matrix();
         glm::mat4 proj = cam.proj_matrix(aspect);
+        glm::mat4 model(1.0f);
 
         shader.use();
-        shader.set_mat4("u_view", view);
-        shader.set_mat4("u_proj", proj);
+        shader.set_mat4("u_model", model);
+        shader.set_mat4("u_view",  view);
+        shader.set_mat4("u_proj",  proj);
         shader.set_vec3("u_light_dir", glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f)));
         shader.set_int("u_albedo", 0);
         tex.bind(0);
 
-        for (int z = 0; z < kGridZ; ++z) {
-            for (int x = 0; x < kGridX; ++x) {
-                glm::mat4 model = glm::translate(
-                    glm::mat4(1.0f),
-                    glm::vec3(static_cast<float>(x), 0.0f, static_cast<float>(z)));
-                shader.set_mat4("u_model", model);
-                cube.draw();
-            }
-        }
+        chunk_mesh.draw();
 
         glfwSwapBuffers(window);
         glfwPollEvents();
 
         ++frame_count;
         if (now - last_time >= 1.0) {
-            char title[160];
+            char title[192];
             std::snprintf(title, sizeof(title),
-                          "voxel_engine  |  %d fps  |  pos %.1f %.1f %.1f",
+                          "voxel_engine  |  %d fps  |  pos %.1f %.1f %.1f  |  tris %zu (naive)",
                           frame_count,
-                          cam.position().x, cam.position().y, cam.position().z);
+                          cam.position().x, cam.position().y, cam.position().z,
+                          mesh_data.indices.size() / 3);
             glfwSetWindowTitle(window, title);
             frame_count = 0;
             last_time = now;
