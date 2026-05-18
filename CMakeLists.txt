@@ -53,10 +53,12 @@ add_executable(voxel_engine
   src/core/input.cpp
   src/gfx/camera.cpp
   src/gfx/cube.cpp
+  src/gfx/frustum.cpp
   src/gfx/mesh.cpp
   src/gfx/shader.cpp
   src/gfx/texture.cpp
   src/world/chunk_mesh.cpp
+  src/world/world.cpp
 )
 
 target_include_directories(voxel_engine PRIVATE src)

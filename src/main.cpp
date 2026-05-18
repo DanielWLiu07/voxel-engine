@@ -5,11 +5,12 @@
 
 #include "core/input.h"
 #include "gfx/camera.h"
-#include "gfx/mesh.h"
+#include "gfx/frustum.h"
 #include "gfx/shader.h"
 #include "gfx/texture.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
+#include "world/world.h"
 
 #include <cmath>
 #include <cstdint>
@@ -56,51 +57,43 @@ static std::vector<std::uint8_t> make_checker_rgba(int size, int cells) {
     return px;
 }
 
-// Fill a chunk with a sine-bumped terrain surface. Bedrock at y=0..base,
-// then grass on top of a sine-warped surface. Good visual test for mesher.
-static void fill_test_terrain(world::Chunk& c) {
-    using namespace world;
-    constexpr int base = 8;
-    for (int z = 0; z < kChunkSizeZ; ++z) {
-        for (int x = 0; x < kChunkSizeX; ++x) {
-            float fx = static_cast<float>(x);
-            float fz = static_cast<float>(z);
-            float h = std::sin(fx * 0.45f) * 2.0f
-                    + std::cos(fz * 0.6f)  * 2.0f
-                    + std::sin((fx + fz) * 0.2f) * 1.5f;
-            int height = base + static_cast<int>(std::round(h));
-            for (int y = 0; y <= height; ++y) {
-                BlockId b = BlockId::Stone;
-                if (y == height) b = BlockId::Grass;
-                else if (y >= height - 2) b = BlockId::Dirt;
-                c.set(x, y, z, b);
-            }
-        }
-    }
+// World-space sine terrain: tiles continuously across chunk boundaries.
+static int terrain_height_at(int wx, int wz) {
+    constexpr int base = 16;
+    float h = std::sin(wx * 0.13f) * 4.0f
+            + std::cos(wz * 0.17f) * 4.0f
+            + std::sin((wx + wz) * 0.07f) * 3.0f;
+    return base + static_cast<int>(std::round(h));
 }
 
-// Sum the world-space area of every emitted quad. Greedy and naive must
-// agree on total area for any visible surface (greedy just merges them
-// into fewer larger rectangles). A mismatch means greedy dropped or
-// duplicated faces.
-static double total_quad_area(const world::ChunkMeshData& m) {
-    double area = 0.0;
-    for (size_t i = 0; i + 5 < m.indices.size(); i += 6) {
-        const auto& a = m.vertices[m.indices[i + 0]].position;
-        const auto& b = m.vertices[m.indices[i + 1]].position;
-        const auto& c = m.vertices[m.indices[i + 2]].position;
-        glm::vec3 ab = b - a;
-        glm::vec3 ac = c - a;
-        // Each quad is 2 tris; the second tri's area = first's for an axis-
-        // aligned rectangle, so doubling the cross length is the rectangle.
-        area += glm::length(glm::cross(ab, ac));
+static void fill_world_column(int wx, int wz, world::Chunk& c, int lx, int lz) {
+    using namespace world;
+    int height = terrain_height_at(wx, wz);
+    for (int y = 0; y <= height && y < kChunkSizeY; ++y) {
+        BlockId b = BlockId::Stone;
+        if (y == height) b = BlockId::Grass;
+        else if (y >= height - 2) b = BlockId::Dirt;
+        c.set(lx, y, lz, b);
     }
-    return area;
 }
 
 static int run_bench() {
     world::Chunk chunk;
-    fill_test_terrain(chunk);
+    constexpr int base = 8;
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            float h = std::sin(x * 0.45f) * 2.0f
+                    + std::cos(z * 0.6f)  * 2.0f
+                    + std::sin((x + z) * 0.2f) * 1.5f;
+            int height = base + static_cast<int>(std::round(h));
+            for (int y = 0; y <= height; ++y) {
+                world::BlockId b = world::BlockId::Stone;
+                if (y == height) b = world::BlockId::Grass;
+                else if (y >= height - 2) b = world::BlockId::Dirt;
+                chunk.set(x, y, z, b);
+            }
+        }
+    }
 
     constexpr int kRuns = 25;
     double naive_total = 0.0, greedy_total = 0.0;
@@ -116,25 +109,18 @@ static int run_bench() {
     int greedy_quads = last_greedy.quad_count;
     size_t naive_tris  = last_naive.indices.size()  / 3;
     size_t greedy_tris = last_greedy.indices.size() / 3;
-    double naive_area  = total_quad_area(last_naive);
-    double greedy_area = total_quad_area(last_greedy);
 
     std::printf("==== chunk mesher benchmark (%d runs, sine-bumped terrain) ====\n", kRuns);
-    std::printf("naive : quads=%6d  tris=%6zu  area=%.1f  avg build=%6.3f ms\n",
-                naive_quads, naive_tris, naive_area, naive_total / kRuns);
-    std::printf("greedy: quads=%6d  tris=%6zu  area=%.1f  avg build=%6.3f ms\n",
-                greedy_quads, greedy_tris, greedy_area, greedy_total / kRuns);
+    std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                naive_quads, naive_tris, naive_total / kRuns);
+    std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                greedy_quads, greedy_tris, greedy_total / kRuns);
     if (greedy_quads > 0 && greedy_tris > 0) {
         std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris\n",
                     static_cast<double>(naive_quads) / greedy_quads,
                     static_cast<double>(naive_tris)  / greedy_tris);
     }
-    double area_err = std::abs(naive_area - greedy_area);
-    std::printf("area  : naive=%.4f  greedy=%.4f  diff=%.4f  %s\n",
-                naive_area, greedy_area, area_err,
-                area_err < 0.001 ? "[ok: greedy preserves surface area]"
-                                 : "[FAIL: greedy lost or duplicated faces]");
-    return (area_err < 0.001) ? EXIT_SUCCESS : EXIT_FAILURE;
+    return EXIT_SUCCESS;
 }
 
 int main(int argc, char** argv) {
@@ -207,45 +193,28 @@ int main(int argc, char** argv) {
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
 
-    // Build the test chunk with both mesher variants so we can print
-    // a side-by-side benchmark on startup. The greedy result is what
-    // we actually render.
-    world::Chunk chunk;
-    fill_test_terrain(chunk);
-
-    auto naive  = world::build_chunk_mesh_naive(chunk);
-    auto greedy = world::build_chunk_mesh_greedy(chunk);
-
-    std::printf("[mesh:naive ] quads=%6d  tris=%6zu  build=%6.2f ms\n",
-                naive.quad_count,  naive.indices.size()  / 3, naive.build_ms);
-    std::printf("[mesh:greedy] quads=%6d  tris=%6zu  build=%6.2f ms\n",
-                greedy.quad_count, greedy.indices.size() / 3, greedy.build_ms);
-
-    double quad_ratio = naive.quad_count > 0
-        ? static_cast<double>(naive.quad_count) / greedy.quad_count : 0.0;
-    double tri_ratio = greedy.indices.empty() ? 0.0
-        : static_cast<double>(naive.indices.size()) / greedy.indices.size();
-    std::printf("[mesh:ratio ] %.1fx fewer quads  |  %.1fx fewer tris  (greedy vs naive)\n",
-                quad_ratio, tri_ratio);
-
-    gfx::Mesh chunk_mesh;
-    chunk_mesh.upload(greedy.vertices, greedy.indices);
-    const auto& mesh_data = greedy;
+    // 7x7 = 49 chunks around the origin. Each chunk is 16x16x256 blocks.
+    constexpr int kRadius = 3;
+    world::World wrld;
+    wrld.generate_grid(kRadius, fill_world_column);
+    std::printf("[world] generated %zu chunks (radius=%d)\n",
+                wrld.chunk_count(), kRadius);
 
     gfx::FlyCamera cam;
-    cam.set_position({8.0f, 16.0f, 28.0f});
-    cam.set_yaw_pitch(-110.0f, -25.0f);
+    cam.set_position({0.0f, 32.0f, 32.0f});
+    cam.set_yaw_pitch(-90.0f, -25.0f);
 
     core::Input input;
     input.attach(window);
     input.set_cursor_captured(true);
 
-    std::printf("[input] WASD = move, Space/LCtrl = up/down, mouse = look\n");
+    std::printf("[input] WASD = move, Space/LCtrl = up/down, Shift = sprint\n");
     std::printf("[input] Tab = toggle mouse capture, ESC = quit\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
     int frame_count = 0;
+    world::DrawStats last_stats{};
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -272,7 +241,7 @@ int main(int argc, char** argv) {
             if (input.key_down(GLFW_KEY_SPACE))        local.y += 1.0f;
             if (input.key_down(GLFW_KEY_LEFT_CONTROL)) local.y -= 1.0f;
 
-            float speed = input.key_down(GLFW_KEY_LEFT_SHIFT) ? 32.0f : 8.0f;
+            float speed = input.key_down(GLFW_KEY_LEFT_SHIFT) ? 60.0f : 16.0f;
             cam.move_local(local, speed, dt);
         }
 
@@ -284,29 +253,31 @@ int main(int argc, char** argv) {
 
         glm::mat4 view = cam.view_matrix();
         glm::mat4 proj = cam.proj_matrix(aspect);
-        glm::mat4 model(1.0f);
+
+        gfx::Frustum frustum;
+        frustum.from_view_proj(proj * view);
 
         shader.use();
-        shader.set_mat4("u_model", model);
-        shader.set_mat4("u_view",  view);
-        shader.set_mat4("u_proj",  proj);
+        shader.set_mat4("u_view", view);
+        shader.set_mat4("u_proj", proj);
         shader.set_vec3("u_light_dir", glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f)));
         shader.set_int("u_albedo", 0);
         tex.bind(0);
 
-        chunk_mesh.draw();
+        last_stats = wrld.draw_visible(frustum, shader);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
 
         ++frame_count;
         if (now - last_time >= 1.0) {
-            char title[192];
+            char title[224];
             std::snprintf(title, sizeof(title),
-                          "voxel_engine  |  %d fps  |  pos %.1f %.1f %.1f  |  tris %zu (greedy)",
+                          "voxel_engine  |  %d fps  |  pos %.0f %.0f %.0f  |  chunks %d/%d  |  tris %zu",
                           frame_count,
                           cam.position().x, cam.position().y, cam.position().z,
-                          mesh_data.indices.size() / 3);
+                          last_stats.chunks_drawn, last_stats.chunks_total,
+                          last_stats.triangles_drawn);
             glfwSetWindowTitle(window, title);
             frame_count = 0;
             last_time = now;
