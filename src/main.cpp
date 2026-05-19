@@ -10,9 +10,9 @@
 #include "gfx/texture.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
+#include "world/terrain_gen.h"
 #include "world/world.h"
 
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -57,43 +57,13 @@ static std::vector<std::uint8_t> make_checker_rgba(int size, int cells) {
     return px;
 }
 
-// World-space sine terrain: tiles continuously across chunk boundaries.
-static int terrain_height_at(int wx, int wz) {
-    constexpr int base = 16;
-    float h = std::sin(wx * 0.13f) * 4.0f
-            + std::cos(wz * 0.17f) * 4.0f
-            + std::sin((wx + wz) * 0.07f) * 3.0f;
-    return base + static_cast<int>(std::round(h));
-}
-
-static void fill_world_column(int wx, int wz, world::Chunk& c, int lx, int lz) {
-    using namespace world;
-    int height = terrain_height_at(wx, wz);
-    for (int y = 0; y <= height && y < kChunkSizeY; ++y) {
-        BlockId b = BlockId::Stone;
-        if (y == height) b = BlockId::Grass;
-        else if (y >= height - 2) b = BlockId::Dirt;
-        c.set(lx, y, lz, b);
-    }
-}
-
 static int run_bench() {
+    // Benchmark on real Perlin terrain (the same one the game uses) so
+    // the numbers we quote on the resume reflect what the renderer actually
+    // sees, not a synthetic best/worst case.
+    world::TerrainGen terrain(1337);
     world::Chunk chunk;
-    constexpr int base = 8;
-    for (int z = 0; z < world::kChunkSizeZ; ++z) {
-        for (int x = 0; x < world::kChunkSizeX; ++x) {
-            float h = std::sin(x * 0.45f) * 2.0f
-                    + std::cos(z * 0.6f)  * 2.0f
-                    + std::sin((x + z) * 0.2f) * 1.5f;
-            int height = base + static_cast<int>(std::round(h));
-            for (int y = 0; y <= height; ++y) {
-                world::BlockId b = world::BlockId::Stone;
-                if (y == height) b = world::BlockId::Grass;
-                else if (y >= height - 2) b = world::BlockId::Dirt;
-                chunk.set(x, y, z, b);
-            }
-        }
-    }
+    terrain.fill_chunk(0, 0, chunk);
 
     constexpr int kRuns = 25;
     double naive_total = 0.0, greedy_total = 0.0;
@@ -110,7 +80,7 @@ static int run_bench() {
     size_t naive_tris  = last_naive.indices.size()  / 3;
     size_t greedy_tris = last_greedy.indices.size() / 3;
 
-    std::printf("==== chunk mesher benchmark (%d runs, sine-bumped terrain) ====\n", kRuns);
+    std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0) ====\n", kRuns);
     std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
                 naive_quads, naive_tris, naive_total / kRuns);
     std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
@@ -193,16 +163,21 @@ int main(int argc, char** argv) {
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
 
-    // 7x7 = 49 chunks around the origin. Each chunk is 16x16x256 blocks.
-    constexpr int kRadius = 3;
+    // (2r+1)^2 chunks around the origin. radius=4 -> 9x9 = 81 chunks,
+    // 144x144 blocks of Perlin terrain across the view.
+    constexpr int kRadius = 4;
+    world::TerrainGen terrain(1337);
     world::World wrld;
-    wrld.generate_grid(kRadius, fill_world_column);
-    std::printf("[world] generated %zu chunks (radius=%d)\n",
-                wrld.chunk_count(), kRadius);
+    auto gen_stats = wrld.generate_grid(kRadius, terrain);
+    std::printf("[world] generated %d chunks (radius=%d) in %.1f ms\n",
+                gen_stats.chunks_generated, kRadius, gen_stats.total_ms);
+    std::printf("[world]   terrain=%.1f ms  meshing=%.1f ms  (%.2f ms/chunk avg)\n",
+                gen_stats.gen_ms, gen_stats.mesh_ms,
+                gen_stats.total_ms / gen_stats.chunks_generated);
 
     gfx::FlyCamera cam;
-    cam.set_position({0.0f, 32.0f, 32.0f});
-    cam.set_yaw_pitch(-90.0f, -25.0f);
+    cam.set_position({0.0f, 80.0f, 80.0f});
+    cam.set_yaw_pitch(-90.0f, -35.0f);
 
     core::Input input;
     input.attach(window);
@@ -263,6 +238,16 @@ int main(int argc, char** argv) {
         shader.set_vec3("u_light_dir", glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f)));
         shader.set_int("u_albedo", 0);
         tex.bind(0);
+
+        if (input.key_pressed(GLFW_KEY_F1)) {
+            std::printf("--- frustum debug ---\n");
+            std::printf("cam pos=(%.1f,%.1f,%.1f) yaw=%.1f pitch=%.1f\n",
+                        cam.position().x, cam.position().y, cam.position().z,
+                        cam.yaw(), cam.pitch());
+            glm::vec3 f = cam.forward();
+            std::printf("cam fwd=(%.2f,%.2f,%.2f)\n", f.x, f.y, f.z);
+            wrld.debug_dump_visibility(frustum);
+        }
 
         last_stats = wrld.draw_visible(frustum, shader);
 
