@@ -4,6 +4,7 @@
 #include "gfx/mesh.h"
 #include "gfx/shader.h"
 #include "world/chunk.h"
+#include "world/terrain_gen.h"
 
 #include <cstdint>
 #include <functional>
@@ -57,10 +58,25 @@ public:
 
     void generate_grid(int radius, const ColumnFiller& fill_column);
 
+    // Generate `(2*radius+1)^2` chunks using a TerrainGen. Reports the
+    // total time spent in chunk gen + meshing so we can put a real
+    // throughput number on the resume.
+    struct GenStats {
+        int chunks_generated = 0;
+        double gen_ms = 0.0;    // total time in terrain.fill_chunk
+        double mesh_ms = 0.0;   // total time in build_chunk_mesh_greedy
+        double total_ms = 0.0;  // wall-clock for the whole grid
+    };
+    GenStats generate_grid(int radius, const TerrainGen& terrain);
+
     // Draw every chunk whose AABB intersects the frustum. Caller is
     // responsible for shader.use() and uniforms that don't change per chunk
     // (view, proj, light, texture). We set u_model per chunk.
     DrawStats draw_visible(const gfx::Frustum& frustum, const gfx::Shader& shader) const;
+
+    // Diagnostic: print every chunk's coord, AABB, frustum result. Used
+    // to verify the culling math, not called per frame.
+    void debug_dump_visibility(const gfx::Frustum& frustum) const;
 
     std::size_t chunk_count() const { return chunks_.size(); }
 

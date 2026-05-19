@@ -47,6 +47,10 @@ target_include_directories(glad PUBLIC third_party/glad/include)
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE third_party/stb)
 
+# --- FastNoiseLite (header-only, vendored) -----------------------------------
+add_library(fastnoise INTERFACE)
+target_include_directories(fastnoise INTERFACE third_party/FastNoiseLite)
+
 # --- App ----------------------------------------------------------------------
 add_executable(voxel_engine
   src/main.cpp
@@ -58,6 +62,7 @@ add_executable(voxel_engine
   src/gfx/shader.cpp
   src/gfx/texture.cpp
   src/world/chunk_mesh.cpp
+  src/world/terrain_gen.cpp
   src/world/world.cpp
 )
 
@@ -68,6 +73,7 @@ target_link_libraries(voxel_engine PRIVATE
   glm::glm
   glad
   stb
+  fastnoise
 )
 
 if(APPLE)
