@@ -5,6 +5,7 @@
 #include <imgui_impl_opengl3.h>
 
 #include <algorithm>
+#include <cstdio>
 
 namespace ui {
 
@@ -70,9 +71,41 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         }
 
         ImGui::Separator();
+        if (ImGui::Button("Copy snapshot")) {
+            copy_perf_to_clipboard(f);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(or press C)");
         ImGui::TextDisabled("F2: toggle HUD   Tab: release mouse   ESC: quit");
     }
     ImGui::End();
+}
+
+void DebugHud::copy_perf_to_clipboard(const PerfFrame& f) const {
+    if (!initialized_) return;
+
+    char buf[1024];
+    int n = 0;
+    n += std::snprintf(buf + n, sizeof(buf) - n,
+                       "voxel_engine perf snapshot\n");
+    n += std::snprintf(buf + n, sizeof(buf) - n,
+                       "- %.1f fps  |  %.2f ms/frame\n", f.fps, f.frame_ms);
+    n += std::snprintf(buf + n, sizeof(buf) - n,
+                       "- chunks drawn: %d / %d  (frustum cull: %.1fx)\n",
+                       f.chunks_drawn, f.chunks_total,
+                       static_cast<float>(f.chunks_total) /
+                           std::max(1, f.chunks_drawn));
+    n += std::snprintf(buf + n, sizeof(buf) - n,
+                       "- triangles: %zu\n", f.triangles_drawn);
+    if (f.initial_load_ms > 0.0 && f.total_chunks > 0) {
+        double cps = f.total_chunks * 1000.0 / f.initial_load_ms;
+        n += std::snprintf(buf + n, sizeof(buf) - n,
+                           "- startup: %d chunks in %.0f ms  (%.0f chunks/sec, %zu workers)\n",
+                           f.total_chunks, f.initial_load_ms, cps, f.worker_count);
+    }
+
+    ImGui::SetClipboardText(buf);
+    std::printf("[hud] copied perf snapshot to clipboard\n");
 }
 
 void DebugHud::end_frame_and_render() {
