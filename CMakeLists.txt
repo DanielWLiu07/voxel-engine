@@ -37,7 +37,33 @@ FetchContent_Declare(
   GIT_SHALLOW    TRUE
 )
 
+FetchContent_Declare(
+  imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG        v1.91.5
+  GIT_SHALLOW    TRUE
+)
 FetchContent_MakeAvailable(glfw glm)
+FetchContent_GetProperties(imgui)
+if(NOT imgui_POPULATED)
+  FetchContent_MakeAvailable(imgui)
+endif()
+
+# Wrap ImGui sources into a static lib. Includes the GLFW + OpenGL3 backends.
+add_library(imgui STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends
+)
+target_link_libraries(imgui PUBLIC glfw)
 
 # --- GLAD (vendored generated loader for GL 4.1 core, glad2 layout) ----------
 add_library(glad STATIC third_party/glad/src/gl.c)
@@ -62,6 +88,7 @@ add_executable(voxel_engine
   src/gfx/mesh.cpp
   src/gfx/shader.cpp
   src/gfx/texture.cpp
+  src/ui/debug_hud.cpp
   src/world/chunk_mesh.cpp
   src/world/terrain_gen.cpp
   src/world/world.cpp
@@ -75,6 +102,7 @@ target_link_libraries(voxel_engine PRIVATE
   glad
   stb
   fastnoise
+  imgui
 )
 
 if(APPLE)

@@ -9,6 +9,7 @@
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
 #include "gfx/texture.h"
+#include "ui/debug_hud.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
 #include "world/terrain_gen.h"
@@ -195,13 +196,23 @@ int main(int argc, char** argv) {
     input.attach(window);
     input.set_cursor_captured(true);
 
+    ui::DebugHud hud;
+    if (!hud.init(window)) {
+        std::fprintf(stderr, "imgui init failed\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
     std::printf("[input] WASD = move, Space/LCtrl = up/down, Shift = sprint\n");
-    std::printf("[input] Tab = toggle mouse capture, ESC = quit\n");
+    std::printf("[input] Tab = toggle mouse capture, F2 = toggle HUD, ESC = quit\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
     int frame_count = 0;
     world::DrawStats last_stats{};
+    float smoothed_fps = 0.0f;
+    float smoothed_frame_ms = 0.0f;
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -210,11 +221,20 @@ int main(int argc, char** argv) {
 
         input.begin_frame();
 
+        // Smooth frame timing for the HUD (exponential moving average).
+        float frame_ms = dt * 1000.0f;
+        smoothed_frame_ms = smoothed_frame_ms * 0.9f + frame_ms * 0.1f;
+        float instant_fps = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
+        smoothed_fps = smoothed_fps * 0.9f + instant_fps * 0.1f;
+
         if (input.key_down(GLFW_KEY_ESCAPE)) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
         if (input.key_pressed(GLFW_KEY_TAB)) {
             input.set_cursor_captured(!input.cursor_captured());
+        }
+        if (input.key_pressed(GLFW_KEY_F2)) {
+            hud.toggle_visible();
         }
 
         if (input.cursor_captured()) {
@@ -277,6 +297,21 @@ int main(int argc, char** argv) {
 
         last_stats = wrld.draw_visible(frustum, shader);
 
+        // HUD draws on top of the scene, before the swap.
+        hud.begin_frame();
+        ui::PerfFrame pf;
+        pf.frame_ms = smoothed_frame_ms;
+        pf.fps = smoothed_fps;
+        pf.chunks_total = last_stats.chunks_total;
+        pf.chunks_drawn = last_stats.chunks_drawn;
+        pf.triangles_drawn = last_stats.triangles_drawn;
+        pf.pending_async = wrld.pending_async();
+        pf.initial_load_ms = initial_load_ms;
+        pf.total_chunks = total_chunks;
+        pf.worker_count = worker_count;
+        hud.draw_perf_panel(pf);
+        hud.end_frame_and_render();
+
         glfwSwapBuffers(window);
         glfwPollEvents();
 
@@ -296,6 +331,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    hud.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return EXIT_SUCCESS;
