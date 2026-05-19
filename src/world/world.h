@@ -1,14 +1,19 @@
 #pragma once
 
+#include "core/thread_pool.h"
 #include "gfx/frustum.h"
 #include "gfx/mesh.h"
 #include "gfx/shader.h"
 #include "world/chunk.h"
+#include "world/chunk_mesh.h"
 #include "world/terrain_gen.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <unordered_map>
 
 namespace world {
@@ -69,6 +74,23 @@ public:
     };
     GenStats generate_grid(int radius, const TerrainGen& terrain);
 
+    // Async variant: enqueues `(2r+1)^2` jobs into the pool. Each job
+    // runs terrain + greedy meshing on a worker thread and pushes the
+    // result into an internal finished-queue. The main thread must call
+    // drain_finished() each frame to upload completed chunks to GPU
+    // (GL is single-threaded).
+    void enqueue_grid_async(int radius, const TerrainGen& terrain, core::ThreadPool& pool);
+
+    // Pop up to `max_per_frame` finished chunks from the worker queue,
+    // upload their meshes, and insert them into the world. Safe to call
+    // every frame from the main (GL) thread. Returns the number of
+    // chunks uploaded this call.
+    int drain_finished(int max_per_frame = 8);
+
+    // How many async jobs have not yet been uploaded (in-flight on
+    // workers OR sitting in the finished queue).
+    int pending_async() const;
+
     // Draw every chunk whose AABB intersects the frustum. Caller is
     // responsible for shader.use() and uniforms that don't change per chunk
     // (view, proj, light, texture). We set u_model per chunk.
@@ -81,7 +103,19 @@ public:
     std::size_t chunk_count() const { return chunks_.size(); }
 
 private:
+    // Result handed from worker -> main thread. Holds the heavy data
+    // (block grid + cpu mesh) ready for a GL upload.
+    struct FinishedChunk {
+        ChunkCoord    coord;
+        Chunk         chunk;
+        ChunkMeshData mesh_data;
+    };
+
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
+
+    mutable std::mutex                 finished_mutex_;
+    std::queue<FinishedChunk>          finished_;
+    std::atomic<int>                   jobs_in_flight_{0};
 };
 
 }  // namespace world

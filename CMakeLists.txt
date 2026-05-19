@@ -55,6 +55,7 @@ target_include_directories(fastnoise INTERFACE third_party/FastNoiseLite)
 add_executable(voxel_engine
   src/main.cpp
   src/core/input.cpp
+  src/core/thread_pool.cpp
   src/gfx/camera.cpp
   src/gfx/cube.cpp
   src/gfx/frustum.cpp

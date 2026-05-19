@@ -90,6 +90,75 @@ World::GenStats World::generate_grid(int radius, const TerrainGen& terrain) {
     return stats;
 }
 
+void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
+                               core::ThreadPool& pool) {
+    chunks_.clear();
+    {
+        std::lock_guard<std::mutex> lock(finished_mutex_);
+        std::queue<FinishedChunk> empty;
+        finished_.swap(empty);
+    }
+    jobs_in_flight_.store(0);
+
+    for (int cz = -radius; cz <= radius; ++cz) {
+        for (int cx = -radius; cx <= radius; ++cx) {
+            jobs_in_flight_.fetch_add(1);
+            // Capture by value: terrain ref is fine (stateless), cx/cz are
+            // ints. The worker writes a FinishedChunk into finished_.
+            pool.submit([this, &terrain, cx, cz]() {
+                FinishedChunk fc;
+                fc.coord = {cx, cz};
+                terrain.fill_chunk(cx, cz, fc.chunk);
+                fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+                {
+                    std::lock_guard<std::mutex> lock(finished_mutex_);
+                    finished_.push(std::move(fc));
+                }
+            });
+        }
+    }
+}
+
+int World::drain_finished(int max_per_frame) {
+    int uploaded = 0;
+    for (int i = 0; i < max_per_frame; ++i) {
+        FinishedChunk fc;
+        {
+            std::lock_guard<std::mutex> lock(finished_mutex_);
+            if (finished_.empty()) break;
+            fc = std::move(finished_.front());
+            finished_.pop();
+        }
+
+        auto slot = std::make_unique<ChunkSlot>();
+        slot->coord = fc.coord;
+        slot->chunk = std::move(fc.chunk);
+        slot->quad_count = fc.mesh_data.quad_count;
+        if (!fc.mesh_data.indices.empty()) {
+            slot->mesh.upload(fc.mesh_data.vertices, fc.mesh_data.indices);
+            slot->has_mesh = true;
+        }
+
+        const int origin_x = fc.coord.x * kChunkSizeX;
+        const int origin_z = fc.coord.z * kChunkSizeZ;
+        slot->aabb.min = {static_cast<float>(origin_x),
+                          0.0f,
+                          static_cast<float>(origin_z)};
+        slot->aabb.max = {static_cast<float>(origin_x + kChunkSizeX),
+                          static_cast<float>(kChunkSizeY),
+                          static_cast<float>(origin_z + kChunkSizeZ)};
+
+        chunks_.emplace(slot->coord, std::move(slot));
+        jobs_in_flight_.fetch_sub(1);
+        ++uploaded;
+    }
+    return uploaded;
+}
+
+int World::pending_async() const {
+    return jobs_in_flight_.load();
+}
+
 void World::debug_dump_visibility(const gfx::Frustum& frustum) const {
     int drawn = 0;
     for (const auto& kv : chunks_) {
