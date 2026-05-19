@@ -167,10 +167,12 @@ int main(int argc, char** argv) {
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
 
-    // (2r+1)^2 chunks around the origin. radius=6 -> 13x13 = 169 chunks,
-    // 208x208 blocks. Async pool generates + meshes off the main thread;
-    // main thread uploads VBOs as they finish.
-    constexpr int kRadius = 6;
+    // (2r+1)^2 chunks around the origin. radius=12 -> 25x25 = 625 chunks,
+    // 400x400 blocks. Async pool generates + meshes off the main thread;
+    // main thread uploads VBOs as they finish. Larger world makes frustum
+    // culling pay off: most chunks are behind/beside the camera at any
+    // given heading.
+    constexpr int kRadius = 12;
     const std::size_t worker_count = std::max<std::size_t>(2,
         std::thread::hardware_concurrency() - 1);
 
