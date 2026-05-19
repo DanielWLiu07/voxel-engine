@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "core/input.h"
+#include "core/thread_pool.h"
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
@@ -13,11 +14,13 @@
 #include "world/terrain_gen.h"
 #include "world/world.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -163,17 +166,26 @@ int main(int argc, char** argv) {
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
 
-    // (2r+1)^2 chunks around the origin. radius=4 -> 9x9 = 81 chunks,
-    // 144x144 blocks of Perlin terrain across the view.
-    constexpr int kRadius = 4;
+    // (2r+1)^2 chunks around the origin. radius=6 -> 13x13 = 169 chunks,
+    // 208x208 blocks. Async pool generates + meshes off the main thread;
+    // main thread uploads VBOs as they finish.
+    constexpr int kRadius = 6;
+    const std::size_t worker_count = std::max<std::size_t>(2,
+        std::thread::hardware_concurrency() - 1);
+
     world::TerrainGen terrain(1337);
     world::World wrld;
-    auto gen_stats = wrld.generate_grid(kRadius, terrain);
-    std::printf("[world] generated %d chunks (radius=%d) in %.1f ms\n",
-                gen_stats.chunks_generated, kRadius, gen_stats.total_ms);
-    std::printf("[world]   terrain=%.1f ms  meshing=%.1f ms  (%.2f ms/chunk avg)\n",
-                gen_stats.gen_ms, gen_stats.mesh_ms,
-                gen_stats.total_ms / gen_stats.chunks_generated);
+    core::ThreadPool pool(worker_count);
+
+    const int total_chunks = (2 * kRadius + 1) * (2 * kRadius + 1);
+    std::printf("[world] enqueuing %d chunks (radius=%d) onto %zu workers\n",
+                total_chunks, kRadius, worker_count);
+
+    auto async_t0 = std::chrono::steady_clock::now();
+    wrld.enqueue_grid_async(kRadius, terrain, pool);
+
+    bool initial_load_logged = false;
+    double initial_load_ms = 0.0;
 
     gfx::FlyCamera cam;
     cam.set_position({0.0f, 80.0f, 80.0f});
@@ -220,6 +232,20 @@ int main(int argc, char** argv) {
             cam.move_local(local, speed, dt);
         }
 
+        // Drain finished chunks from worker pool and upload them. Capped
+        // so a big initial batch doesn't stall the frame.
+        wrld.drain_finished(16);
+        if (!initial_load_logged && wrld.pending_async() == 0) {
+            auto async_t1 = std::chrono::steady_clock::now();
+            initial_load_ms = std::chrono::duration<double, std::milli>(
+                async_t1 - async_t0).count();
+            initial_load_logged = true;
+            double chunks_per_sec = (initial_load_ms > 0.0)
+                ? (total_chunks * 1000.0 / initial_load_ms) : 0.0;
+            std::printf("[world] %d chunks loaded in %.1f ms  (%.0f chunks/sec, %zu workers)\n",
+                        total_chunks, initial_load_ms, chunks_per_sec, worker_count);
+        }
+
         glClearColor(0.50f, 0.70f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -256,13 +282,14 @@ int main(int argc, char** argv) {
 
         ++frame_count;
         if (now - last_time >= 1.0) {
-            char title[224];
+            char title[256];
             std::snprintf(title, sizeof(title),
-                          "voxel_engine  |  %d fps  |  pos %.0f %.0f %.0f  |  chunks %d/%d  |  tris %zu",
+                          "voxel_engine  |  %d fps  |  pos %.0f %.0f %.0f  |  chunks %d/%d  |  tris %zu  |  pending %d",
                           frame_count,
                           cam.position().x, cam.position().y, cam.position().z,
                           last_stats.chunks_drawn, last_stats.chunks_total,
-                          last_stats.triangles_drawn);
+                          last_stats.triangles_drawn,
+                          wrld.pending_async());
             glfwSetWindowTitle(window, title);
             frame_count = 0;
             last_time = now;
