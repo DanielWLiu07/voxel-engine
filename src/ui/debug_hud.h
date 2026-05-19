@@ -37,6 +37,11 @@ public:
     bool visible() const { return visible_; }
     void toggle_visible() { visible_ = !visible_; }
 
+    // Copy the current perf snapshot to the system clipboard as a
+    // markdown-formatted block, suitable for pasting into a commit
+    // message or resume draft.
+    void copy_perf_to_clipboard(const PerfFrame& f) const;
+
 private:
     bool initialized_ = false;
     bool visible_ = true;

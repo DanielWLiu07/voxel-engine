@@ -236,6 +236,8 @@ int main(int argc, char** argv) {
         if (input.key_pressed(GLFW_KEY_F2)) {
             hud.toggle_visible();
         }
+        // Defer the clipboard copy until after we populate PerfFrame below.
+        bool copy_perf_requested = input.key_pressed(GLFW_KEY_C);
 
         if (input.cursor_captured()) {
             cam.apply_mouse_delta(input.mouse_dx(), input.mouse_dy(), 0.12f);
@@ -310,6 +312,7 @@ int main(int argc, char** argv) {
         pf.total_chunks = total_chunks;
         pf.worker_count = worker_count;
         hud.draw_perf_panel(pf);
+        if (copy_perf_requested) hud.copy_perf_to_clipboard(pf);
         hud.end_frame_and_render();
 
         glfwSwapBuffers(window);
