@@ -164,6 +164,20 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    gfx::Shader sky_shader;
+    if (!sky_shader.load((root / "shaders" / "sky.vert").string(),
+                         (root / "shaders" / "sky.frag").string())) {
+        std::fprintf(stderr, "sky shader load failed\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    // Empty VAO required for attributeless fullscreen-triangle draws
+    // (core profile won't let you draw without a bound VAO).
+    GLuint sky_vao = 0;
+    glGenVertexArrays(1, &sky_vao);
+
     gfx::Texture2D tex;
     auto checker = make_checker_rgba(256, 8);
     tex.load_from_pixels(checker, 256, 256);
@@ -344,7 +358,6 @@ int main(int argc, char** argv) {
                         total_chunks, initial_load_ms, chunks_per_sec, worker_count);
         }
 
-        glClearColor(0.50f, 0.70f, 0.92f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
@@ -356,10 +369,57 @@ int main(int argc, char** argv) {
         gfx::Frustum frustum;
         frustum.from_view_proj(proj * view);
 
+        // Scene lighting parameters — shared between the sky and the
+        // terrain shader so the sun in the sky agrees with the lighting
+        // on the ground.
+        glm::vec3 sun_dir = glm::normalize(glm::vec3(0.45f, 0.85f, 0.30f));
+        glm::vec3 sun_color(1.05f, 0.98f, 0.90f);
+        glm::vec3 sky_top(0.30f, 0.55f, 0.85f);
+        glm::vec3 sky_horizon(0.78f, 0.86f, 0.93f);
+        glm::vec3 ambient(0.32f, 0.34f, 0.40f);
+
+        // Sky pass: fullscreen triangle, depth test off, depth writes off
+        // so terrain naturally draws on top.
+        {
+            glm::mat4 view_no_trans = view;
+            view_no_trans[3] = glm::vec4(0, 0, 0, 1);
+            glm::mat4 inv_vp = glm::inverse(proj * view_no_trans);
+
+            glDepthMask(GL_FALSE);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+
+            sky_shader.use();
+            sky_shader.set_mat4("u_inv_view_proj", inv_vp);
+            sky_shader.set_vec3("u_sky_top", sky_top);
+            sky_shader.set_vec3("u_sky_horizon", sky_horizon);
+            sky_shader.set_vec3("u_sun_dir", sun_dir);
+            sky_shader.set_vec3("u_sun_color", sun_color);
+            glBindVertexArray(sky_vao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+
+            glEnable(GL_DEPTH_TEST);
+            glEnable(GL_CULL_FACE);
+            glDepthMask(GL_TRUE);
+        }
+
+        // Fog terminates near the chunk-streaming horizon so chunks
+        // dissolve into the sky color rather than vanishing at a sharp
+        // far-plane line.
+        const float fog_end   = static_cast<float>(kRadius * world::kChunkSizeX) * 0.95f;
+        const float fog_start = fog_end * 0.55f;
+
         shader.use();
         shader.set_mat4("u_view", view);
         shader.set_mat4("u_proj", proj);
-        shader.set_vec3("u_light_dir", glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f)));
+        shader.set_vec3("u_light_dir", sun_dir);
+        shader.set_vec3("u_light_color", sun_color);
+        shader.set_vec3("u_ambient_color", ambient);
+        shader.set_vec3("u_camera_pos", cam.position());
+        shader.set_vec3("u_fog_color", sky_horizon);
+        shader.set_float("u_fog_start", fog_start);
+        shader.set_float("u_fog_end", fog_end);
         shader.set_int("u_albedo", 0);
         tex.bind(0);
 
@@ -411,6 +471,7 @@ int main(int argc, char** argv) {
     }
 
     hud.shutdown();
+    if (sky_vao) glDeleteVertexArrays(1, &sky_vao);
     glfwDestroyWindow(window);
     glfwTerminate();
     return EXIT_SUCCESS;
