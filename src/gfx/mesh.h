@@ -13,7 +13,8 @@ struct VertexPNT {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
-    float     ao;   // 0 = fully occluded, 1 = no occlusion (vertex AO)
+    float     ao;        // 0 = fully occluded, 1 = no occlusion (vertex AO)
+    float     block_id;  // BlockId cast to float; shader uses it as a palette index
 };
 
 class Mesh {
