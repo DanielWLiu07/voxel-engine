@@ -17,6 +17,7 @@
 #include <mutex>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace world {
 
@@ -82,6 +83,20 @@ public:
     // drain_finished() each frame to upload completed chunks to GPU
     // (GL is single-threaded).
     void enqueue_grid_async(int radius, const TerrainGen& terrain, core::ThreadPool& pool);
+
+    // Streaming: keep a (2*radius+1)^2 window of chunks loaded around
+    // `center_chunk`. Any chunk outside the window is evicted. Any
+    // chunk inside the window that isn't loaded (and isn't already in
+    // flight) gets enqueued on the pool. Call each frame; cheap when
+    // the center hasn't moved.
+    struct StreamStats {
+        int evicted = 0;
+        int requested = 0;
+        int loaded = 0;
+    };
+    StreamStats update_streaming(ChunkCoord center_chunk, int radius,
+                                 const TerrainGen& terrain,
+                                 core::ThreadPool& pool);
 
     // Pop up to `max_per_frame` finished chunks from the worker queue,
     // upload their meshes, and insert them into the world. Safe to call
@@ -149,6 +164,10 @@ private:
     };
 
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
+    // Coords that have been enqueued to the worker pool but haven't yet
+    // been drained into chunks_. Prevents double-enqueueing on streaming
+    // updates.
+    std::unordered_set<ChunkCoord, ChunkCoordHash> requested_;
 
     mutable std::mutex                 finished_mutex_;
     std::queue<FinishedChunk>          finished_;

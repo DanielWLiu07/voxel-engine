@@ -115,6 +115,7 @@ World::GenStats World::generate_grid(int radius, const TerrainGen& terrain) {
 void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
                                core::ThreadPool& pool) {
     chunks_.clear();
+    requested_.clear();
     {
         std::lock_guard<std::mutex> lock(finished_mutex_);
         std::queue<FinishedChunk> empty;
@@ -124,13 +125,13 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
 
     for (int cz = -radius; cz <= radius; ++cz) {
         for (int cx = -radius; cx <= radius; ++cx) {
+            ChunkCoord c{cx, cz};
+            requested_.insert(c);
             jobs_in_flight_.fetch_add(1);
-            // Capture by value: terrain ref is fine (stateless), cx/cz are
-            // ints. The worker writes a FinishedChunk into finished_.
-            pool.submit([this, &terrain, cx, cz]() {
+            pool.submit([this, &terrain, c]() {
                 FinishedChunk fc;
-                fc.coord = {cx, cz};
-                terrain.fill_chunk(cx, cz, fc.chunk);
+                fc.coord = c;
+                terrain.fill_chunk(c.x, c.z, fc.chunk);
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
                 {
                     std::lock_guard<std::mutex> lock(finished_mutex_);
@@ -139,6 +140,66 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
             });
         }
     }
+}
+
+World::StreamStats World::update_streaming(ChunkCoord center,
+                                           int radius,
+                                           const TerrainGen& terrain,
+                                           core::ThreadPool& pool) {
+    StreamStats stats;
+
+    auto in_window = [&](ChunkCoord c) {
+        int dx = c.x - center.x;
+        int dz = c.z - center.z;
+        return std::abs(dx) <= radius && std::abs(dz) <= radius;
+    };
+
+    // Evict loaded chunks that fell outside the window. Erase-in-place
+    // via iterator.
+    for (auto it = chunks_.begin(); it != chunks_.end(); ) {
+        if (!in_window(it->first)) {
+            it = chunks_.erase(it);
+            ++stats.evicted;
+        } else {
+            ++it;
+        }
+    }
+    // Same for in-flight requests we no longer need. We can't cancel a
+    // job already on the pool, but we can stop counting it as wanted —
+    // when it finally lands in finished_, drain_finished will toss it
+    // since it's no longer in `requested_`.
+    for (auto it = requested_.begin(); it != requested_.end(); ) {
+        if (!in_window(*it)) {
+            it = requested_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Enqueue any chunk in the window that isn't loaded and isn't
+    // already requested.
+    for (int dz = -radius; dz <= radius; ++dz) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            ChunkCoord c{center.x + dx, center.z + dz};
+            if (chunks_.count(c)) continue;
+            if (requested_.count(c)) continue;
+            requested_.insert(c);
+            jobs_in_flight_.fetch_add(1);
+            ++stats.requested;
+            pool.submit([this, &terrain, c]() {
+                FinishedChunk fc;
+                fc.coord = c;
+                terrain.fill_chunk(c.x, c.z, fc.chunk);
+                fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+                {
+                    std::lock_guard<std::mutex> lock(finished_mutex_);
+                    finished_.push(std::move(fc));
+                }
+            });
+        }
+    }
+
+    return stats;
 }
 
 int World::drain_finished(int max_per_frame) {
@@ -151,6 +212,15 @@ int World::drain_finished(int max_per_frame) {
             fc = std::move(finished_.front());
             finished_.pop();
         }
+
+        jobs_in_flight_.fetch_sub(1);
+
+        // If the chunk was evicted from the request set while it was
+        // mid-flight (the player walked out of range), drop the result
+        // on the floor.
+        auto req_it = requested_.find(fc.coord);
+        if (req_it == requested_.end()) continue;
+        requested_.erase(req_it);
 
         auto slot = std::make_unique<ChunkSlot>();
         slot->coord = fc.coord;
@@ -171,7 +241,6 @@ int World::drain_finished(int max_per_frame) {
                           static_cast<float>(origin_z + kChunkSizeZ)};
 
         chunks_.emplace(slot->coord, std::move(slot));
-        jobs_in_flight_.fetch_sub(1);
         ++uploaded;
     }
     return uploaded;

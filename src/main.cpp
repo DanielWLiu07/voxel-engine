@@ -195,12 +195,11 @@ int main(int argc, char** argv) {
         {1.00f, 0.00f, 1.00f},  // 7 (unused)
     };
 
-    // (2r+1)^2 chunks around the origin. radius=12 -> 25x25 = 625 chunks,
-    // 400x400 blocks. Async pool generates + meshes off the main thread;
-    // main thread uploads VBOs as they finish. Larger world makes frustum
-    // culling pay off: most chunks are behind/beside the camera at any
-    // given heading.
-    constexpr int kRadius = 12;
+    // (2r+1)^2 chunks loaded at a time around the player. radius=12 ->
+    // 25x25 = 625 chunks = 400x400 blocks of world visible at once.
+    // Streaming pulls new chunks in as the player walks and evicts the
+    // ones they leave behind.
+    constexpr int kStreamRadius = 12;
     const std::size_t worker_count = std::max<std::size_t>(2,
         std::thread::hardware_concurrency() - 1);
 
@@ -208,15 +207,21 @@ int main(int argc, char** argv) {
     world::World wrld;
     core::ThreadPool pool(worker_count);
 
-    const int total_chunks = (2 * kRadius + 1) * (2 * kRadius + 1);
-    std::printf("[world] enqueuing %d chunks (radius=%d) onto %zu workers\n",
-                total_chunks, kRadius, worker_count);
+    const int total_chunks = (2 * kStreamRadius + 1) * (2 * kStreamRadius + 1);
+    std::printf("[world] streaming %d chunks (radius=%d) onto %zu workers\n",
+                total_chunks, kStreamRadius, worker_count);
 
     auto async_t0 = std::chrono::steady_clock::now();
-    wrld.enqueue_grid_async(kRadius, terrain, pool);
+    wrld.enqueue_grid_async(kStreamRadius, terrain, pool);
 
     bool initial_load_logged = false;
     double initial_load_ms = 0.0;
+
+    // Streaming state: remember which chunk the player was in last frame
+    // so we only re-evaluate the window on a chunk crossing (cheap).
+    world::ChunkCoord last_center{0, 0};
+    int streamed_in_total = 0;
+    int streamed_out_total = 0;
 
     gfx::FlyCamera cam;
     cam.set_position({0.0f, 80.0f, 80.0f});
@@ -424,6 +429,20 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Streaming: figure out which chunk the player is in, request
+        // any new chunks within radius, evict any that fell outside.
+        // Cheap when the player hasn't crossed a chunk boundary.
+        world::ChunkCoord center{
+            static_cast<std::int32_t>(std::floor(cam.position().x / world::kChunkSizeX)),
+            static_cast<std::int32_t>(std::floor(cam.position().z / world::kChunkSizeZ))
+        };
+        if (initial_load_logged && !(center == last_center)) {
+            auto sstats = wrld.update_streaming(center, kStreamRadius, terrain, pool);
+            streamed_in_total  += sstats.requested;
+            streamed_out_total += sstats.evicted;
+            last_center = center;
+        }
+
         // Drain finished chunks from worker pool and upload them. Capped
         // so a big initial batch doesn't stall the frame.
         wrld.drain_finished(16);
@@ -516,7 +535,7 @@ int main(int argc, char** argv) {
         // Fog terminates near the chunk-streaming horizon so chunks
         // dissolve into the sky color rather than vanishing at a sharp
         // far-plane line.
-        const float fog_end   = static_cast<float>(kRadius * world::kChunkSizeX) * 0.95f;
+        const float fog_end   = static_cast<float>(kStreamRadius * world::kChunkSizeX) * 0.95f;
         const float fog_start = fog_end * 0.55f;
 
         shader.use();
