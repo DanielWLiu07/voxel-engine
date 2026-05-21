@@ -8,6 +8,8 @@
 #include "world/chunk_mesh.h"
 #include "world/terrain_gen.h"
 
+#include <glm/glm.hpp>
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -90,6 +92,33 @@ public:
     // How many async jobs have not yet been uploaded (in-flight on
     // workers OR sitting in the finished queue).
     int pending_async() const;
+
+    // Block lookup across chunks. Returns Air when outside any loaded
+    // chunk. World-space integer block coords.
+    BlockId block_at(int wx, int wy, int wz) const;
+
+    // Replace the block at (wx, wy, wz). Rebuilds the affected chunk's
+    // mesh synchronously. No-op outside loaded chunks. Returns true if
+    // a change was made.
+    bool set_block(int wx, int wy, int wz, BlockId b);
+
+    // Walk a ray from `origin` along `direction` until it hits a solid
+    // block, or `max_distance` is exceeded. Uses 3D DDA (Amanatides-Woo).
+    struct RayHit {
+        bool       hit = false;
+        int        block_x = 0;
+        int        block_y = 0;
+        int        block_z = 0;
+        // Face normal of the hit (one component +/-1, others 0). The
+        // block at (block_*) + normal is the empty cell adjacent to the
+        // hit face, which is where a new block would be placed.
+        int        nx = 0;
+        int        ny = 0;
+        int        nz = 0;
+        float      distance = 0.0f;
+    };
+    RayHit raycast(const glm::vec3& origin, const glm::vec3& direction,
+                   float max_distance = 8.0f) const;
 
     // Draw every chunk whose AABB intersects the frustum. Caller is
     // responsible for shader.use() and uniforms that don't change per chunk

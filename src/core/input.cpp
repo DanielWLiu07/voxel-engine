@@ -39,6 +39,19 @@ bool Input::key_pressed(int key) {
     return transitioned;
 }
 
+bool Input::mouse_button_down(int button) const {
+    if (!window_ || button < 0 || button >= kMouseButtonMax) return false;
+    return glfwGetMouseButton(window_, button) == GLFW_PRESS;
+}
+
+bool Input::mouse_button_pressed(int button) {
+    if (!window_ || button < 0 || button >= kMouseButtonMax) return false;
+    bool down = glfwGetMouseButton(window_, button) == GLFW_PRESS;
+    bool transitioned = down && !mouse_was_down_[button];
+    mouse_was_down_[button] = down;
+    return transitioned;
+}
+
 void Input::set_cursor_captured(bool capture) {
     if (!window_) return;
     captured_ = capture;

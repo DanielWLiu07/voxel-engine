@@ -5,6 +5,7 @@
 
 #include "core/input.h"
 #include "core/thread_pool.h"
+#include "game/player.h"
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
@@ -206,8 +207,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    std::printf("[input] WASD = move, Space/LCtrl = up/down, Shift = sprint\n");
-    std::printf("[input] Tab = toggle mouse capture, F2 = toggle HUD, ESC = quit\n");
+    game::Player player;
+    player.set_position({0.0f, 80.0f, 0.0f});
+    bool walk_mode = false;
+
+    std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
+    std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
+    std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
@@ -241,19 +247,87 @@ int main(int argc, char** argv) {
         // Defer the clipboard copy until after we populate PerfFrame below.
         bool copy_perf_requested = input.key_pressed(GLFW_KEY_C);
 
+        if (input.key_pressed(GLFW_KEY_F)) {
+            walk_mode = !walk_mode;
+            if (walk_mode) {
+                // Drop the player from where the fly camera is.
+                player.set_position(cam.position() -
+                    glm::vec3(0.0f, game::Player::kEyeHeight, 0.0f));
+            }
+            std::printf("[mode] %s\n", walk_mode ? "walk" : "fly");
+        }
+
         if (input.cursor_captured()) {
             cam.apply_mouse_delta(input.mouse_dx(), input.mouse_dy(), 0.12f);
 
-            glm::vec3 local{0.0f};
-            if (input.key_down(GLFW_KEY_W)) local.z += 1.0f;
-            if (input.key_down(GLFW_KEY_S)) local.z -= 1.0f;
-            if (input.key_down(GLFW_KEY_D)) local.x += 1.0f;
-            if (input.key_down(GLFW_KEY_A)) local.x -= 1.0f;
-            if (input.key_down(GLFW_KEY_SPACE))        local.y += 1.0f;
-            if (input.key_down(GLFW_KEY_LEFT_CONTROL)) local.y -= 1.0f;
+            if (walk_mode) {
+                // Horizontal movement only; gravity + jump handled by Player.
+                glm::vec3 fwd = cam.forward();
+                glm::vec3 right = cam.right();
+                fwd.y = 0.0f; right.y = 0.0f;
+                if (glm::dot(fwd, fwd) > 0.0f) fwd = glm::normalize(fwd);
+                if (glm::dot(right, right) > 0.0f) right = glm::normalize(right);
 
-            float speed = input.key_down(GLFW_KEY_LEFT_SHIFT) ? 60.0f : 16.0f;
-            cam.move_local(local, speed, dt);
+                glm::vec3 wish(0.0f);
+                if (input.key_down(GLFW_KEY_W)) wish += fwd;
+                if (input.key_down(GLFW_KEY_S)) wish -= fwd;
+                if (input.key_down(GLFW_KEY_D)) wish += right;
+                if (input.key_down(GLFW_KEY_A)) wish -= right;
+                if (glm::dot(wish, wish) > 0.0f) wish = glm::normalize(wish);
+
+                float speed = input.key_down(GLFW_KEY_LEFT_SHIFT)
+                    ? game::Player::kSprintSpeed : game::Player::kWalkSpeed;
+                wish *= speed;
+
+                bool jump = input.key_pressed(GLFW_KEY_SPACE);
+                player.update(wrld, wish, jump, dt);
+                cam.set_position(player.eye_position());
+            } else {
+                glm::vec3 local{0.0f};
+                if (input.key_down(GLFW_KEY_W)) local.z += 1.0f;
+                if (input.key_down(GLFW_KEY_S)) local.z -= 1.0f;
+                if (input.key_down(GLFW_KEY_D)) local.x += 1.0f;
+                if (input.key_down(GLFW_KEY_A)) local.x -= 1.0f;
+                if (input.key_down(GLFW_KEY_SPACE))        local.y += 1.0f;
+                if (input.key_down(GLFW_KEY_LEFT_CONTROL)) local.y -= 1.0f;
+
+                float speed = input.key_down(GLFW_KEY_LEFT_SHIFT) ? 60.0f : 16.0f;
+                cam.move_local(local, speed, dt);
+            }
+
+            // Place / break (left = break, right = place).
+            bool break_block = input.mouse_button_pressed(GLFW_MOUSE_BUTTON_LEFT);
+            bool place_block = input.mouse_button_pressed(GLFW_MOUSE_BUTTON_RIGHT);
+            if (break_block || place_block) {
+                auto hit = wrld.raycast(cam.position(), cam.forward(), 8.0f);
+                if (hit.hit) {
+                    if (break_block) {
+                        wrld.set_block(hit.block_x, hit.block_y, hit.block_z,
+                                       world::BlockId::Air);
+                    } else {
+                        int px = hit.block_x + hit.nx;
+                        int py = hit.block_y + hit.ny;
+                        int pz = hit.block_z + hit.nz;
+                        // Don't place a block inside the player.
+                        glm::vec3 feet = walk_mode
+                            ? player.feet_position()
+                            : cam.position() - glm::vec3(0.0f,
+                                game::Player::kEyeHeight, 0.0f);
+                        bool would_overlap = false;
+                        if (walk_mode) {
+                            constexpr float hw = game::Player::kWidth * 0.5f;
+                            if (px + 1 > feet.x - hw && px < feet.x + hw &&
+                                py + 1 > feet.y      && py < feet.y + game::Player::kHeight &&
+                                pz + 1 > feet.z - hw && pz < feet.z + hw) {
+                                would_overlap = true;
+                            }
+                        }
+                        if (!would_overlap) {
+                            wrld.set_block(px, py, pz, world::BlockId::Stone);
+                        }
+                    }
+                }
+            }
         }
 
         // Drain finished chunks from worker pool and upload them. Capped
