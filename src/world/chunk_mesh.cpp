@@ -47,14 +47,15 @@ constexpr int kNeighborOffsets[6][3] = {
     { 0, 0, 1}, { 0, 0,-1},
 };
 
-void emit_quad(ChunkMeshData& out, const glm::vec3& origin, const FaceDef& f) {
+void emit_quad(ChunkMeshData& out, const glm::vec3& origin, const FaceDef& f, BlockId id) {
     std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
     for (int i = 0; i < 4; ++i) {
         gfx::VertexPNT v;
         v.position = origin + f.corners[i];
         v.normal   = f.normal;
         v.uv       = {kFaceUV[i][0], kFaceUV[i][1]};
-        v.ao       = 1.0f;  // naive mesher: no AO baked
+        v.ao       = 1.0f;
+        v.block_id = static_cast<float>(static_cast<int>(id));
         out.vertices.push_back(v);
     }
     out.indices.push_back(base + 0);
@@ -111,7 +112,7 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk) {
                     int nz = z + kNeighborOffsets[f][2];
                     BlockId neighbor = chunk.get_or_air(nx, ny, nz);
                     if (face_visible(self, neighbor)) {
-                        emit_quad(out, origin, kFaces[f]);
+                        emit_quad(out, origin, kFaces[f], self);
                     }
                 }
             }
@@ -315,12 +316,14 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
 
                         // Winding depends on dir: we want CCW when viewed
                         // from the outside of the face for back-face culling.
+                        const float bf = static_cast<float>(id);
                         auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
                             gfx::VertexPNT vtx;
                             vtx.position = p;
                             vtx.normal   = normal;
                             vtx.uv       = {uu, vv};
                             vtx.ao       = ao_to_brightness(ao);
+                            vtx.block_id = bf;
                             out.vertices.push_back(vtx);
                         };
 

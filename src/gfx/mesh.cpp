@@ -62,6 +62,10 @@ void Mesh::upload(std::span<const VertexPNT> vertices,
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
                           reinterpret_cast<void*>(offsetof(VertexPNT, ao)));
+    // location 4: block_id (float — used as palette index)
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
+                          reinterpret_cast<void*>(offsetof(VertexPNT, block_id)));
 
     glBindVertexArray(0);
 

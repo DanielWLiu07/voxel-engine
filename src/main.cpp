@@ -9,7 +9,6 @@
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
-#include "gfx/texture.h"
 #include "ui/debug_hud.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
@@ -43,24 +42,6 @@ static fs::path find_asset_root(const char* argv0) {
         if (p == p.root_path()) break;
     }
     return fs::current_path();
-}
-
-static std::vector<std::uint8_t> make_checker_rgba(int size, int cells) {
-    std::vector<std::uint8_t> px(static_cast<size_t>(size * size * 4));
-    int cell = size / cells;
-    for (int y = 0; y < size; ++y) {
-        for (int x = 0; x < size; ++x) {
-            bool on = ((x / cell) + (y / cell)) % 2 == 0;
-            std::uint8_t v = on ? 220 : 60;
-            std::uint8_t r = on ? v : static_cast<std::uint8_t>(v + 20);
-            std::uint8_t g = on ? static_cast<std::uint8_t>(v - 30) : v;
-            std::uint8_t b = on ? static_cast<std::uint8_t>(v - 60)
-                                : static_cast<std::uint8_t>(v + 60);
-            size_t i = static_cast<size_t>((y * size + x) * 4);
-            px[i + 0] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
-        }
-    }
-    return px;
 }
 
 static int run_bench() {
@@ -117,6 +98,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_SAMPLES, 4);  // 4x MSAA
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
     if (!window) {
@@ -152,6 +134,7 @@ int main(int argc, char** argv) {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
+    glEnable(GL_MULTISAMPLE);
 
     fs::path root = find_asset_root(argv[0]);
     std::printf("[boot] asset root = %s\n", root.string().c_str());
@@ -179,9 +162,18 @@ int main(int argc, char** argv) {
     GLuint sky_vao = 0;
     glGenVertexArrays(1, &sky_vao);
 
-    gfx::Texture2D tex;
-    auto checker = make_checker_rgba(256, 8);
-    tex.load_from_pixels(checker, 256, 256);
+    // Block-color palette (BlockId-indexed). Sent to the terrain shader
+    // each frame as a uniform array so blocks read as their real materials.
+    const glm::vec3 block_palette[8] = {
+        {1.00f, 0.00f, 1.00f},  // 0 Air (never seen; magenta = bug flag)
+        {0.55f, 0.55f, 0.58f},  // 1 Stone
+        {0.50f, 0.34f, 0.20f},  // 2 Dirt
+        {0.34f, 0.62f, 0.27f},  // 3 Grass
+        {0.88f, 0.80f, 0.55f},  // 4 Sand
+        {0.42f, 0.27f, 0.13f},  // 5 Wood
+        {0.22f, 0.46f, 0.20f},  // 6 Leaves
+        {1.00f, 0.00f, 1.00f},  // 7 (unused)
+    };
 
     // (2r+1)^2 chunks around the origin. radius=12 -> 25x25 = 625 chunks,
     // 400x400 blocks. Async pool generates + meshes off the main thread;
@@ -474,8 +466,12 @@ int main(int argc, char** argv) {
         shader.set_vec3("u_fog_color", sky_horizon);
         shader.set_float("u_fog_start", fog_start);
         shader.set_float("u_fog_end", fog_end);
-        shader.set_int("u_albedo", 0);
-        tex.bind(0);
+
+        // Palette uniform array. glUniform3fv with count=8 fills u_palette[0..7].
+        GLint pal_loc = glGetUniformLocation(shader.id(), "u_palette");
+        if (pal_loc >= 0) {
+            glUniform3fv(pal_loc, 8, &block_palette[0].x);
+        }
 
         if (input.key_pressed(GLFW_KEY_F1)) {
             std::printf("--- frustum debug ---\n");
