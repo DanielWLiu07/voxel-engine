@@ -55,6 +55,11 @@ void ShadowMap::destroy() {
 void ShadowMap::begin_pass() {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glViewport(0, 0, size_, size_);
+    // Defensive: callers may have left depth writes off (e.g. the sky
+    // pass disables them and would normally restore, but a bug elsewhere
+    // could leak that state). Without depth writes the clear no-ops and
+    // the next frame inherits last frame's depth.
+    glDepthMask(GL_TRUE);
     glClear(GL_DEPTH_BUFFER_BIT);
 }
 
