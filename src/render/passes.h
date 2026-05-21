@@ -4,6 +4,7 @@
 #include "gfx/shader.h"
 #include "gfx/shadow_map.h"
 #include "gfx/water.h"
+#include "gfx/wireframe_cube.h"
 #include "render/lighting.h"
 #include "world/world.h"
 
@@ -45,5 +46,17 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
 void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
                 const FrameView& fv, const LightingFrame& light,
                 float sea_level);
+
+// Wireframe outline on the targeted block (skipped if have_selection
+// is false), then a screen-space crosshair.
+void draw_crosshair_and_selection(const gfx::Shader& wireframe_shader,
+                                  const gfx::WireframeCube& cube,
+                                  const gfx::Shader& crosshair_shader,
+                                  GLuint crosshair_vao,
+                                  const FrameView& fv,
+                                  bool have_selection,
+                                  int selection_block_x,
+                                  int selection_block_y,
+                                  int selection_block_z);
 
 }  // namespace render

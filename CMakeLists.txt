@@ -90,6 +90,7 @@ add_executable(voxel_engine
   src/gfx/shadow_map.cpp
   src/gfx/post_process.cpp
   src/gfx/water.cpp
+  src/gfx/wireframe_cube.cpp
   src/render/lighting.cpp
   src/render/passes.cpp
   src/ui/debug_hud.cpp
