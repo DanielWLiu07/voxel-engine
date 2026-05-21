@@ -468,13 +468,16 @@ int main(int argc, char** argv) {
         gfx::Frustum frustum;
         frustum.from_view_proj(proj * view);
 
-        // Light view-projection. Centered on the player so the shadow map
-        // tracks them as they walk. Covers a ~120-block radius which is
-        // a bit larger than the visible chunk distance so casters just
-        // off-screen still produce correct shadows on visible terrain.
+        // Light view-projection. Centered on the player (including Y)
+        // so the shadow frustum follows the camera up cliffs. Covers a
+        // ~120-block radius which is a bit larger than the visible chunk
+        // distance so casters just off-screen still produce shadows on
+        // visible terrain.
         const float kShadowRadius = 120.0f;
         const float kShadowDepth  = 250.0f;
-        glm::vec3 shadow_center(cam.position().x, 40.0f, cam.position().z);
+        glm::vec3 shadow_center(cam.position().x,
+                                cam.position().y,
+                                cam.position().z);
         glm::mat4 light_vp = gfx::ShadowMap::fit_view_proj(
             shadow_center, sun_dir, kShadowRadius, kShadowDepth);
 
@@ -483,12 +486,13 @@ int main(int argc, char** argv) {
         float shadow_strength = glm::clamp(sun_height * 4.0f, 0.0f, 1.0f);
 
         // ---- Shadow depth pass ----
+        // Keep GL_BACK culling: for closed voxel cubes there are no
+        // double-sided/thin casters, so the canonical "cull front,
+        // record back" trick causes Peter-panning (depth recorded one
+        // block behind the actual surface). Slope-scaled bias in the
+        // shader handles acne on its own here.
         if (shadow_strength > 0.0f) {
             shadow_map.begin_pass();
-            // Slope-scaled bias is in the shader, but front-face culling
-            // during the depth pass also helps avoid acne by ensuring
-            // we record the BACKS of objects in the shadow map.
-            glCullFace(GL_FRONT);
 
             shadow_shader.use();
             shadow_shader.set_mat4("u_light_vp", light_vp);
@@ -499,11 +503,7 @@ int main(int argc, char** argv) {
                     shadow_shader.set_mat4("u_model", m);
                 });
 
-            glCullFace(GL_BACK);
             shadow_map.end_pass(fb_w, fb_h);
-        } else {
-            // Still bind the shadow texture so the sampler is valid;
-            // visibility will be ignored because u_shadow_strength = 0.
         }
 
         // Sky pass: fullscreen triangle, depth test off, depth writes off

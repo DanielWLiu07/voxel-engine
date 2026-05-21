@@ -34,8 +34,12 @@ float sample_shadow(vec3 N, vec3 L) {
     vec3 ndc = v_light_pos.xyz / v_light_pos.w;
     vec3 sm  = ndc * 0.5 + 0.5;
 
-    // Outside the light frustum -> no shadow contribution.
-    if (sm.x < 0.0 || sm.x > 1.0 || sm.y < 0.0 || sm.y > 1.0 || sm.z > 1.0) {
+    // Outside the light frustum -> no shadow contribution. The negative
+    // z check catches fragments in front of the light's near plane
+    // (orthographic projection makes w=1 so the divide above is benign).
+    if (sm.x < 0.0 || sm.x > 1.0 ||
+        sm.y < 0.0 || sm.y > 1.0 ||
+        sm.z < 0.0 || sm.z > 1.0) {
         return 1.0;
     }
 
