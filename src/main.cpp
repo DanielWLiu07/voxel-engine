@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
-    glfwWindowHint(GLFW_SAMPLES, 4);  // 4x MSAA
+    glfwWindowHint(GLFW_SAMPLES, 2);  // 2x MSAA (4x halved fps on M4)
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
     if (!window) {
@@ -108,6 +108,7 @@ int main(int argc, char** argv) {
     }
 
     glfwMakeContextCurrent(window);
+    bool vsync_enabled = true;
     glfwSwapInterval(1);
 
     int version = gladLoadGL(glfwGetProcAddress);
@@ -227,7 +228,7 @@ int main(int argc, char** argv) {
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
-    std::printf("[input] T = pause time, [/] = step time backwards/forwards\n");
+    std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
@@ -259,6 +260,11 @@ int main(int argc, char** argv) {
             hud.toggle_visible();
         }
         if (input.key_pressed(GLFW_KEY_T)) time_paused = !time_paused;
+        if (input.key_pressed(GLFW_KEY_V)) {
+            vsync_enabled = !vsync_enabled;
+            glfwSwapInterval(vsync_enabled ? 1 : 0);
+            std::printf("[gfx] vsync %s\n", vsync_enabled ? "on" : "off");
+        }
         if (input.key_down(GLFW_KEY_RIGHT_BRACKET)) time_of_day += dt * 0.05f;
         if (input.key_down(GLFW_KEY_LEFT_BRACKET))  time_of_day -= dt * 0.05f;
         if (!time_paused) time_of_day += dt * day_speed;
