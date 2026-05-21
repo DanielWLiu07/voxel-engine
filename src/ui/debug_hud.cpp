@@ -70,6 +70,12 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
                         cps, f.worker_count);
         }
 
+        if (f.streamed_in > 0 || f.streamed_out > 0) {
+            ImGui::Separator();
+            ImGui::Text("streamed in  : %d", f.streamed_in);
+            ImGui::Text("streamed out : %d", f.streamed_out);
+        }
+
         ImGui::Separator();
         if (ImGui::Button("Copy snapshot")) {
             copy_perf_to_clipboard(f);
@@ -102,6 +108,11 @@ void DebugHud::copy_perf_to_clipboard(const PerfFrame& f) const {
         n += std::snprintf(buf + n, sizeof(buf) - n,
                            "- startup: %d chunks in %.0f ms  (%.0f chunks/sec, %zu workers)\n",
                            f.total_chunks, f.initial_load_ms, cps, f.worker_count);
+    }
+    if (f.streamed_in > 0 || f.streamed_out > 0) {
+        n += std::snprintf(buf + n, sizeof(buf) - n,
+                           "- streaming: %d chunks in, %d out\n",
+                           f.streamed_in, f.streamed_out);
     }
 
     ImGui::SetClipboardText(buf);

@@ -10,6 +10,7 @@
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
 #include "gfx/shadow_map.h"
+#include "gfx/water.h"
 #include "ui/debug_hud.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
@@ -176,6 +177,32 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     std::printf("[shadow] 2048x2048 depth map allocated\n");
+
+    gfx::Shader water_shader;
+    if (!water_shader.load((root / "shaders" / "water.vert").string(),
+                           (root / "shaders" / "water.frag").string())) {
+        std::fprintf(stderr, "water shader load failed\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+    // Water plane: ~slightly larger than the visible world (radius=12 ->
+    // 400-block world; water is 480 so it always covers the horizon).
+    // It's re-translated to the player each frame so streaming doesn't
+    // leave the edge popping into view.
+    // kSeaLevel must agree with world/terrain_gen.cpp's kSeaLevel = 24.
+    constexpr float kSeaLevel    = 24.0f;
+    constexpr float kWaterSize   = 480.0f;
+    constexpr int   kWaterSubdiv = 200;
+    gfx::WaterPlane water;
+    if (!water.init(kWaterSize, kWaterSubdiv)) {
+        std::fprintf(stderr, "water plane init failed\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+    std::printf("[water] %.0fx%.0f plane (sea level y=%.0f, follows player)\n",
+                kWaterSize, kWaterSize, kSeaLevel);
 
     // Empty VAO required for attributeless fullscreen-triangle draws
     // (core profile won't let you draw without a bound VAO).
@@ -571,6 +598,45 @@ int main(int argc, char** argv) {
 
         last_stats = wrld.draw_visible(frustum, shader);
 
+        // ---- Water pass: alpha-blended, after opaque terrain ----
+        {
+            // Snap the water plane to the player's chunk-aligned XZ so
+            // the finite plane always covers the loaded world; waves
+            // remain anchored to absolute world coords because the
+            // shader's wave function reads post-translation XZ.
+            glm::vec3 water_origin(
+                std::floor(cam.position().x / world::kChunkSizeX) * world::kChunkSizeX,
+                0.0f,
+                std::floor(cam.position().z / world::kChunkSizeZ) * world::kChunkSizeZ);
+            glm::mat4 water_model = glm::translate(glm::mat4(1.0f), water_origin);
+
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+
+            water_shader.use();
+            water_shader.set_mat4("u_model", water_model);
+            water_shader.set_mat4("u_view", view);
+            water_shader.set_mat4("u_proj", proj);
+            water_shader.set_float("u_time", static_cast<float>(now));
+            water_shader.set_float("u_sea_level", kSeaLevel);
+            water_shader.set_vec3("u_camera_pos", cam.position());
+            water_shader.set_vec3("u_deep_color",    glm::vec3(0.05f, 0.18f, 0.32f));
+            water_shader.set_vec3("u_shallow_color", glm::vec3(0.32f, 0.62f, 0.78f));
+            water_shader.set_vec3("u_sun_dir", sun_dir);
+            water_shader.set_vec3("u_sun_color", sun_color);
+            water_shader.set_vec3("u_fog_color", sky_horizon);
+            water_shader.set_float("u_fog_start", fog_start);
+            water_shader.set_float("u_fog_end", fog_end);
+            water_shader.set_float("u_alpha", 0.70f);
+            water.draw();
+
+            glEnable(GL_CULL_FACE);
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+        }
+
         // HUD draws on top of the scene, before the swap.
         hud.begin_frame();
         ui::PerfFrame pf;
@@ -583,6 +649,8 @@ int main(int argc, char** argv) {
         pf.initial_load_ms = initial_load_ms;
         pf.total_chunks = total_chunks;
         pf.worker_count = worker_count;
+        pf.streamed_in = streamed_in_total;
+        pf.streamed_out = streamed_out_total;
         hud.draw_perf_panel(pf);
         if (copy_perf_requested) hud.copy_perf_to_clipboard(pf);
         hud.end_frame_and_render();
