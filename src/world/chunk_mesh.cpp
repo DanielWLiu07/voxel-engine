@@ -168,6 +168,13 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
     auto t0 = clock::now();
 
     ChunkMeshData out;
+    // Sky-only chunks at the world edge generate no geometry. Short-
+    // circuiting saves six full sweeps of empty masks.
+    if (chunk.empty()) {
+        out.build_ms = std::chrono::duration<double, std::milli>(
+            clock::now() - t0).count();
+        return out;
+    }
     out.vertices.reserve(static_cast<size_t>(chunk.solid_count()));
     out.indices.reserve(static_cast<size_t>(chunk.solid_count()) * 2);
 
@@ -187,8 +194,11 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
         const int u_size = axis_size(u_axis);
         const int v_size = axis_size(v_axis);
 
-        // Buffer reused per slice. Mask cells store BlockId; 0 == Air == "no face".
-        std::vector<std::uint8_t> mask(static_cast<size_t>(u_size * v_size), 0);
+        // Mask reused across slices AND across calls on this worker
+        // thread. We resize-to-fit each time so workers can flex if the
+        // axis arrangement changes.
+        thread_local std::vector<std::uint8_t> mask;
+        mask.assign(static_cast<size_t>(u_size * v_size), 0);
 
         for (int dir : {-1, +1}) {
             // Slice index `s` lives between block s-1 and block s along axis d.
