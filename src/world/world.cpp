@@ -324,4 +324,25 @@ DrawStats World::draw_visible(const gfx::Frustum& frustum,
     return stats;
 }
 
+DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
+    std::function<void(const glm::mat4& model)> set_model) const {
+    DrawStats stats;
+    stats.chunks_total = static_cast<int>(chunks_.size());
+    for (const auto& kv : chunks_) {
+        const ChunkSlot& slot = *kv.second;
+        if (!slot.has_mesh) continue;
+        if (!frustum.intersects_aabb(slot.aabb)) continue;
+
+        glm::mat4 model = glm::translate(
+            glm::mat4(1.0f),
+            glm::vec3(slot.aabb.min.x, 0.0f, slot.aabb.min.z));
+        set_model(model);
+        slot.mesh.draw();
+
+        ++stats.chunks_drawn;
+        stats.triangles_drawn += slot.mesh.index_count() / 3;
+    }
+    return stats;
+}
+
 }  // namespace world
