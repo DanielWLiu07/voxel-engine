@@ -1,5 +1,6 @@
 #include "gfx/post_process.h"
 
+#include "core/profiler.h"
 #include "gfx/shader.h"
 
 #include <algorithm>
@@ -136,6 +137,7 @@ void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
                                         float bloom_threshold,
                                         float bloom_intensity,
                                         float exposure) {
+    ZoneScopedN("postfx_resolve");
     // MSAA resolve: blit multisample scene -> single-sample resolve target.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolve_fbo_);

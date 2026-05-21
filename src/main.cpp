@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include "core/input.h"
+#include "core/profiler.h"
 #include "core/thread_pool.h"
 #include "game/player.h"
 #include "gfx/camera.h"
@@ -516,6 +517,7 @@ int main(int argc, char** argv) {
 
         glfwSwapBuffers(window);
         glfwPollEvents();
+        FrameMark;
 
         ++frame_count;
         if (now - last_time >= 1.0) {

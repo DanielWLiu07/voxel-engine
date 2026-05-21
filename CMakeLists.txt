@@ -77,6 +77,19 @@ target_include_directories(stb INTERFACE third_party/stb)
 add_library(fastnoise INTERFACE)
 target_include_directories(fastnoise INTERFACE third_party/FastNoiseLite)
 
+# --- Tracy profiler (optional, off by default) -------------------------------
+option(VOXEL_USE_TRACY "Build with Tracy profiler instrumentation" OFF)
+if(VOXEL_USE_TRACY)
+  FetchContent_Declare(
+    tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_TAG        v0.11.1
+    GIT_SHALLOW    TRUE
+  )
+  set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(tracy)
+endif()
+
 # --- App ----------------------------------------------------------------------
 add_executable(voxel_engine
   src/main.cpp
@@ -112,6 +125,11 @@ target_link_libraries(voxel_engine PRIVATE
   fastnoise
   imgui
 )
+
+if(VOXEL_USE_TRACY)
+  target_link_libraries(voxel_engine PRIVATE TracyClient)
+  target_compile_definitions(voxel_engine PRIVATE VOXEL_USE_TRACY=1)
+endif()
 
 if(APPLE)
   find_library(COCOA_LIB Cocoa REQUIRED)

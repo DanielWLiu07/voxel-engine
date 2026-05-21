@@ -1,5 +1,6 @@
 #include "world/world.h"
 
+#include "core/profiler.h"
 #include "world/chunk_mesh.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -115,6 +116,7 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
             requested_.insert(c);
             jobs_in_flight_.fetch_add(1);
             pool.submit([this, &terrain, c]() {
+                ZoneScopedN("chunk_worker_job");
                 FinishedChunk fc;
                 fc.coord = c;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
@@ -154,6 +156,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             jobs_in_flight_.fetch_add(1);
             ++stats.requested;
             pool.submit([this, &terrain, c]() {
+                ZoneScopedN("chunk_worker_job");
                 FinishedChunk fc;
                 fc.coord = c;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
@@ -167,6 +170,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
 }
 
 int World::drain_finished(int max_per_frame) {
+    ZoneScopedN("drain_finished");
     int uploaded = 0;
     for (int i = 0; i < max_per_frame; ++i) {
         FinishedChunk fc;

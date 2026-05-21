@@ -1,5 +1,7 @@
 #include "world/chunk_mesh.h"
 
+#include "core/profiler.h"
+
 #include <chrono>
 #include <cstring>
 #include <glm/glm.hpp>
@@ -63,6 +65,7 @@ inline float ao_to_brightness(int ao) {
 }  // namespace
 
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk) {
+    ZoneScopedN("mesh_naive");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
 
@@ -119,6 +122,7 @@ constexpr int axis_size(int axis) {
 // Greedy mesh: sweep 6 (axis, dir) combos. Per slice, build a BlockId mask
 // then merge contiguous same-id cells into maximal rectangles.
 ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
+    ZoneScopedN("mesh_greedy");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
 
