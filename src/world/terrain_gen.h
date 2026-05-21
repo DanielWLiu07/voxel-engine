@@ -2,12 +2,15 @@
 
 #include "world/chunk.h"
 
+#include <FastNoiseLite.h>
+
 #include <cstdint>
 
 namespace world {
 
-// Multi-octave Perlin terrain. Stateless after construction: safe to call
-// from multiple threads.
+// Multi-octave Perlin terrain. Noise samplers are constructed once at
+// TerrainGen build time and shared across threads (FastNoiseLite::GetNoise
+// is a const read, so concurrent sampling is safe).
 class TerrainGen {
 public:
     explicit TerrainGen(std::uint32_t seed = 1337);
@@ -19,7 +22,8 @@ public:
     void fill_chunk(int chunk_x, int chunk_z, Chunk& out) const;
 
 private:
-    std::uint32_t seed_ = 1337;
+    FastNoiseLite continents_;
+    FastNoiseLite hills_;
 };
 
 }  // namespace world
