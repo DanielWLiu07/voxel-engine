@@ -17,6 +17,7 @@
 #include "world/world.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -225,9 +226,16 @@ int main(int argc, char** argv) {
     player.set_position({0.0f, 80.0f, 0.0f});
     bool walk_mode = false;
 
+    // Day/night state. time_of_day is in [0, 1) where 0.25 = sunrise,
+    // 0.5 = noon, 0.75 = sunset. Starts at midmorning.
+    float time_of_day = 0.35f;
+    float day_speed   = 1.0f / 240.0f;  // one day per ~4 minutes
+    bool  time_paused = false;
+
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
+    std::printf("[input] T = pause time, [/] = step time backwards/forwards\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
@@ -258,6 +266,61 @@ int main(int argc, char** argv) {
         if (input.key_pressed(GLFW_KEY_F2)) {
             hud.toggle_visible();
         }
+        if (input.key_pressed(GLFW_KEY_T)) time_paused = !time_paused;
+        if (input.key_down(GLFW_KEY_RIGHT_BRACKET)) time_of_day += dt * 0.05f;
+        if (input.key_down(GLFW_KEY_LEFT_BRACKET))  time_of_day -= dt * 0.05f;
+        if (!time_paused) time_of_day += dt * day_speed;
+        time_of_day -= std::floor(time_of_day);  // wrap [0, 1)
+
+        // Sun arcs through the sky. At time 0.25 sun is at horizon east,
+        // 0.5 noon, 0.75 horizon west, 0/1 midnight (below ground).
+        float sun_angle = (time_of_day - 0.25f) * 6.2831853f;
+        glm::vec3 sun_dir = glm::normalize(glm::vec3(
+            std::cos(sun_angle) * 0.3f + 0.05f,
+            std::sin(sun_angle),
+            std::cos(sun_angle) * 0.6f));
+        float sun_height = sun_dir.y;  // -1..1
+
+        // Color ramps. Daylight is warm-white at noon, deeply orange at
+        // horizon, dim blue when below the horizon.
+        auto mix3 = [](const glm::vec3& a, const glm::vec3& b, float t) {
+            t = glm::clamp(t, 0.0f, 1.0f);
+            return a * (1.0f - t) + b * t;
+        };
+        glm::vec3 sun_color_noon (1.05f, 0.98f, 0.90f);
+        glm::vec3 sun_color_dusk (1.20f, 0.55f, 0.25f);
+        glm::vec3 sun_color_night(0.05f, 0.07f, 0.15f);
+        glm::vec3 sky_top_noon   (0.30f, 0.55f, 0.85f);
+        glm::vec3 sky_top_dusk   (0.18f, 0.20f, 0.40f);
+        glm::vec3 sky_top_night  (0.02f, 0.02f, 0.06f);
+        glm::vec3 sky_horizon_noon (0.78f, 0.86f, 0.93f);
+        glm::vec3 sky_horizon_dusk (1.00f, 0.55f, 0.30f);
+        glm::vec3 sky_horizon_night(0.05f, 0.06f, 0.10f);
+        glm::vec3 ambient_noon (0.32f, 0.34f, 0.40f);
+        glm::vec3 ambient_dusk (0.20f, 0.15f, 0.15f);
+        glm::vec3 ambient_night(0.05f, 0.06f, 0.10f);
+
+        // Three regimes: night (sun_height < 0), dusk/dawn (0..0.25),
+        // daylight (>0.25). Smooth between them.
+        float day_t  = glm::clamp((sun_height - 0.05f) / 0.30f, 0.0f, 1.0f);   // 0 at horizon, 1 at high noon
+        float night_t = glm::clamp(-sun_height / 0.15f, 0.0f, 1.0f);            // 0 at horizon, 1 well below
+
+        glm::vec3 sun_color  = mix3(mix3(sun_color_night, sun_color_dusk, 1.0f - night_t),
+                                    sun_color_noon, day_t);
+        glm::vec3 sky_top    = mix3(mix3(sky_top_night, sky_top_dusk, 1.0f - night_t),
+                                    sky_top_noon, day_t);
+        glm::vec3 sky_horizon= mix3(mix3(sky_horizon_night, sky_horizon_dusk, 1.0f - night_t),
+                                    sky_horizon_noon, day_t);
+        glm::vec3 ambient    = mix3(mix3(ambient_night, ambient_dusk, 1.0f - night_t),
+                                    ambient_noon, day_t);
+
+        // When the sun is below the horizon, point the "light_dir" up so
+        // ambient still works correctly (otherwise the sun-down hemisphere
+        // would be too dark to see).
+        glm::vec3 light_dir = (sun_height > 0.0f)
+            ? sun_dir
+            : glm::normalize(glm::vec3(sun_dir.x * 0.2f, 0.4f, sun_dir.z * 0.2f));
+
         // Defer the clipboard copy until after we populate PerfFrame below.
         bool copy_perf_requested = input.key_pressed(GLFW_KEY_C);
 
@@ -369,15 +432,6 @@ int main(int argc, char** argv) {
         gfx::Frustum frustum;
         frustum.from_view_proj(proj * view);
 
-        // Scene lighting parameters — shared between the sky and the
-        // terrain shader so the sun in the sky agrees with the lighting
-        // on the ground.
-        glm::vec3 sun_dir = glm::normalize(glm::vec3(0.45f, 0.85f, 0.30f));
-        glm::vec3 sun_color(1.05f, 0.98f, 0.90f);
-        glm::vec3 sky_top(0.30f, 0.55f, 0.85f);
-        glm::vec3 sky_horizon(0.78f, 0.86f, 0.93f);
-        glm::vec3 ambient(0.32f, 0.34f, 0.40f);
-
         // Sky pass: fullscreen triangle, depth test off, depth writes off
         // so terrain naturally draws on top.
         {
@@ -413,7 +467,7 @@ int main(int argc, char** argv) {
         shader.use();
         shader.set_mat4("u_view", view);
         shader.set_mat4("u_proj", proj);
-        shader.set_vec3("u_light_dir", sun_dir);
+        shader.set_vec3("u_light_dir", light_dir);
         shader.set_vec3("u_light_color", sun_color);
         shader.set_vec3("u_ambient_color", ambient);
         shader.set_vec3("u_camera_pos", cam.position());
