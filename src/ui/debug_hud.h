@@ -16,6 +16,9 @@ struct PerfFrame {
     double initial_load_ms = 0.0;
     int    total_chunks = 0;
     std::size_t worker_count = 0;
+    // Streaming counters (cumulative since startup)
+    int   streamed_in = 0;
+    int   streamed_out = 0;
 };
 
 class DebugHud {
