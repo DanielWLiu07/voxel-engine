@@ -13,11 +13,10 @@ bool DebugHud::init(GLFWwindow* window) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;  // don't litter the cwd with imgui.ini
+    io.IniFilename = nullptr;
     ImGui::StyleColorsDark();
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) return false;
-    // Matches our GLFW window hints: GL 4.1 core.
     if (!ImGui_ImplOpenGL3_Init("#version 410 core")) return false;
 
     initialized_ = true;
@@ -46,15 +45,14 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
     ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.75f);
 
-    if (ImGui::Begin("voxel_engine perf", nullptr,
-                     ImGuiWindowFlags_NoCollapse)) {
+    if (ImGui::Begin("voxel_engine perf", nullptr, ImGuiWindowFlags_NoCollapse)) {
         ImGui::Text("%.1f fps   |   %.2f ms/frame", f.fps, f.frame_ms);
         ImGui::Separator();
 
         ImGui::Text("chunks drawn : %d / %d", f.chunks_drawn, f.chunks_total);
         if (f.chunks_total > 0) {
             float cull_ratio = static_cast<float>(f.chunks_total) /
-                std::max(1, f.chunks_drawn);
+                               std::max(1, f.chunks_drawn);
             ImGui::Text("frustum cull : %.1fx (skipped %d chunks)",
                         cull_ratio, f.chunks_total - f.chunks_drawn);
         }
@@ -77,9 +75,7 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         }
 
         ImGui::Separator();
-        if (ImGui::Button("Copy snapshot")) {
-            copy_perf_to_clipboard(f);
-        }
+        if (ImGui::Button("Copy snapshot")) copy_perf_to_clipboard(f);
         ImGui::SameLine();
         ImGui::TextDisabled("(or press C)");
         ImGui::TextDisabled("F2: toggle HUD   Tab: release mouse   ESC: quit");
@@ -92,8 +88,7 @@ void DebugHud::copy_perf_to_clipboard(const PerfFrame& f) const {
 
     char buf[1024];
     int n = 0;
-    n += std::snprintf(buf + n, sizeof(buf) - n,
-                       "voxel_engine perf snapshot\n");
+    n += std::snprintf(buf + n, sizeof(buf) - n, "voxel_engine perf snapshot\n");
     n += std::snprintf(buf + n, sizeof(buf) - n,
                        "- %.1f fps  |  %.2f ms/frame\n", f.fps, f.frame_ms);
     n += std::snprintf(buf + n, sizeof(buf) - n,

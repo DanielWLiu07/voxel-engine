@@ -12,7 +12,6 @@ void Input::attach(GLFWwindow* w) {
 
 void Input::begin_frame() {
     if (!window_) return;
-
     double mx, my;
     glfwGetCursorPos(window_, &mx, &my);
     if (have_last_mouse_) {
@@ -34,9 +33,9 @@ bool Input::key_down(int key) const {
 bool Input::key_pressed(int key) {
     if (!window_ || key < 0 || key >= kKeyMax) return false;
     bool down = glfwGetKey(window_, key) == GLFW_PRESS;
-    bool transitioned = down && !key_was_down_[key];
+    bool edge = down && !key_was_down_[key];
     key_was_down_[key] = down;
-    return transitioned;
+    return edge;
 }
 
 bool Input::mouse_button_down(int button) const {
@@ -47,9 +46,9 @@ bool Input::mouse_button_down(int button) const {
 bool Input::mouse_button_pressed(int button) {
     if (!window_ || button < 0 || button >= kMouseButtonMax) return false;
     bool down = glfwGetMouseButton(window_, button) == GLFW_PRESS;
-    bool transitioned = down && !mouse_was_down_[button];
+    bool edge = down && !mouse_was_down_[button];
     mouse_was_down_[button] = down;
-    return transitioned;
+    return edge;
 }
 
 void Input::set_cursor_captured(bool capture) {
@@ -57,7 +56,6 @@ void Input::set_cursor_captured(bool capture) {
     captured_ = capture;
     glfwSetInputMode(window_, GLFW_CURSOR,
                      capture ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
-    // Reset deltas so the next frame doesn't see a big jump.
     have_last_mouse_ = false;
 }
 

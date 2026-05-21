@@ -8,17 +8,17 @@
 
 namespace world {
 
-// Multi-octave Perlin terrain. Noise samplers are constructed once at
-// TerrainGen build time and shared across threads (FastNoiseLite::GetNoise
-// is a const read, so concurrent sampling is safe).
+inline constexpr int kSeaLevel  = 24;
+inline constexpr int kSandBand  = 2;
+inline constexpr int kStoneBand = 28;
+
+// Multi-octave Perlin terrain with trees. fill_chunk and height_at are
+// const + thread-safe: FastNoiseLite::GetNoise is a const read.
 class TerrainGen {
 public:
     explicit TerrainGen(std::uint32_t seed = 1337);
 
-    // Height at world-space (wx, wz) in blocks. Result is in [0, kChunkSizeY).
-    int height_at(int wx, int wz) const;
-
-    // Fill a whole chunk for a given chunk coord (in chunk-space).
+    int  height_at(int wx, int wz) const;
     void fill_chunk(int chunk_x, int chunk_z, Chunk& out) const;
 
 private:

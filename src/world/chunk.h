@@ -12,8 +12,7 @@ inline constexpr int kChunkSizeZ = 16;
 inline constexpr int kChunkSizeY = 256;
 inline constexpr int kChunkVolume = kChunkSizeX * kChunkSizeY * kChunkSizeZ;
 
-// Y-major flat storage. Index formula keeps a vertical column contiguous,
-// which is convenient for column-driven terrain generation.
+// Y-major flat storage; a vertical column lives contiguously.
 constexpr int chunk_index(int x, int y, int z) {
     return (y * kChunkSizeZ * kChunkSizeX) + (z * kChunkSizeX) + x;
 }
@@ -32,11 +31,8 @@ public:
         return static_cast<BlockId>(blocks_[chunk_index(x, y, z)]);
     }
 
-    // Returns Air when out of bounds — callers querying neighbors at the
-    // chunk seam can rely on this until cross-chunk neighbor sampling lands.
     BlockId get_or_air(int x, int y, int z) const {
-        if (!in_chunk_bounds(x, y, z)) return BlockId::Air;
-        return get(x, y, z);
+        return in_chunk_bounds(x, y, z) ? get(x, y, z) : BlockId::Air;
     }
 
     void set(int x, int y, int z, BlockId b) {
@@ -48,7 +44,7 @@ public:
         if (is_solid(b)) ++solid_count_;
     }
 
-    int solid_count() const { return solid_count_; }
+    int  solid_count() const { return solid_count_; }
     bool empty() const { return solid_count_ == 0; }
 
 private:
