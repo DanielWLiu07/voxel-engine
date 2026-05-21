@@ -1,5 +1,7 @@
 # voxel-engine
 
+[![CI](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml)
+
 A desktop voxel engine in C++20 and OpenGL 4.1 Core. Greedy meshing, multithreaded chunk streaming, real-time shadow mapping, vertex AO, day/night, and a water plane with Fresnel. Measured on an Apple M4: 27.7x greedy triangle reduction on Perlin terrain, ~940 chunks/sec end-to-end pipeline.
 
 ## Screenshots

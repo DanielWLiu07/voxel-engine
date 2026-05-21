@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-bench:
+    name: build + bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Ninja and GLFW system deps (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            xorg-dev \
+            libwayland-dev \
+            libxkbcommon-dev
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Run benchmark and validate greedy ratio
+        run: |
+          set -euo pipefail
+          OUTPUT=$(./build/voxel_engine --bench)
+          echo "$OUTPUT"
+          RATIO=$(echo "$OUTPUT" | grep -oE '[0-9]+\.[0-9]+x fewer quads' | head -1 | grep -oE '[0-9]+\.[0-9]+')
+          if [ -z "$RATIO" ]; then
+            echo "Failed to parse greedy ratio from --bench output"
+            exit 1
+          fi
+          echo "Measured ratio: ${RATIO}x"
+          awk -v r="$RATIO" 'BEGIN { if (r+0 < 20.0) { printf "ratio %s below threshold 20.0\n", r; exit 1 } }'
+          echo "Greedy ratio ${RATIO}x meets threshold (>= 20.0x)"
