@@ -4,18 +4,16 @@
 
 namespace core {
 
-// Thin per-frame input state over GLFW. Owns the captured-cursor toggle so
-// the camera can do mouselook without snagging the system cursor.
 class Input {
 public:
     void attach(GLFWwindow* w);
     void begin_frame();
 
     bool key_down(int key) const;
-    bool key_pressed(int key);   // true once on the frame it transitions down
+    bool key_pressed(int key);   // edge: down this frame, up last
 
     bool mouse_button_down(int button) const;
-    bool mouse_button_pressed(int button);  // edge: down this frame, up last
+    bool mouse_button_pressed(int button);
 
     float mouse_dx() const { return mouse_dx_; }
     float mouse_dy() const { return mouse_dy_; }

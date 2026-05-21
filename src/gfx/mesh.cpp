@@ -46,29 +46,18 @@ void Mesh::upload(std::span<const VertexPNT> vertices,
                  static_cast<GLsizeiptr>(indices.size_bytes()),
                  indices.data(), GL_STATIC_DRAW);
 
-    // location 0: position (vec3)
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
-                          reinterpret_cast<void*>(offsetof(VertexPNT, position)));
-    // location 1: normal (vec3)
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
-                          reinterpret_cast<void*>(offsetof(VertexPNT, normal)));
-    // location 2: uv (vec2)
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
-                          reinterpret_cast<void*>(offsetof(VertexPNT, uv)));
-    // location 3: ao (float)
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
-                          reinterpret_cast<void*>(offsetof(VertexPNT, ao)));
-    // location 4: block_id (float — used as palette index)
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(VertexPNT),
-                          reinterpret_cast<void*>(offsetof(VertexPNT, block_id)));
+    auto attr = [](GLuint loc, GLint comps, std::size_t offset) {
+        glEnableVertexAttribArray(loc);
+        glVertexAttribPointer(loc, comps, GL_FLOAT, GL_FALSE,
+                              sizeof(VertexPNT), reinterpret_cast<void*>(offset));
+    };
+    attr(0, 3, offsetof(VertexPNT, position));
+    attr(1, 3, offsetof(VertexPNT, normal));
+    attr(2, 2, offsetof(VertexPNT, uv));
+    attr(3, 1, offsetof(VertexPNT, ao));
+    attr(4, 1, offsetof(VertexPNT, block_id));
 
     glBindVertexArray(0);
-
     index_count_ = indices.size();
 }
 

@@ -22,9 +22,6 @@ bool WaterPlane::init(float size_blocks, int segments) {
     const float half = size_blocks * 0.5f;
     const float step = size_blocks / static_cast<float>(segments);
 
-    // Position-only vertex stream. Y is left at 0 here; the vertex shader
-    // overwrites it with sea_level + wave displacement so this CPU buffer
-    // doesn't need a normal/uv channel.
     std::vector<float> positions;
     positions.reserve(static_cast<std::size_t>(verts_per_side) * verts_per_side * 3);
     for (int j = 0; j < verts_per_side; ++j) {
@@ -37,8 +34,6 @@ bool WaterPlane::init(float size_blocks, int segments) {
         }
     }
 
-    // Two triangles per cell, CCW-wound looking down +Y so back-face
-    // culling (if enabled) keeps the top visible from above.
     std::vector<std::uint32_t> indices;
     indices.reserve(static_cast<std::size_t>(segments) * segments * 6);
     for (int j = 0; j < segments; ++j) {
@@ -47,12 +42,7 @@ bool WaterPlane::init(float size_blocks, int segments) {
             std::uint32_t v10 = v00 + 1;
             std::uint32_t v01 = v00 + verts_per_side;
             std::uint32_t v11 = v01 + 1;
-            indices.push_back(v00);
-            indices.push_back(v01);
-            indices.push_back(v11);
-            indices.push_back(v00);
-            indices.push_back(v11);
-            indices.push_back(v10);
+            indices.insert(indices.end(), {v00, v01, v11, v00, v11, v10});
         }
     }
 
@@ -72,14 +62,11 @@ bool WaterPlane::init(float size_blocks, int segments) {
                  static_cast<GLsizeiptr>(indices.size() * sizeof(std::uint32_t)),
                  indices.data(), GL_STATIC_DRAW);
 
-    // location 0: position (vec3). Matches the water.vert layout.
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-                          3 * sizeof(float),
-                          reinterpret_cast<void*>(0));
+                          3 * sizeof(float), reinterpret_cast<void*>(0));
 
     glBindVertexArray(0);
-
     index_count_ = indices.size();
     return true;
 }

@@ -11,9 +11,7 @@
 
 namespace core {
 
-// Minimal fixed-size worker pool. Submit `void()` jobs; they run on a
-// background thread. The pool joins all workers on destruction; pending
-// jobs are dropped.
+// Fixed-size worker pool. Joins on destruction; pending jobs dropped.
 class ThreadPool {
 public:
     explicit ThreadPool(std::size_t worker_count);
@@ -28,11 +26,11 @@ public:
 private:
     void worker_loop();
 
-    std::vector<std::thread>         workers_;
+    std::vector<std::thread>          workers_;
     std::queue<std::function<void()>> jobs_;
-    std::mutex                       mutex_;
-    std::condition_variable          cv_;
-    std::atomic<bool>                stop_{false};
+    std::mutex                        mutex_;
+    std::condition_variable           cv_;
+    std::atomic<bool>                 stop_{false};
 };
 
 }  // namespace core
