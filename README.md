@@ -77,6 +77,9 @@ Build type defaults to Release. Pass `--bench` to run the mesher benchmark inste
 | --- | --- |
 | Tab | Toggle mouse capture |
 | F2 | Toggle ImGui HUD |
+| F5 | Save world to `./saves/world1/` |
+| F6 | Reload world from `./saves/world1/` |
+| F12 | Screenshot to `./screenshots/` |
 | C | Copy perf snapshot to clipboard |
 | T | Pause / resume time of day |
 | `[` / `]` | Step time of day backward / forward |
@@ -100,15 +103,4 @@ shaders/   GLSL 4.10 core
 third_party/  glad, stb, FastNoiseLite (vendored)
 ```
 
-Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD (GL 4.1 core loader), stb_image, FastNoiseLite.
-
-## Not in scope
-
-Deliberately left out to keep the project focused:
-
-- Cascaded shadow maps (single shadow cascade with dynamic refit only)
-- Texture atlas (uses a per-block color palette instead)
-- Save / load of world state
-- Networking, multiplayer
-- Compute shaders, DSA, indirect draw (macOS caps OpenGL at 4.1)
-- Lighting beyond directional sun + ambient (no point lights, no GI)
+Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD (GL 4.1 core loader), stb_image, stb_image_write, FastNoiseLite.
