@@ -88,6 +88,7 @@ add_executable(voxel_engine
   src/gfx/mesh.cpp
   src/gfx/shader.cpp
   src/gfx/shadow_map.cpp
+  src/gfx/post_process.cpp
   src/gfx/water.cpp
   src/render/lighting.cpp
   src/render/passes.cpp
