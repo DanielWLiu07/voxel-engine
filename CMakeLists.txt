@@ -87,6 +87,7 @@ add_executable(voxel_engine
   src/gfx/frustum.cpp
   src/gfx/mesh.cpp
   src/gfx/shader.cpp
+  src/gfx/shadow_map.cpp
   src/gfx/texture.cpp
   src/ui/debug_hud.cpp
   src/world/chunk_mesh.cpp

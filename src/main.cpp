@@ -9,6 +9,7 @@
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
+#include "gfx/shadow_map.h"
 #include "ui/debug_hud.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
@@ -157,6 +158,24 @@ int main(int argc, char** argv) {
         glfwTerminate();
         return EXIT_FAILURE;
     }
+
+    gfx::Shader shadow_shader;
+    if (!shadow_shader.load((root / "shaders" / "shadow_depth.vert").string(),
+                            (root / "shaders" / "shadow_depth.frag").string())) {
+        std::fprintf(stderr, "shadow shader load failed\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    gfx::ShadowMap shadow_map;
+    if (!shadow_map.init(2048)) {
+        std::fprintf(stderr, "shadow map init failed\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+    std::printf("[shadow] 2048x2048 depth map allocated\n");
 
     // Empty VAO required for attributeless fullscreen-triangle draws
     // (core profile won't let you draw without a bound VAO).
@@ -430,6 +449,44 @@ int main(int argc, char** argv) {
         gfx::Frustum frustum;
         frustum.from_view_proj(proj * view);
 
+        // Light view-projection. Centered on the player so the shadow map
+        // tracks them as they walk. Covers a ~120-block radius which is
+        // a bit larger than the visible chunk distance so casters just
+        // off-screen still produce correct shadows on visible terrain.
+        const float kShadowRadius = 120.0f;
+        const float kShadowDepth  = 250.0f;
+        glm::vec3 shadow_center(cam.position().x, 40.0f, cam.position().z);
+        glm::mat4 light_vp = gfx::ShadowMap::fit_view_proj(
+            shadow_center, sun_dir, kShadowRadius, kShadowDepth);
+
+        // Shadow strength fades to zero when the sun dips below the
+        // horizon — we shouldn't cast shadows from a sun that isn't there.
+        float shadow_strength = glm::clamp(sun_height * 4.0f, 0.0f, 1.0f);
+
+        // ---- Shadow depth pass ----
+        if (shadow_strength > 0.0f) {
+            shadow_map.begin_pass();
+            // Slope-scaled bias is in the shader, but front-face culling
+            // during the depth pass also helps avoid acne by ensuring
+            // we record the BACKS of objects in the shadow map.
+            glCullFace(GL_FRONT);
+
+            shadow_shader.use();
+            shadow_shader.set_mat4("u_light_vp", light_vp);
+            gfx::Frustum light_frustum;
+            light_frustum.from_view_proj(light_vp);
+            wrld.draw_visible_with(light_frustum,
+                [&](const glm::mat4& m) {
+                    shadow_shader.set_mat4("u_model", m);
+                });
+
+            glCullFace(GL_BACK);
+            shadow_map.end_pass(fb_w, fb_h);
+        } else {
+            // Still bind the shadow texture so the sampler is valid;
+            // visibility will be ignored because u_shadow_strength = 0.
+        }
+
         // Sky pass: fullscreen triangle, depth test off, depth writes off
         // so terrain naturally draws on top.
         {
@@ -465,6 +522,7 @@ int main(int argc, char** argv) {
         shader.use();
         shader.set_mat4("u_view", view);
         shader.set_mat4("u_proj", proj);
+        shader.set_mat4("u_light_vp", light_vp);
         shader.set_vec3("u_light_dir", light_dir);
         shader.set_vec3("u_light_color", sun_color);
         shader.set_vec3("u_ambient_color", ambient);
@@ -472,6 +530,9 @@ int main(int argc, char** argv) {
         shader.set_vec3("u_fog_color", sky_horizon);
         shader.set_float("u_fog_start", fog_start);
         shader.set_float("u_fog_end", fog_end);
+        shader.set_int("u_shadow_map", 1);
+        shader.set_float("u_shadow_strength", shadow_strength);
+        shadow_map.bind_depth_texture(1);
 
         // Palette uniform array. glUniform3fv with count=8 fills u_palette[0..7].
         GLint pal_loc = glGetUniformLocation(shader.id(), "u_palette");

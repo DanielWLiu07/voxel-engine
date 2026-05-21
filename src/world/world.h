@@ -125,6 +125,14 @@ public:
     // (view, proj, light, texture). We set u_model per chunk.
     DrawStats draw_visible(const gfx::Frustum& frustum, const gfx::Shader& shader) const;
 
+    // Same iteration, but caller supplies the per-chunk model setter.
+    // Used by the shadow pass where we want to draw with a different
+    // shader and against the light's view-proj rather than the camera's.
+    // The frustum here is the LIGHT's frustum (or a bigger one to
+    // include shadow casters just outside the view).
+    DrawStats draw_visible_with(const gfx::Frustum& frustum,
+        std::function<void(const glm::mat4& model)> set_model) const;
+
     // Diagnostic: print every chunk's coord, AABB, frustum result. Used
     // to verify the culling math, not called per frame.
     void debug_dump_visibility(const gfx::Frustum& frustum) const;
