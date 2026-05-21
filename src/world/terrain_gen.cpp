@@ -1,6 +1,7 @@
 #include "world/terrain_gen.h"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace world {
 
@@ -16,6 +17,68 @@ float sample_height_noise(const FastNoiseLite& continents,
     float c = continents.GetNoise(wx, wz);
     float h = hills.GetNoise(wx, wz);
     return c * 0.75f + h * 0.25f;
+}
+
+// Deterministic hash from a world-space (x, z) to [0, 1). Used to decide
+// tree spawn locations so chunks always agree on whether a tree exists
+// at a given column even when they're meshed by different workers.
+std::uint32_t hash2d(int x, int z, std::uint32_t seed) {
+    std::uint32_t h = static_cast<std::uint32_t>(x) * 0x9E3779B1u
+                    + static_cast<std::uint32_t>(z) * 0x85EBCA77u
+                    + seed * 0xC2B2AE3Du;
+    h ^= h >> 15;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    h *= 0xC2B2AE35u;
+    h ^= h >> 16;
+    return h;
+}
+
+float hash2d_f(int x, int z, std::uint32_t seed) {
+    return (hash2d(x, z, seed) & 0x00FFFFFFu) / 16777216.0f;
+}
+
+// Stamp a small tree (5-tall wood trunk + 3x3x3 leaf canopy with the
+// corners knocked off) at local-chunk (lx, base_y, lz). Caller is
+// responsible for ensuring the tree fits inside the chunk (we restrict
+// spawns to a 2-block margin from chunk edges).
+void stamp_tree(Chunk& c, int lx, int base_y, int lz) {
+    constexpr int kTrunkH  = 5;
+    const int top = base_y + kTrunkH;
+
+    // Trunk
+    for (int dy = 0; dy < kTrunkH; ++dy) {
+        int y = base_y + dy;
+        if (y >= 0 && y < kChunkSizeY) c.set(lx, y, lz, BlockId::Wood);
+    }
+
+    // Canopy: 3 wide, 2 layers (top: 1 wide, mid: 3 wide cross). Simple
+    // but recognizable.
+    auto put_leaf = [&](int x, int y, int z) {
+        if (!in_chunk_bounds(x, y, z)) return;
+        if (is_solid(c.get(x, y, z))) return;
+        c.set(x, y, z, BlockId::Leaves);
+    };
+
+    // Wide mid layer (top - 1)
+    int my = top - 1;
+    for (int dz = -2; dz <= 2; ++dz) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            if (std::abs(dx) == 2 && std::abs(dz) == 2) continue;  // corner cull
+            put_leaf(lx + dx, my, lz + dz);
+        }
+    }
+    // Narrower upper layer
+    int uy = top;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (std::abs(dx) == 1 && std::abs(dz) == 1
+                && ((hash2d(lx + dx, lz + dz, 0xA1B2C3) & 1) == 0)) continue;
+            put_leaf(lx + dx, uy, lz + dz);
+        }
+    }
+    // Single block on top for the silhouette
+    put_leaf(lx, uy + 1, lz);
 }
 
 }  // namespace
@@ -47,6 +110,10 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
     const int origin_x = chunk_x * kChunkSizeX;
     const int origin_z = chunk_z * kChunkSizeZ;
 
+    // Cache per-column surface height so the tree pass can read it
+    // without re-sampling noise.
+    int surface[kChunkSizeZ][kChunkSizeX];
+
     for (int z = 0; z < kChunkSizeZ; ++z) {
         for (int x = 0; x < kChunkSizeX; ++x) {
             int wx = origin_x + x;
@@ -57,6 +124,7 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
                                           static_cast<float>(wz));
             float h = kSeaLevel + n * 24.0f + 12.0f;
             int height = std::clamp(static_cast<int>(h), 1, kChunkSizeY - 1);
+            surface[z][x] = height;
 
             for (int y = 0; y <= height; ++y) {
                 BlockId b;
@@ -75,6 +143,28 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
                 }
                 out.set(x, y, z, b);
             }
+        }
+    }
+
+    // Tree pass: spawn on grass surfaces that sit comfortably above sea
+    // level. Restrict to a 2-block margin from chunk edges so the canopy
+    // (which extends +/-2) doesn't spill across chunk boundaries (we'd
+    // need cross-chunk feature stitching to do that cleanly). Density
+    // controlled by a deterministic hash on world coords.
+    constexpr float kTreeChance = 0.015f;
+    constexpr int   kMargin = 2;
+    for (int z = kMargin; z < kChunkSizeZ - kMargin; ++z) {
+        for (int x = kMargin; x < kChunkSizeX - kMargin; ++x) {
+            int h = surface[z][x];
+            if (h <= kSeaLevel + kSandBand) continue;  // no trees on beaches
+            if (h >= kStoneBand) continue;             // no trees on peaks
+            if (out.get(x, h, z) != BlockId::Grass) continue;
+            if (h + 7 >= kChunkSizeY) continue;        // canopy fits below ceiling
+            int wx = origin_x + x;
+            int wz = origin_z + z;
+            if (hash2d_f(wx, wz, 0x7B1E5A2D) > kTreeChance) continue;
+
+            stamp_tree(out, x, h + 1, z);
         }
     }
 }
