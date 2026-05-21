@@ -19,6 +19,7 @@
 #include "world/chunk_mesh.h"
 #include "world/terrain_gen.h"
 #include "world/world.h"
+#include "world/world_io.h"
 
 #include <chrono>
 #include <cmath>
@@ -36,6 +37,7 @@ namespace {
 constexpr float kFlySpeed       = 16.0f;
 constexpr float kFlySprintSpeed = 60.0f;
 constexpr int   kStreamRadius   = 12;
+[[maybe_unused]] constexpr const char* kSaveDir = "./saves/world1";
 constexpr float kWaterSize      = 480.0f;
 constexpr int   kWaterSubdiv    = 200;
 constexpr float kShadowRadius   = 120.0f;
@@ -328,6 +330,7 @@ int main(int argc, char** argv) {
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
+    std::printf("[input] F5 = save world, F6 = load world (./saves/world1)\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
@@ -355,6 +358,42 @@ int main(int argc, char** argv) {
             vsync_enabled = !vsync_enabled;
             glfwSwapInterval(vsync_enabled ? 1 : 0);
             std::printf("[gfx] vsync %s\n", vsync_enabled ? "on" : "off");
+        }
+        if (input.key_pressed(GLFW_KEY_F5)) {
+            auto t0 = std::chrono::steady_clock::now();
+            auto s = world::save_world(wrld, kSaveDir);
+            double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            double ratio = s.bytes_written > 0
+                ? static_cast<double>(s.bytes_raw) / s.bytes_written : 0.0;
+            std::printf("[save] wrote %d chunks in %.1f ms  |  "
+                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  %s\n",
+                        s.chunks_written, ms,
+                        s.bytes_written / (1024.0 * 1024.0),
+                        s.bytes_raw     / (1024.0 * 1024.0),
+                        ratio,
+                        s.ok ? "ok" : "ERRORS");
+        }
+        if (input.key_pressed(GLFW_KEY_F6)) {
+            auto t0 = std::chrono::steady_clock::now();
+            wrld.clear_all();
+            auto l = world::load_world(wrld, kSaveDir, terrain);
+            double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            double ratio = l.bytes_read > 0
+                ? static_cast<double>(l.bytes_raw) / l.bytes_read : 0.0;
+            std::printf("[load] read %d chunks in %.1f ms  |  "
+                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  %s\n",
+                        l.chunks_read, ms,
+                        l.bytes_read / (1024.0 * 1024.0),
+                        l.bytes_raw  / (1024.0 * 1024.0),
+                        ratio,
+                        l.ok ? "ok" : "ERRORS");
+            // Reset streaming bookkeeping so the next move triggers a refill
+            // around the player for anything missing on disk.
+            last_center = world::ChunkCoord{
+                static_cast<std::int32_t>(std::floor(cam.position().x / world::kChunkSizeX)) + 1,
+                last_center.z};
         }
         if (input.key_down(GLFW_KEY_RIGHT_BRACKET)) time_of_day += dt * 0.05f;
         if (input.key_down(GLFW_KEY_LEFT_BRACKET))  time_of_day -= dt * 0.05f;

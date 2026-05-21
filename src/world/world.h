@@ -80,6 +80,19 @@ public:
     int  drain_finished(int max_per_frame = 8);
     int  pending_async() const;
 
+    // Replaces (or inserts) a chunk slot. Builds the greedy mesh and uploads
+    // it on the calling thread, so the caller must own a current GL context.
+    void insert_chunk(ChunkCoord c, Chunk chunk);
+
+    // Drops every chunk + pending request. Intended for full-world reload
+    // (save/load); does not cancel in-flight worker jobs but their results
+    // get discarded in drain_finished().
+    void clear_all();
+
+    // Iterates every loaded chunk slot in unspecified order. Read-only.
+    void for_each_chunk(
+        const std::function<void(ChunkCoord, const Chunk&)>& fn) const;
+
     BlockId block_at(int wx, int wy, int wz) const;
     bool    set_block(int wx, int wy, int wz, BlockId b);
 

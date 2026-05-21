@@ -192,6 +192,25 @@ int World::drain_finished(int max_per_frame) {
 
 int World::pending_async() const { return jobs_in_flight_.load(); }
 
+void World::insert_chunk(ChunkCoord c, Chunk chunk) {
+    auto mesh_data = build_chunk_mesh_greedy(chunk);
+    chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data));
+    requested_.erase(c);
+}
+
+void World::clear_all() {
+    chunks_.clear();
+    requested_.clear();
+    std::lock_guard<std::mutex> lock(finished_mutex_);
+    std::queue<FinishedChunk> empty;
+    finished_.swap(empty);
+}
+
+void World::for_each_chunk(
+    const std::function<void(ChunkCoord, const Chunk&)>& fn) const {
+    for (const auto& kv : chunks_) fn(kv.first, kv.second->chunk);
+}
+
 BlockId World::block_at(int wx, int wy, int wz) const {
     if (wy < 0 || wy >= kChunkSizeY) return BlockId::Air;
     ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};

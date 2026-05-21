@@ -95,8 +95,10 @@ add_executable(voxel_engine
   src/render/passes.cpp
   src/ui/debug_hud.cpp
   src/world/chunk_mesh.cpp
+  src/world/chunk_serialize.cpp
   src/world/terrain_gen.cpp
   src/world/world.cpp
+  src/world/world_io.cpp
 )
 
 target_include_directories(voxel_engine PRIVATE src)
