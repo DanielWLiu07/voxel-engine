@@ -1,5 +1,6 @@
 #include "render/passes.h"
 
+#include "core/profiler.h"
 #include "world/chunk.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -13,6 +14,7 @@ void draw_shadow_pass(gfx::ShadowMap& shadow_map,
                       const world::World& wrld,
                       const FrameView& fv,
                       const LightingFrame& light) {
+    ZoneScopedN("shadow_pass");
     if (light.shadow_strength <= 0.0f) return;
 
     shadow_map.begin_pass();
@@ -29,6 +31,7 @@ void draw_shadow_pass(gfx::ShadowMap& shadow_map,
 
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("sky_pass");
     // Strip translation so the sky never moves with the camera.
     glm::mat4 view_no_trans = fv.view;
     view_no_trans[3] = glm::vec4(0, 0, 0, 1);
@@ -60,6 +63,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
                               const LightingFrame& light,
                               const glm::vec3 palette[8],
                               const gfx::Frustum& view_frustum) {
+    ZoneScopedN("terrain_pass");
     terrain_shader.use();
     terrain_shader.set_mat4("u_view", fv.view);
     terrain_shader.set_mat4("u_proj", fv.proj);
@@ -84,6 +88,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
 void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
                 const FrameView& fv, const LightingFrame& light,
                 float sea_level) {
+    ZoneScopedN("water_pass");
     // Snap to player's chunk-aligned XZ so the finite plane covers the
     // streaming world; waves still read post-translation XZ.
     glm::vec3 origin(
