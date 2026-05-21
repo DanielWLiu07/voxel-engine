@@ -10,6 +10,7 @@
 #include "gfx/shader.h"
 #include "gfx/post_process.h"
 #include "gfx/shadow_map.h"
+#include "gfx/screenshot.h"
 #include "gfx/water.h"
 #include "gfx/wireframe_cube.h"
 #include "render/lighting.h"
@@ -330,6 +331,7 @@ int main(int argc, char** argv) {
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
+    std::printf("[input] F5 = save world, F6 = load world, F12 = screenshot (./screenshots)\n");
     std::printf("[input] F5 = save world, F6 = load world (./saves/world1)\n");
 
     double last_time = glfwGetTime();
@@ -353,6 +355,10 @@ int main(int argc, char** argv) {
         if (input.key_down(GLFW_KEY_ESCAPE))    glfwSetWindowShouldClose(window, GLFW_TRUE);
         if (input.key_pressed(GLFW_KEY_TAB))    input.set_cursor_captured(!input.cursor_captured());
         if (input.key_pressed(GLFW_KEY_F2))     hud.toggle_visible();
+        if (input.key_pressed(GLFW_KEY_F12)) {
+            std::string path = gfx::save_screenshot(fb_w, fb_h);
+            if (!path.empty()) std::printf("[screenshot] %s\n", path.c_str());
+        }
         if (input.key_pressed(GLFW_KEY_T))      time_paused = !time_paused;
         if (input.key_pressed(GLFW_KEY_V)) {
             vsync_enabled = !vsync_enabled;
