@@ -13,6 +13,7 @@ struct VertexPNT {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
+    float     ao;   // 0 = fully occluded, 1 = no occlusion (vertex AO)
 };
 
 class Mesh {

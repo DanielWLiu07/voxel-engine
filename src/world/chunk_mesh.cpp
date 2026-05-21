@@ -54,6 +54,7 @@ void emit_quad(ChunkMeshData& out, const glm::vec3& origin, const FaceDef& f) {
         v.position = origin + f.corners[i];
         v.normal   = f.normal;
         v.uv       = {kFaceUV[i][0], kFaceUV[i][1]};
+        v.ao       = 1.0f;  // naive mesher: no AO baked
         out.vertices.push_back(v);
     }
     out.indices.push_back(base + 0);
@@ -63,6 +64,23 @@ void emit_quad(ChunkMeshData& out, const glm::vec3& origin, const FaceDef& f) {
     out.indices.push_back(base + 2);
     out.indices.push_back(base + 3);
     ++out.quad_count;
+}
+
+// Standard voxel-AO formula. side1, side2, corner = whether each of
+// the three neighbor blocks at the vertex corner is solid (each 0/1).
+// Returns a value in [0, 3] where 3 = unoccluded and 0 = fully occluded
+// (all three neighbors solid). The "both sides solid means corner is
+// pinched closed" branch is the canonical 0fps rule.
+inline int corner_ao(int side1, int side2, int corner) {
+    if (side1 && side2) return 0;
+    return 3 - (side1 + side2 + corner);
+}
+
+inline float ao_to_brightness(int ao) {
+    // 0..3 -> 0.45 .. 1.0. Linear is fine; the perceptual difference
+    // shows up in concave corners which is exactly where we want it.
+    constexpr float table[4] = {0.45f, 0.65f, 0.82f, 1.00f};
+    return table[ao];
 }
 
 }  // namespace
@@ -250,36 +268,95 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                         glm::vec3 p11 = make_corner(w, h);
                         glm::vec3 p01 = make_corner(0, h);
 
+                        // Sample the three neighbor blocks at each of the
+                        // four rectangle corners. All samples sit on the
+                        // "outside" of the face (one step along the face
+                        // normal in axis d) at integer block coords. For a
+                        // corner at (u + du*w, v + dv*h) in the slice
+                        // frame, the side neighbors are at u_axis and v_axis
+                        // offsets of +/-1 and the diagonal is both at once.
+                        auto sample_solid = [&](int slice_d, int slice_u, int slice_v) -> int {
+                            int xa, ya, za;
+                            slice_coords(d, u_axis, v_axis,
+                                         slice_d, slice_u, slice_v, xa, ya, za);
+                            return is_solid(chunk.get_or_air(xa, ya, za)) ? 1 : 0;
+                        };
+
+                        // Outside-slice d-coord. For +dir, the outside of
+                        // the face sits at slice index s (the cell on the
+                        // positive side of the boundary). For -dir, the
+                        // outside is at s-1.
+                        const int out_d = (dir > 0) ? s : (s - 1);
+
+                        // AO for one rectangle corner. du, dv ∈ {0, 1} pick
+                        // the corner. The vertex sits at integer lattice
+                        // point (U, V) = (u + du*w, v + dv*h) on the slice
+                        // plane; the four cells around it on the OUTSIDE
+                        // slice are at (U-1..U) x (V-1..V). The cell
+                        // diagonally opposite the surface block is the
+                        // "corner" sample; the two adjacent are "sides".
+                        auto vertex_ao = [&](int du, int dv) {
+                            const int U = u + du * w;
+                            const int V = v + dv * h;
+                            const int du_step = (du == 0) ? -1 : 0;
+                            const int dv_step = (dv == 0) ? -1 : 0;
+                            int s1 = sample_solid(out_d, U + du_step,         V + (dv == 0 ?  0 : -1));
+                            int s2 = sample_solid(out_d, U + (du == 0 ? 0 : -1), V + dv_step);
+                            int sc = sample_solid(out_d, U + du_step,         V + dv_step);
+                            return corner_ao(s1, s2, sc);
+                        };
+
+                        int ao00 = vertex_ao(0, 0);
+                        int ao10 = vertex_ao(1, 0);
+                        int ao11 = vertex_ao(1, 1);
+                        int ao01 = vertex_ao(0, 1);
+
                         std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
 
                         // Winding depends on dir: we want CCW when viewed
                         // from the outside of the face for back-face culling.
-                        auto push = [&](const glm::vec3& p, float uu, float vv) {
+                        auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
                             gfx::VertexPNT vtx;
                             vtx.position = p;
                             vtx.normal   = normal;
                             vtx.uv       = {uu, vv};
+                            vtx.ao       = ao_to_brightness(ao);
                             out.vertices.push_back(vtx);
                         };
 
                         if (dir > 0) {
-                            push(p00, 0.0f, 0.0f);
-                            push(p10, static_cast<float>(w), 0.0f);
-                            push(p11, static_cast<float>(w), static_cast<float>(h));
-                            push(p01, 0.0f, static_cast<float>(h));
+                            push(p00, 0.0f, 0.0f, ao00);
+                            push(p10, static_cast<float>(w), 0.0f, ao10);
+                            push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
+                            push(p01, 0.0f, static_cast<float>(h), ao01);
                         } else {
-                            push(p00, 0.0f, 0.0f);
-                            push(p01, 0.0f, static_cast<float>(h));
-                            push(p11, static_cast<float>(w), static_cast<float>(h));
-                            push(p10, static_cast<float>(w), 0.0f);
+                            push(p00, 0.0f, 0.0f, ao00);
+                            push(p01, 0.0f, static_cast<float>(h), ao01);
+                            push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
+                            push(p10, static_cast<float>(w), 0.0f, ao10);
                         }
 
-                        out.indices.push_back(base + 0);
-                        out.indices.push_back(base + 1);
-                        out.indices.push_back(base + 2);
-                        out.indices.push_back(base + 0);
-                        out.indices.push_back(base + 2);
-                        out.indices.push_back(base + 3);
+                        // Anisotropic AO flip: when one diagonal pair has
+                        // a higher contrast than the other, switching the
+                        // triangulation prevents the dark/light gradient
+                        // from looking torn. This is the classic
+                        // "ao_flip" fix.
+                        bool flip = (ao00 + ao11) < (ao10 + ao01);
+                        if (flip) {
+                            out.indices.push_back(base + 1);
+                            out.indices.push_back(base + 2);
+                            out.indices.push_back(base + 3);
+                            out.indices.push_back(base + 1);
+                            out.indices.push_back(base + 3);
+                            out.indices.push_back(base + 0);
+                        } else {
+                            out.indices.push_back(base + 0);
+                            out.indices.push_back(base + 1);
+                            out.indices.push_back(base + 2);
+                            out.indices.push_back(base + 0);
+                            out.indices.push_back(base + 2);
+                            out.indices.push_back(base + 3);
+                        }
                         ++out.quad_count;
 
                         // Zero out the merged region so we don't revisit.
