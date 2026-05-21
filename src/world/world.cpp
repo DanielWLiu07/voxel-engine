@@ -5,7 +5,29 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <limits>
+
+namespace {
+
+// Floor-division by `n`: result floored toward -inf, matching the
+// chunk grid intuition (block x=-1 is in chunk -1, not chunk 0).
+constexpr int floor_div(int a, int n) {
+    int q = a / n;
+    int r = a % n;
+    if ((r != 0) && ((r < 0) != (n < 0))) --q;
+    return q;
+}
+
+// Euclidean modulo (always in [0, n)).
+constexpr int floor_mod(int a, int n) {
+    int r = a % n;
+    if (r < 0) r += n;
+    return r;
+}
+
+}  // namespace
 
 namespace world {
 
@@ -157,6 +179,112 @@ int World::drain_finished(int max_per_frame) {
 
 int World::pending_async() const {
     return jobs_in_flight_.load();
+}
+
+BlockId World::block_at(int wx, int wy, int wz) const {
+    if (wy < 0 || wy >= kChunkSizeY) return BlockId::Air;
+    ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+    auto it = chunks_.find(cc);
+    if (it == chunks_.end()) return BlockId::Air;
+    int lx = floor_mod(wx, kChunkSizeX);
+    int lz = floor_mod(wz, kChunkSizeZ);
+    return it->second->chunk.get(lx, wy, lz);
+}
+
+bool World::set_block(int wx, int wy, int wz, BlockId b) {
+    if (wy < 0 || wy >= kChunkSizeY) return false;
+    ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+    auto it = chunks_.find(cc);
+    if (it == chunks_.end()) return false;
+
+    ChunkSlot& slot = *it->second;
+    int lx = floor_mod(wx, kChunkSizeX);
+    int lz = floor_mod(wz, kChunkSizeZ);
+    if (slot.chunk.get(lx, wy, lz) == b) return false;
+
+    slot.chunk.set(lx, wy, lz, b);
+
+    // Re-mesh this chunk on the main thread (simple and correct; the
+    // edit volume is small enough that a full chunk re-mesh is well
+    // under 2 ms on the bench).
+    auto mesh_data = build_chunk_mesh_greedy(slot.chunk);
+    slot.mesh.upload(mesh_data.vertices, mesh_data.indices);
+    slot.has_mesh = !mesh_data.indices.empty();
+    slot.quad_count = mesh_data.quad_count;
+
+    return true;
+}
+
+World::RayHit World::raycast(const glm::vec3& origin, const glm::vec3& dir,
+                             float max_distance) const {
+    RayHit hit;
+    // Direction must be non-zero. Caller normally hands us a unit
+    // vector but we don't assume.
+    glm::vec3 d = dir;
+    float len2 = glm::dot(d, d);
+    if (len2 < 1e-12f) return hit;
+    d /= std::sqrt(len2);
+
+    // Amanatides-Woo voxel traversal. Step one block at a time along
+    // whichever axis hits its next integer plane first.
+    int x = static_cast<int>(std::floor(origin.x));
+    int y = static_cast<int>(std::floor(origin.y));
+    int z = static_cast<int>(std::floor(origin.z));
+
+    int step_x = (d.x > 0) ? 1 : (d.x < 0 ? -1 : 0);
+    int step_y = (d.y > 0) ? 1 : (d.y < 0 ? -1 : 0);
+    int step_z = (d.z > 0) ? 1 : (d.z < 0 ? -1 : 0);
+
+    auto next_boundary = [](float p, int step) -> float {
+        if (step > 0) return std::floor(p) + 1.0f;
+        if (step < 0) return std::floor(p);
+        return p;  // unused when t_delta is +inf
+    };
+
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+
+    float t_max_x = (step_x != 0) ? (next_boundary(origin.x, step_x) - origin.x) / d.x : kInf;
+    float t_max_y = (step_y != 0) ? (next_boundary(origin.y, step_y) - origin.y) / d.y : kInf;
+    float t_max_z = (step_z != 0) ? (next_boundary(origin.z, step_z) - origin.z) / d.z : kInf;
+
+    float t_delta_x = (step_x != 0) ? std::abs(1.0f / d.x) : kInf;
+    float t_delta_y = (step_y != 0) ? std::abs(1.0f / d.y) : kInf;
+    float t_delta_z = (step_z != 0) ? std::abs(1.0f / d.z) : kInf;
+
+    float t = 0.0f;
+    int last_axis = -1;  // 0=x, 1=y, 2=z — the axis we just crossed
+
+    while (t <= max_distance) {
+        BlockId b = block_at(x, y, z);
+        if (is_solid(b)) {
+            hit.hit = true;
+            hit.block_x = x; hit.block_y = y; hit.block_z = z;
+            hit.distance = t;
+            if (last_axis == 0) { hit.nx = -step_x; }
+            else if (last_axis == 1) { hit.ny = -step_y; }
+            else if (last_axis == 2) { hit.nz = -step_z; }
+            return hit;
+        }
+
+        // Advance along whichever axis is closest to its next plane.
+        if (t_max_x < t_max_y && t_max_x < t_max_z) {
+            t = t_max_x;
+            t_max_x += t_delta_x;
+            x += step_x;
+            last_axis = 0;
+        } else if (t_max_y < t_max_z) {
+            t = t_max_y;
+            t_max_y += t_delta_y;
+            y += step_y;
+            last_axis = 1;
+        } else {
+            t = t_max_z;
+            t_max_z += t_delta_z;
+            z += step_z;
+            last_axis = 2;
+        }
+    }
+    return hit;
 }
 
 void World::debug_dump_visibility(const gfx::Frustum& frustum) const {

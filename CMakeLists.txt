@@ -82,6 +82,7 @@ add_executable(voxel_engine
   src/main.cpp
   src/core/input.cpp
   src/core/thread_pool.cpp
+  src/game/player.cpp
   src/gfx/camera.cpp
   src/gfx/cube.cpp
   src/gfx/frustum.cpp
