@@ -11,6 +11,7 @@
 #include "gfx/post_process.h"
 #include "gfx/shadow_map.h"
 #include "gfx/water.h"
+#include "gfx/wireframe_cube.h"
 #include "render/lighting.h"
 #include "render/passes.h"
 #include "ui/debug_hud.h"
@@ -235,13 +236,16 @@ int main(int argc, char** argv) {
 
     gfx::Shader shader, sky_shader, shadow_shader, water_shader;
     gfx::Shader bright_shader, blur_shader, tonemap_shader;
-    if (!load_shader(shader,         root, "basic.vert",        "basic.frag",         "terrain") ||
-        !load_shader(sky_shader,     root, "sky.vert",          "sky.frag",           "sky")     ||
-        !load_shader(shadow_shader,  root, "shadow_depth.vert", "shadow_depth.frag",  "shadow")  ||
-        !load_shader(water_shader,   root, "water.vert",        "water.frag",         "water")   ||
-        !load_shader(bright_shader,  root, "fullscreen.vert",   "bright_extract.frag","bright")  ||
-        !load_shader(blur_shader,    root, "fullscreen.vert",   "blur_separable.frag","blur")    ||
-        !load_shader(tonemap_shader, root, "fullscreen.vert",   "tonemap.frag",       "tonemap")) {
+    gfx::Shader wireframe_shader, crosshair_shader;
+    if (!load_shader(shader,           root, "basic.vert",        "basic.frag",         "terrain")   ||
+        !load_shader(sky_shader,       root, "sky.vert",          "sky.frag",           "sky")       ||
+        !load_shader(shadow_shader,    root, "shadow_depth.vert", "shadow_depth.frag",  "shadow")    ||
+        !load_shader(water_shader,     root, "water.vert",        "water.frag",         "water")     ||
+        !load_shader(bright_shader,    root, "fullscreen.vert",   "bright_extract.frag","bright")    ||
+        !load_shader(blur_shader,      root, "fullscreen.vert",   "blur_separable.frag","blur")      ||
+        !load_shader(tonemap_shader,   root, "fullscreen.vert",   "tonemap.frag",       "tonemap")   ||
+        !load_shader(wireframe_shader, root, "wireframe.vert",    "wireframe.frag",     "wireframe") ||
+        !load_shader(crosshair_shader, root, "crosshair.vert",    "crosshair.frag",     "crosshair")) {
         glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
@@ -272,6 +276,11 @@ int main(int argc, char** argv) {
 
     GLuint sky_vao = 0;
     glGenVertexArrays(1, &sky_vao);
+    GLuint crosshair_vao = 0;
+    glGenVertexArrays(1, &crosshair_vao);
+
+    gfx::WireframeCube selection_cube;
+    selection_cube.init();
 
     const std::size_t worker_count = std::max<std::size_t>(2,
         std::thread::hardware_concurrency() - 1);
@@ -425,6 +434,16 @@ int main(int argc, char** argv) {
         render::draw_water(water_shader, water, fv, light,
                            static_cast<float>(world::kSeaLevel));
 
+        // Same ray the place/break logic uses, so the outline matches a
+        // potential click target.
+        auto target = wrld.raycast(cam.position(), cam.forward(), 8.0f);
+        render::draw_crosshair_and_selection(
+            wireframe_shader, selection_cube,
+            crosshair_shader, crosshair_vao,
+            fv,
+            target.hit,
+            target.block_x, target.block_y, target.block_z);
+
         // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
         postfx.resolve_to_backbuffer(bright_shader, blur_shader, tonemap_shader,
                                      fb_w, fb_h,
@@ -470,7 +489,8 @@ int main(int argc, char** argv) {
     }
 
     hud.shutdown();
-    if (sky_vao) glDeleteVertexArrays(1, &sky_vao);
+    if (sky_vao)       glDeleteVertexArrays(1, &sky_vao);
+    if (crosshair_vao) glDeleteVertexArrays(1, &crosshair_vao);
     glfwDestroyWindow(window);
     glfwTerminate();
     return EXIT_SUCCESS;

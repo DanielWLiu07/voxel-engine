@@ -119,4 +119,64 @@ void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
     glDisable(GL_BLEND);
 }
 
+void draw_crosshair_and_selection(const gfx::Shader& wireframe_shader,
+                                  const gfx::WireframeCube& cube,
+                                  const gfx::Shader& crosshair_shader,
+                                  GLuint crosshair_vao,
+                                  const FrameView& fv,
+                                  bool have_selection,
+                                  int selection_block_x,
+                                  int selection_block_y,
+                                  int selection_block_z) {
+    if (have_selection) {
+        // Inflate the unit cube slightly so the outline sits above the
+        // block face and avoids z-fighting.
+        const float bias  = 0.005f;
+        const float scale = 1.0f + 2.0f * bias;
+        glm::vec3 origin(
+            static_cast<float>(selection_block_x) - bias,
+            static_cast<float>(selection_block_y) - bias,
+            static_cast<float>(selection_block_z) - bias);
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), origin)
+                        * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+
+        GLfloat prev_line_width = 1.0f;
+        glGetFloatv(GL_LINE_WIDTH, &prev_line_width);
+        glLineWidth(2.0f);
+
+        wireframe_shader.use();
+        wireframe_shader.set_mat4("u_model", model);
+        wireframe_shader.set_mat4("u_view",  fv.view);
+        wireframe_shader.set_mat4("u_proj",  fv.proj);
+        wireframe_shader.set_vec3("u_color", glm::vec3(0.0f));
+        cube.draw();
+
+        glLineWidth(prev_line_width);
+    }
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    crosshair_shader.use();
+    GLint sloc = glGetUniformLocation(crosshair_shader.id(), "u_screen_size");
+    if (sloc >= 0) {
+        glUniform2f(sloc, static_cast<float>(fv.window_w),
+                          static_cast<float>(fv.window_h));
+    }
+    crosshair_shader.set_float("u_arm_px",    12.0f);
+    crosshair_shader.set_float("u_stroke_px", 1.0f);
+
+    glBindVertexArray(crosshair_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+
+    glDisable(GL_BLEND);
+    glEnable(GL_CULL_FACE);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+}
+
 }  // namespace render
