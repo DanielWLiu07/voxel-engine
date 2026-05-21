@@ -19,6 +19,7 @@ A desktop voxel engine in C++20 and OpenGL 4.1 Core. Greedy meshing, multithread
 - Distance fog blended against the sky for clean chunk-radius horizon.
 - Animated water plane with Fresnel mixing and sine-wave displacement at sea level.
 - AABB collision against the voxel grid in walk mode. DDA voxel raycast for break/place at 8-block reach.
+- RLE-compressed binary chunk save format with magic + version header, validated on decode. ~144x compression on Perlin terrain.
 - Dear ImGui debug HUD: live frame time, FPS, drawn chunks, triangles, pending async chunks, streaming counters, copy-to-clipboard snapshot.
 - View-frustum culling against chunk AABBs.
 
@@ -33,6 +34,7 @@ Apple M4 (10-core CPU), macOS 26.2 arm64, OpenGL 4.1 Apple renderer. Measured 20
 | Async chunk pipeline, radius 12 (625 chunks) | 663 ms wall, ~940 chunks/sec, 9 workers |
 | Frustum cull ratio, gameplay viewpoint | 304 / 625 chunks drawn (~2.1x) |
 | Frame time, radius 12, ~61k tris drawn | 8.5 ms (150 fps) |
+| RLE save compression, radius 12 Perlin world | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
 Reproduce the mesher benchmark:
 
