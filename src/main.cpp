@@ -8,6 +8,7 @@
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
+#include "gfx/post_process.h"
 #include "gfx/shadow_map.h"
 #include "gfx/water.h"
 #include "render/lighting.h"
@@ -233,13 +234,26 @@ int main(int argc, char** argv) {
     std::printf("[boot] asset root = %s\n", root.string().c_str());
 
     gfx::Shader shader, sky_shader, shadow_shader, water_shader;
-    if (!load_shader(shader,        root, "basic.vert",        "basic.frag",        "terrain") ||
-        !load_shader(sky_shader,    root, "sky.vert",          "sky.frag",          "sky")     ||
-        !load_shader(shadow_shader, root, "shadow_depth.vert", "shadow_depth.frag", "shadow")  ||
-        !load_shader(water_shader,  root, "water.vert",        "water.frag",        "water")) {
+    gfx::Shader bright_shader, blur_shader, tonemap_shader;
+    if (!load_shader(shader,         root, "basic.vert",        "basic.frag",         "terrain") ||
+        !load_shader(sky_shader,     root, "sky.vert",          "sky.frag",           "sky")     ||
+        !load_shader(shadow_shader,  root, "shadow_depth.vert", "shadow_depth.frag",  "shadow")  ||
+        !load_shader(water_shader,   root, "water.vert",        "water.frag",         "water")   ||
+        !load_shader(bright_shader,  root, "fullscreen.vert",   "bright_extract.frag","bright")  ||
+        !load_shader(blur_shader,    root, "fullscreen.vert",   "blur_separable.frag","blur")    ||
+        !load_shader(tonemap_shader, root, "fullscreen.vert",   "tonemap.frag",       "tonemap")) {
         glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
+
+    gfx::PostProcess postfx;
+    if (!postfx.init(fb_w, fb_h)) {
+        std::fprintf(stderr, "post-process init failed\n");
+        glfwDestroyWindow(window); glfwTerminate();
+        return EXIT_FAILURE;
+    }
+    int postfx_w = fb_w, postfx_h = fb_h;
+    std::printf("[postfx] HDR %dx%d + half-res bloom chain allocated\n", fb_w, fb_h);
 
     gfx::ShadowMap shadow_map;
     if (!shadow_map.init(kShadowMapSize)) {
@@ -374,8 +388,12 @@ int main(int argc, char** argv) {
                         total_chunks, initial_load_ms, cps, worker_count);
         }
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
+        if (fb_w != postfx_w || fb_h != postfx_h) {
+            postfx.init(fb_w, fb_h);
+            postfx_w = fb_w;
+            postfx_h = fb_h;
+        }
         float aspect = (fb_h > 0) ? static_cast<float>(fb_w) / fb_h : 1.0f;
 
         render::FrameView fv;
@@ -395,12 +413,25 @@ int main(int argc, char** argv) {
         gfx::Frustum view_frustum;
         view_frustum.from_view_proj(fv.proj * fv.view);
 
+        // Shadow pass writes to its own FBO; the other scene passes write
+        // into the HDR FBO via begin_scene().
         render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light);
+
+        postfx.begin_scene();
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         render::draw_sky(sky_shader, sky_vao, fv, light);
         last_stats = render::draw_terrain(shader, shadow_map, wrld, fv, light,
                                           kBlockPalette, view_frustum);
         render::draw_water(water_shader, water, fv, light,
                            static_cast<float>(world::kSeaLevel));
+
+        // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
+        postfx.resolve_to_backbuffer(bright_shader, blur_shader, tonemap_shader,
+                                     fb_w, fb_h,
+                                     /*blur_iter*/ 4,
+                                     /*threshold*/ 1.0f,
+                                     /*intensity*/ 0.7f,
+                                     /*exposure*/  1.0f);
 
         hud.begin_frame();
         ui::PerfFrame pf;
