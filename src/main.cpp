@@ -464,7 +464,7 @@ int main(int argc, char** argv) {
         fv.window_w   = fb_w;
         fv.window_h   = fb_h;
         fv.fog_end    = static_cast<float>(kStreamRadius * world::kChunkSizeX) * 0.95f;
-        fv.fog_start  = fv.fog_end * 0.55f;
+        fv.fog_start  = fv.fog_end * 0.78f;  // less aggressive midrange wash-out
         fv.time_seconds = static_cast<float>(now);
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
