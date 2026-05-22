@@ -3,7 +3,8 @@
 in vec3  v_normal_ws;
 in vec2  v_uv;
 in vec3  v_world_pos;
-in vec4  v_light_pos;
+in vec3  v_view_pos;
+in vec4  v_light_pos[3];
 in float v_ao;
 flat in int v_block_id;
 
@@ -16,8 +17,9 @@ uniform float u_fog_start;
 uniform float u_fog_end;
 uniform vec3  u_palette[8];
 
-uniform sampler2DShadow u_shadow_map;
-uniform float u_shadow_strength;  // 0 disables shadows (e.g. at night)
+uniform sampler2DArrayShadow u_shadow_array;
+uniform float u_cascade_far[3];
+uniform float u_shadow_strength;
 
 out vec4 frag_color;
 
@@ -27,16 +29,16 @@ float hash3(vec3 p) {
     return fract((p.x + p.y) * p.z);
 }
 
-// 3x3 PCF over the shadow map. Slope-scaled bias driven by surface
-// normal vs light direction so flat surfaces don't shadow-acne.
-float sample_shadow(vec3 N, vec3 L) {
-    // Project to NDC, then map to [0, 1] for shadow sampling.
-    vec3 ndc = v_light_pos.xyz / v_light_pos.w;
-    vec3 sm  = ndc * 0.5 + 0.5;
+// PCF on the selected cascade. Picks the smallest cascade whose far
+// plane still contains this fragment in view-space depth.
+float sample_csm(vec3 N, vec3 L) {
+    float vz = -v_view_pos.z;
+    int cascade = 2;
+    if      (vz < u_cascade_far[0]) cascade = 0;
+    else if (vz < u_cascade_far[1]) cascade = 1;
 
-    // Outside the light frustum -> no shadow contribution. The negative
-    // z check catches fragments in front of the light's near plane
-    // (orthographic projection makes w=1 so the divide above is benign).
+    vec3 ndc = v_light_pos[cascade].xyz / v_light_pos[cascade].w;
+    vec3 sm  = ndc * 0.5 + 0.5;
     if (sm.x < 0.0 || sm.x > 1.0 ||
         sm.y < 0.0 || sm.y > 1.0 ||
         sm.z < 0.0 || sm.z > 1.0) {
@@ -47,12 +49,13 @@ float sample_shadow(vec3 N, vec3 L) {
     float bias = max(0.0025 * (1.0 - cos_a), 0.0005);
 
     float visibility = 0.0;
-    vec2 texel = 1.0 / vec2(textureSize(u_shadow_map, 0));
+    vec2 texel = 1.0 / vec2(textureSize(u_shadow_array, 0).xy);
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            vec3 coord = vec3(sm.xy + vec2(float(x), float(y)) * texel,
+            vec4 coord = vec4(sm.xy + vec2(float(x), float(y)) * texel,
+                              float(cascade),
                               sm.z - bias);
-            visibility += texture(u_shadow_map, coord);
+            visibility += texture(u_shadow_array, coord);
         }
     }
     return visibility / 9.0;
@@ -63,7 +66,7 @@ void main() {
     vec3 L = normalize(u_light_dir);
 
     float diffuse  = max(dot(N, L), 0.0);
-    float shadow   = mix(1.0, sample_shadow(N, L), u_shadow_strength);
+    float shadow   = mix(1.0, sample_csm(N, L), u_shadow_strength);
     vec3  lighting = u_ambient_color + u_light_color * diffuse * shadow;
 
     vec3 base = u_palette[clamp(v_block_id, 0, 7)];
