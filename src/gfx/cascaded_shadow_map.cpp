@@ -143,8 +143,10 @@ CascadedShadowMap::fit_cascades(const glm::mat4& camera_view,
 
         glm::vec3 up = (std::abs(L.y) > 0.95f) ? glm::vec3(0, 0, 1)
                                                 : glm::vec3(0, 1, 0);
-        // Snap eye to texel grid in light space to reduce shimmering.
-        glm::vec3 eye = center - L * radius;
+        // L points TOWARD the sun, so the light camera sits at center + L*r,
+        // looking back at the scene. (Previous - sign was flipped and caused
+        // an entire frame of missing shadows.)
+        glm::vec3 eye = center + L * radius;
         glm::mat4 lview = glm::lookAt(eye, center, up);
         glm::mat4 lproj = glm::ortho(min_ext.x, max_ext.x,
                                      min_ext.y, max_ext.y,
