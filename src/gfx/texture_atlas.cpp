@@ -80,6 +80,12 @@ Rgb paint_tile(int block_id, int x, int y) {
         if (hash2(x * 7, y * 11) > 0.94f) tone = mix(tone, {120, 180, 90}, 0.5f);
         return tone;
     }
+    case 7: {  // Snow: near-white with a faint blue cast and sparkle pixels
+        Rgb base{242, 244, 250};
+        Rgb tone = jitter(base, x, y, 89, 0.04f);
+        if (hash2(x * 5, y * 3) > 0.97f) tone = mix(tone, {255, 255, 255}, 0.6f);
+        return tone;
+    }
     default:   // Air or unknown: magenta (debug)
         return {255, 0, 255};
     }

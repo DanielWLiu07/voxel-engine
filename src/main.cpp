@@ -55,7 +55,7 @@ const glm::vec3 kBlockPalette[8] = {
     {0.88f, 0.80f, 0.55f},  // Sand
     {0.42f, 0.27f, 0.13f},  // Wood
     {0.22f, 0.46f, 0.20f},  // Leaves
-    {1.00f, 0.00f, 1.00f},
+    {0.95f, 0.96f, 0.98f},  // Snow
 };
 
 void glfw_error(int code, const char* desc) {

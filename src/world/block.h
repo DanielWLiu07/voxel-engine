@@ -12,6 +12,7 @@ enum class BlockId : std::uint8_t {
     Sand   = 4,
     Wood   = 5,
     Leaves = 6,
+    Snow   = 7,
 };
 
 constexpr bool is_solid(BlockId b) { return b != BlockId::Air; }
