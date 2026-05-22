@@ -9,8 +9,8 @@
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
+#include "gfx/cascaded_shadow_map.h"
 #include "gfx/post_process.h"
-#include "gfx/shadow_map.h"
 #include "gfx/screenshot.h"
 #include "gfx/water.h"
 #include "gfx/wireframe_cube.h"
@@ -42,9 +42,9 @@ constexpr int   kStreamRadius   = 12;
 [[maybe_unused]] constexpr const char* kSaveDir = "./saves/world1";
 constexpr float kWaterSize      = 480.0f;
 constexpr int   kWaterSubdiv    = 200;
-constexpr float kShadowRadius   = 120.0f;
-constexpr float kShadowDepth    = 250.0f;
 constexpr int   kShadowMapSize  = 2048;
+constexpr float kShadowNear     = 0.1f;
+constexpr float kShadowFar      = 250.0f;
 
 const glm::vec3 kBlockPalette[8] = {
     {1.00f, 0.00f, 1.00f},  // Air (never seen)
@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
     int postfx_w = fb_w, postfx_h = fb_h;
     std::printf("[postfx] HDR %dx%d + half-res bloom chain allocated\n", fb_w, fb_h);
 
-    gfx::ShadowMap shadow_map;
+    gfx::CascadedShadowMap shadow_map;
     if (!shadow_map.init(kShadowMapSize)) {
         glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
@@ -462,8 +462,12 @@ int main(int argc, char** argv) {
         fv.time_seconds = static_cast<float>(now);
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
-        fv.light_vp = gfx::ShadowMap::fit_view_proj(
-            cam.position(), light.sun_dir, kShadowRadius, kShadowDepth);
+        auto cascades = gfx::CascadedShadowMap::fit_cascades(
+            fv.view, fv.proj, light.sun_dir, kShadowNear, kShadowFar);
+        for (int c = 0; c < gfx::kNumCascades; ++c) {
+            fv.light_vp[c]     = cascades[c].light_vp;
+            fv.cascade_far[c]  = cascades[c].split_far_view;
+        }
 
         gfx::Frustum view_frustum;
         view_frustum.from_view_proj(fv.proj * fv.view);

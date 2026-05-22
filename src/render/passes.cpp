@@ -9,7 +9,7 @@
 
 namespace render {
 
-void draw_shadow_pass(gfx::ShadowMap& shadow_map,
+void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,
                       const world::World& wrld,
                       const FrameView& fv,
@@ -17,15 +17,15 @@ void draw_shadow_pass(gfx::ShadowMap& shadow_map,
     ZoneScopedN("shadow_pass");
     if (light.shadow_strength <= 0.0f) return;
 
-    shadow_map.begin_pass();
     depth_shader.use();
-    depth_shader.set_mat4("u_light_vp", fv.light_vp);
-
-    gfx::Frustum light_frustum;
-    light_frustum.from_view_proj(fv.light_vp);
-    wrld.draw_visible_with(light_frustum,
-        [&](const glm::mat4& m) { depth_shader.set_mat4("u_model", m); });
-
+    for (int c = 0; c < gfx::kNumCascades; ++c) {
+        shadow_map.begin_pass(c);
+        depth_shader.set_mat4("u_light_vp", fv.light_vp[c]);
+        gfx::Frustum light_frustum;
+        light_frustum.from_view_proj(fv.light_vp[c]);
+        wrld.draw_visible_with(light_frustum,
+            [&](const glm::mat4& m) { depth_shader.set_mat4("u_model", m); });
+    }
     shadow_map.end_pass(fv.window_w, fv.window_h);
 }
 
@@ -57,7 +57,7 @@ void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
 }
 
 world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
-                              gfx::ShadowMap& shadow_map,
+                              gfx::CascadedShadowMap& shadow_map,
                               const world::World& wrld,
                               const FrameView& fv,
                               const LightingFrame& light,
@@ -67,7 +67,6 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.use();
     terrain_shader.set_mat4("u_view", fv.view);
     terrain_shader.set_mat4("u_proj", fv.proj);
-    terrain_shader.set_mat4("u_light_vp", fv.light_vp);
     terrain_shader.set_vec3("u_light_dir", light.light_dir);
     terrain_shader.set_vec3("u_light_color", light.sun_color);
     terrain_shader.set_vec3("u_ambient_color", light.ambient);
@@ -75,10 +74,19 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.set_vec3("u_fog_color", light.sky_horizon);
     terrain_shader.set_float("u_fog_start", fv.fog_start);
     terrain_shader.set_float("u_fog_end", fv.fog_end);
-    terrain_shader.set_int("u_shadow_map", 1);
+    terrain_shader.set_int("u_shadow_array", 1);
     terrain_shader.set_float("u_shadow_strength", light.shadow_strength);
-    shadow_map.bind_depth_texture(1);
+    shadow_map.bind_depth_array(1);
 
+    GLint lvp_loc = glGetUniformLocation(terrain_shader.id(), "u_light_vp");
+    if (lvp_loc >= 0) {
+        glUniformMatrix4fv(lvp_loc, gfx::kNumCascades, GL_FALSE,
+                           &fv.light_vp[0][0][0]);
+    }
+    GLint cf_loc = glGetUniformLocation(terrain_shader.id(), "u_cascade_far");
+    if (cf_loc >= 0) {
+        glUniform1fv(cf_loc, gfx::kNumCascades, fv.cascade_far);
+    }
     GLint pal_loc = glGetUniformLocation(terrain_shader.id(), "u_palette");
     if (pal_loc >= 0) glUniform3fv(pal_loc, 8, &palette[0].x);
 
