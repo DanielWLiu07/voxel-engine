@@ -105,11 +105,35 @@ Rgb paint_tile(int block_id, int x, int y) {
         if (hash2(x * 7, y * 11) > 0.94f) tone = mix(tone, {120, 180, 90}, 0.6f);
         return tone;
     }
-    case 7: {  // Snow
+    case 7: {  // Snow side (used for non-top faces)
         Rgb base{242, 244, 250};
         float n = fbm(x, y, 89);
         Rgb tone = mix(base, {218, 226, 240}, n * 0.18f);
         if (hash2(x * 5, y * 3) > 0.97f) tone = mix(tone, {255, 255, 255}, 0.7f);
+        return tone;
+    }
+    // --- Second row: per-face top variants (atlas tile indices 8..15) ---
+    case 8: {  // Grass top: brighter, more vivid green
+        Rgb base{96, 178, 78};
+        float n = fbm(x, y, 5);
+        Rgb tone = mix(base, {64, 132, 52}, n * 0.50f);
+        if (hash2(x * 3, y * 5) > 0.82f) tone = mix(tone, {42, 96, 36}, 0.7f);
+        if (hash2(x * 11, y * 7) > 0.96f) tone = mix(tone, {220, 220, 80}, 0.6f);  // tiny flowers
+        return tone;
+    }
+    case 9: {  // Wood top: end-grain concentric rings
+        Rgb base{132, 96, 52};
+        float cx = x - 7.5f, cy = y - 7.5f;
+        float r = std::sqrt(cx * cx + cy * cy);
+        float ring = std::sin(r * 1.4f) * 0.5f + 0.5f;
+        Rgb tone = mix(base, {78, 50, 22}, ring * 0.55f);
+        return jitter(tone, x, y, 97, 0.06f);
+    }
+    case 10: {  // Snow top: brighter, more sparkle
+        Rgb base{250, 252, 255};
+        float n = fbm(x, y, 91);
+        Rgb tone = mix(base, {228, 234, 246}, n * 0.12f);
+        if (hash2(x * 3, y * 5) > 0.93f) tone = mix(tone, {255, 255, 255}, 0.8f);
         return tone;
     }
     default:
