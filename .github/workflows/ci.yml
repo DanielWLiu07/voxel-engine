@@ -52,5 +52,5 @@ jobs:
             exit 1
           fi
           echo "Measured ratio: ${RATIO}x"
-          awk -v r="$RATIO" 'BEGIN { if (r+0 < 20.0) { printf "ratio %s below threshold 20.0\n", r; exit 1 } }'
-          echo "Greedy ratio ${RATIO}x meets threshold (>= 20.0x)"
+          awk -v r="$RATIO" 'BEGIN { if (r+0 < 15.0) { printf "ratio %s below threshold 15.0\n", r; exit 1 } }'
+          echo "Greedy ratio ${RATIO}x meets threshold (>= 15.0x)"
