@@ -17,20 +17,24 @@ uniform float u_fog_start;
 uniform float u_fog_end;
 uniform vec3  u_palette[8];
 
+uniform sampler2D            u_atlas;
 uniform sampler2DArrayShadow u_shadow_array;
 uniform float u_cascade_far[3];
 uniform float u_shadow_strength;
 
 out vec4 frag_color;
 
-float hash3(vec3 p) {
-    p = fract(p * vec3(443.8975, 397.2973, 491.1871));
-    p += dot(p, p.yxz + 19.19);
-    return fract((p.x + p.y) * p.z);
+// 4x4 grid of 16x16 tiles in a 64x64 atlas. v_uv runs 0..w/h across the
+// face; we wrap it to 0..1 within the tile, then offset by tile origin.
+vec3 sample_atlas(int block_id, vec2 face_uv) {
+    int col = block_id & 3;
+    int row = block_id >> 2;
+    vec2 tile_origin = vec2(col, row) / 4.0;
+    vec2 in_tile = fract(face_uv);
+    vec2 uv = tile_origin + in_tile * (1.0 / 4.0);
+    return texture(u_atlas, uv).rgb;
 }
 
-// PCF on the selected cascade. Picks the smallest cascade whose far
-// plane still contains this fragment in view-space depth.
 float sample_csm(vec3 N, vec3 L) {
     float vz = -v_view_pos.z;
     int cascade = 2;
@@ -65,14 +69,12 @@ void main() {
     vec3 N = normalize(v_normal_ws);
     vec3 L = normalize(u_light_dir);
 
-    float diffuse  = max(dot(N, L), 0.0);
-    float shadow   = mix(1.0, sample_csm(N, L), u_shadow_strength);
-    vec3  lighting = u_ambient_color + u_light_color * diffuse * shadow;
+    float diffuse = max(dot(N, L), 0.0);
+    float shadow  = mix(1.0, sample_csm(N, L), u_shadow_strength);
+    vec3 lighting = u_ambient_color + u_light_color * diffuse * shadow;
 
-    vec3 base = u_palette[clamp(v_block_id, 0, 7)];
-    vec3 cell = floor(v_world_pos - N * 0.5);
-    float jitter = hash3(cell) * 0.10 - 0.05;
-    vec3 albedo = clamp(base * (1.0 + jitter), 0.0, 1.0);
+    int id = clamp(v_block_id, 0, 7);
+    vec3 albedo = sample_atlas(id, v_uv);
 
     vec3 lit = albedo * lighting * v_ao;
 
