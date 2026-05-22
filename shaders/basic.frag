@@ -25,14 +25,25 @@ uniform float u_shadow_strength;
 out vec4 frag_color;
 
 // 4x4 grid of 16x16 tiles in a 64x64 atlas. v_uv runs 0..w/h across the
-// face; we wrap it to 0..1 within the tile, then offset by tile origin.
-vec3 sample_atlas(int block_id, vec2 face_uv) {
-    int col = block_id & 3;
-    int row = block_id >> 2;
+// face; fract wraps it into a single tile, which tiles across merged
+// greedy quads exactly like Minecraft.
+vec3 sample_atlas(int tile_id, vec2 face_uv) {
+    int col = tile_id & 3;
+    int row = tile_id >> 2;
     vec2 tile_origin = vec2(col, row) / 4.0;
     vec2 in_tile = fract(face_uv);
     vec2 uv = tile_origin + in_tile * (1.0 / 4.0);
     return texture(u_atlas, uv).rgb;
+}
+
+// Per-face tile picker. Grass / wood / snow have distinct top vs side
+// textures sitting in row 1 of the atlas (tile ids 8, 9, 10).
+int tile_for_face(int block_id, vec3 normal) {
+    bool top = normal.y > 0.5;
+    if (block_id == 3 && top) return 8;   // Grass top
+    if (block_id == 5 && abs(normal.y) > 0.5) return 9;   // Wood end-grain
+    if (block_id == 7 && top) return 10;  // Snow top
+    return block_id;
 }
 
 float sample_csm(vec3 N, vec3 L) {
@@ -74,7 +85,8 @@ void main() {
     vec3 lighting = u_ambient_color + u_light_color * diffuse * shadow;
 
     int id = clamp(v_block_id, 0, 7);
-    vec3 albedo = sample_atlas(id, v_uv);
+    int tile = tile_for_face(id, N);
+    vec3 albedo = sample_atlas(tile, v_uv);
 
     vec3 lit = albedo * lighting * v_ao;
 
