@@ -77,6 +77,8 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.set_int("u_shadow_array", 1);
     terrain_shader.set_float("u_shadow_strength", light.shadow_strength);
     shadow_map.bind_depth_array(1);
+    // u_atlas already bound to unit 0 by the caller; remind the shader.
+    terrain_shader.set_int("u_atlas", 0);
 
     GLint lvp_loc = glGetUniformLocation(terrain_shader.id(), "u_light_vp");
     if (lvp_loc >= 0) {

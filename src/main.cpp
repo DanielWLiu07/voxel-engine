@@ -12,6 +12,7 @@
 #include "gfx/cascaded_shadow_map.h"
 #include "gfx/post_process.h"
 #include "gfx/screenshot.h"
+#include "gfx/texture_atlas.h"
 #include "gfx/water.h"
 #include "gfx/wireframe_cube.h"
 #include "render/lighting.h"
@@ -280,6 +281,11 @@ int main(int argc, char** argv) {
 
     GLuint sky_vao = 0;
     glGenVertexArrays(1, &sky_vao);
+
+    // Procedural texture atlas for blocks. Generated once at boot.
+    GLuint block_atlas = gfx::generate_block_atlas();
+    std::printf("[atlas] %dx%d procedural block atlas\n",
+                gfx::kAtlasSizePx, gfx::kAtlasSizePx);
     GLuint crosshair_vao = 0;
     glGenVertexArrays(1, &crosshair_vao);
 
@@ -476,6 +482,9 @@ int main(int argc, char** argv) {
         // into the HDR FBO via begin_scene().
         render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light);
 
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, block_atlas);
+
         postfx.begin_scene();
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         render::draw_sky(sky_shader, sky_vao, fv, light);
@@ -542,6 +551,7 @@ int main(int argc, char** argv) {
     hud.shutdown();
     if (sky_vao)       glDeleteVertexArrays(1, &sky_vao);
     if (crosshair_vao) glDeleteVertexArrays(1, &crosshair_vao);
+    if (block_atlas)   glDeleteTextures(1, &block_atlas);
     glfwDestroyWindow(window);
     glfwTerminate();
     return EXIT_SUCCESS;
