@@ -2,51 +2,12 @@
 
 [![CI](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml)
 
-A desktop voxel engine in C++20 and OpenGL 4.1 Core. Greedy meshing, multithreaded chunk streaming, real-time shadow mapping, vertex AO, day/night, and a water plane with Fresnel. Measured on an Apple M4: 27.7x greedy triangle reduction on Perlin terrain, ~940 chunks/sec end-to-end pipeline.
-
-## Screenshots
-
-<!-- screenshot 1: terrain at noon, shadows on the ground, water visible at the horizon. drop file at docs/screenshots/noon.png -->
-<!-- screenshot 2: sunset shot showing sky gradient + warm sun color hitting one face of the terrain. docs/screenshots/sunset.png -->
-<!-- screenshot 3: ImGui debug HUD overlay with the perf panel visible. docs/screenshots/hud.png -->
-
-## Highlights
-
-- Greedy mesher producing 27.7x fewer triangles than naive face-culling on Perlin terrain. Area-correct against the naive output.
-- Multithreaded chunk pipeline (terrain gen + greedy meshing) on a worker pool, ~940 chunks/sec end-to-end at radius 12 (625 chunks) on Apple M4.
-- Infinite chunk streaming around the player. Chunks load and evict as the camera crosses chunk boundaries.
-- Real-time directional shadow mapping with PCF filtering, dynamic light-space frustum fit, peter-panning bias.
-- Per-vertex ambient occlusion baked into the greedy mesh.
-- Day/night cycle with sun arc, sky gradient, and color ramps for sun, ambient, and fog.
-- Distance fog blended against the sky for clean chunk-radius horizon.
-- Animated water plane with Fresnel mixing and sine-wave displacement at sea level.
-- AABB collision against the voxel grid in walk mode. DDA voxel raycast for break/place at 8-block reach.
-- RLE-compressed binary chunk save format with magic + version header, validated on decode. ~144x compression on Perlin terrain.
-- Dear ImGui debug HUD: live frame time, FPS, drawn chunks, triangles, pending async chunks, streaming counters, copy-to-clipboard snapshot.
-- View-frustum culling against chunk AABBs.
-
-## Measured performance
-
-Apple M4 (10-core CPU), macOS 26.2 arm64, OpenGL 4.1 Apple renderer. Measured 2026-05-18.
-
-| Metric | Value |
-| --- | --- |
-| Greedy meshing, Perlin terrain chunk | 3072 -> 111 quads (27.7x fewer tris, build 1.29 ms) |
-| Greedy meshing, synthetic sine-bumped chunk | 1448 -> 496 quads (2.9x fewer tris, worst case) |
-| Async chunk pipeline, radius 12 (625 chunks) | 663 ms wall, ~940 chunks/sec, 9 workers |
-| Frustum cull ratio, gameplay viewpoint | 304 / 625 chunks drawn (~2.1x) |
-| Frame time, radius 12, ~61k tris drawn | 8.5 ms (150 fps) |
-| RLE save compression, radius 12 Perlin world | 39.06 MB raw -> 0.27 MB on disk (~144x) |
-
-Reproduce the mesher benchmark:
-
-```
-./build/voxel_engine --bench
-```
+A desktop voxel engine I built solo over three weeks in C++20 and OpenGL 4.1
+Core. The point of the project was to learn graphics from scratch and ship a
+binary with measurable wins, not to clone Minecraft. Numbers below are from
+my Apple M4.
 
 ## Build
-
-Prerequisites: CMake 3.20+, Ninja, a C++20 compiler (Clang 15+ / GCC 12+ / MSVC 19.3+). First configure takes about two minutes while CMake FetchContent clones GLFW, GLM, and Dear ImGui. macOS, Linux, and Windows are supported. macOS is the primary dev target.
 
 ```
 cmake -B build -G Ninja
@@ -54,50 +15,106 @@ cmake --build build -j
 ./build/voxel_engine
 ```
 
-Build type defaults to Release. Pass `--bench` to run the mesher benchmark instead of opening a window.
+Needs CMake 3.20+, Ninja, and a C++20 compiler (Clang 15+, GCC 12+, MSVC
+19.3+). First configure takes about two minutes because CMake FetchContent
+clones GLFW, GLM, and Dear ImGui. macOS is the primary dev target; Linux and
+Windows build clean on CI.
+
+Pass `--bench` to run the mesher benchmark instead of opening a window:
+
+```
+./build/voxel_engine --bench
+```
+
+## Measured performance
+
+Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
+
+| Metric | Value |
+| --- | --- |
+| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build) |
+| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build) |
+| Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
+| Async chunk pipeline, radius 12 (625 chunks) | ~940 chunks/sec, 9 workers |
+| Frustum cull ratio, gameplay viewpoint | 304 / 625 chunks drawn (~2.1x) |
+| Frame time, radius 12, ~61k tris | 8.5 ms (150 fps) |
+| RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
+
+Greedy ratio depends on terrain richness. The "contiguous" number is the
+mesher's algorithmic gain on continuous terrain — that's what the CI gate
+enforces (>= 15x). Caves break face runs into smaller mergeable rectangles,
+so the same algorithm produces fewer quads but a lower ratio. Both numbers
+come out of `./build/voxel_engine --bench`.
+
+## What's in here
+
+Rendering
+- Greedy mesher that merges co-planar identical faces per chunk. Area-correct
+  against the naive face-culling output.
+- View-frustum culling against per-chunk AABBs.
+- 3-cascade parallel-split shadow mapping (PSSM) with a sphere-fit cascade
+  volume, hardware PCF, texel-snapped stable cascades, and a caster pull-back
+  so occluders just outside the frustum still cast.
+- Staggered cascade updates: c0 refreshes every frame, c1 every second, c2
+  every fourth, phase-offset so the per-frame shadow cost never spikes above
+  two cascades.
+- HDR pipeline (multisampled scene FBO, blit resolve, half-res bloom chain,
+  ACES tonemap, saturation/contrast/vignette grading).
+- Fresnel-blended water plane with sine-animated normals and depth fog.
+- Sky gradient + sun glow, distance fog matched to the horizon.
+- Per-face texture atlas with PNG override; grass and wood have distinct top
+  and side textures.
+- Per-vertex ambient occlusion baked into the mesh.
+
+World
+- 16 x 256 x 16 chunks, infinite streaming around the player with bounded
+  memory.
+- Multi-octave Perlin terrain with domain warping, snow band, sand band,
+  three tree variants, and 3D-noise carved cave systems.
+- AABB collision in walk mode, DDA voxel raycast for break/place at 8-block
+  reach.
+- RLE-compressed binary chunk save/load with magic + version header.
+
+Tooling
+- Day/night cycle with sun arc and palette ramp.
+- ImGui debug HUD: frame time, FPS, drawn chunks, triangles, pending async
+  chunks, copy-perf-to-clipboard.
+- Tracy profiler instrumentation behind `-DVOXEL_USE_TRACY=ON`.
+- F12 to PNG screenshot.
 
 ## Controls
 
-### Movement
-
 | Key | Action |
 | --- | --- |
-| W A S D | Move |
-| Space | Jump (walk mode) / up (fly mode) |
-| Left Ctrl | Down (fly mode) |
+| WASD | Move |
+| Space | Jump (walk) / up (fly) |
+| Left Ctrl | Down (fly) |
 | Left Shift | Sprint |
 | F | Toggle walk / fly |
-
-### Interaction
-
-| Key | Action |
-| --- | --- |
 | Left click | Break block |
 | Right click | Place block |
-
-### View and debug
-
-| Key | Action |
-| --- | --- |
 | Tab | Toggle mouse capture |
-| F2 | Toggle ImGui HUD |
-| F5 | Save world to `./saves/world1/` |
-| F6 | Reload world from `./saves/world1/` |
-| F12 | Screenshot to `./screenshots/` |
+| F2 | Toggle HUD |
+| F5 / F6 | Save / load world (`./saves/world1/`) |
+| F12 | Screenshot (`./screenshots/`) |
 | C | Copy perf snapshot to clipboard |
 | T | Pause / resume time of day |
-| `[` / `]` | Step time of day backward / forward |
+| `[` / `]` | Step time of day |
 | V | Toggle vsync |
 | Esc | Quit |
 
 ## Architecture
 
-Layered, no globals. `gfx/` is a generic OpenGL wrapper that knows nothing about voxels. `world/` owns voxel data and meshing. `render/` composes draw passes from `gfx/` and `world/`. `game/` is the only layer that coordinates player input with world state. `ui/` is the debug HUD. Chunk generation and meshing run on a worker pool; all OpenGL calls stay on the main thread.
+Layered, no globals. `gfx/` is a generic OpenGL wrapper that doesn't know
+about voxels. `world/` owns voxel data and meshing. `render/` composes draw
+passes from `gfx/` and `world/`. `game/` is the only layer that coordinates
+player input with world state. `ui/` is the debug HUD. Chunk generation and
+meshing run on a worker pool; every OpenGL call stays on the main thread.
 
 ```
 src/
   core/    window, input, thread pool
-  gfx/     shader, mesh, camera, frustum, shadow map, water
+  gfx/     shader, mesh, camera, frustum, CSM, post-process, water, atlas
   world/   chunk, terrain gen, greedy mesher, world container, streaming
   render/  lighting, draw passes (shadow, sky, terrain, water)
   game/    player, AABB physics, block interaction
@@ -107,4 +124,6 @@ shaders/   GLSL 4.10 core
 third_party/  glad, stb, FastNoiseLite (vendored)
 ```
 
-Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD (GL 4.1 core loader), stb_image, stb_image_write, FastNoiseLite.
+Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD
+(GL 4.1 core loader), stb_image, stb_image_write, FastNoiseLite. Optional:
+Tracy.
