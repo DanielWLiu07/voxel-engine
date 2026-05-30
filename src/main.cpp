@@ -344,6 +344,14 @@ int main(int argc, char** argv) {
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
     int    frame_count = 0;
+    uint64_t frame_index = 0;
+    // Cached cascades for the stagger optimization: when a cascade is
+    // skipped this frame, basic.frag must sample the existing depth layer
+    // with the matrix that produced it, so the (matrix, depth) pair stays
+    // locked together.
+    glm::mat4 cached_light_vp[gfx::kNumCascades]{};
+    float     cached_cascade_far[gfx::kNumCascades]{};
+    bool      prev_shadow_active = false;
     world::DrawStats last_stats{};
     float smoothed_fps      = 0.0f;
     float smoothed_frame_ms = 0.0f;
@@ -468,11 +476,38 @@ int main(int argc, char** argv) {
         fv.time_seconds = static_cast<float>(now);
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
+
+        // Stagger: refresh cascade c only every (1 << c) frames. The far
+        // cascade is hundreds of meters wide and barely changes frame to
+        // frame, so paying 3x shadow cost to refresh near-stale data is
+        // wasted work. c1 and c2 are phased so they never coincide with
+        // each other — peak passes/frame stays at 2 instead of 3, keeping
+        // the frame-time envelope flat:
+        //   c0 every frame  c1 on (f & 1) == 0  c2 on (f & 3) == 1
+        // Avg = 1 + 0.5 + 0.25 = 1.75 passes/frame.
+        uint32_t shadow_cascade_mask = 1u;  // c0 always
+        if ((frame_index & 1ull) == 0ull)        shadow_cascade_mask |= (1u << 1);
+        if ((frame_index & 3ull) == 1ull)        shadow_cascade_mask |= (1u << 2);
+        // First frame: refresh everything so caches are valid.
+        if (frame_index == 0ull) shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
+        // When shadows just transitioned 0 -> active (sunrise), the cached
+        // depth textures and matrices are stale from before the night
+        // skip-pass — force-refresh all cascades to resync.
+        const bool shadow_active_now = (light.shadow_strength > 0.0f);
+        if (shadow_active_now && !prev_shadow_active) {
+            shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
+        }
+        prev_shadow_active = shadow_active_now;
         auto cascades = gfx::CascadedShadowMap::fit_cascades(
-            fv.view, fv.proj, light.sun_dir, kShadowNear, kShadowFar);
+            fv.view, fv.proj, light.sun_dir, kShadowNear, kShadowFar,
+            0.5f, kShadowMapSize);
         for (int c = 0; c < gfx::kNumCascades; ++c) {
-            fv.light_vp[c]     = cascades[c].light_vp;
-            fv.cascade_far[c]  = cascades[c].split_far_view;
+            if (shadow_cascade_mask & (1u << c)) {
+                cached_light_vp[c]    = cascades[c].light_vp;
+                cached_cascade_far[c] = cascades[c].split_far_view;
+            }
+            fv.light_vp[c]    = cached_light_vp[c];
+            fv.cascade_far[c] = cached_cascade_far[c];
         }
 
         gfx::Frustum view_frustum;
@@ -480,7 +515,8 @@ int main(int argc, char** argv) {
 
         // Shadow pass writes to its own FBO; the other scene passes write
         // into the HDR FBO via begin_scene().
-        render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light);
+        render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light,
+                                 shadow_cascade_mask);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, block_atlas);
@@ -533,6 +569,7 @@ int main(int argc, char** argv) {
         FrameMark;
 
         ++frame_count;
+        ++frame_index;
         if (now - last_time >= 1.0) {
             char title[256];
             std::snprintf(title, sizeof(title),

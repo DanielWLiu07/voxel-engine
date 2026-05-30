@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 
 #include <array>
+#include <cstdint>
 
 namespace render {
 
@@ -29,11 +30,15 @@ struct FrameView {
     float     time_seconds;
 };
 
+// cascade_update_mask: bit c set => redraw cascade c's depth this frame.
+// Bits cleared keep the previous frame's depth-texture layer contents, which
+// remain valid as long as the caller also reuses the matching light_vp[c].
 void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,
                       const world::World& wrld,
                       const FrameView& fv,
-                      const LightingFrame& light);
+                      const LightingFrame& light,
+                      uint32_t cascade_update_mask = 0xFFFFFFFFu);
 
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light);

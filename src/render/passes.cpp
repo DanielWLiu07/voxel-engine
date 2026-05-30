@@ -13,20 +13,25 @@ void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,
                       const world::World& wrld,
                       const FrameView& fv,
-                      const LightingFrame& light) {
+                      const LightingFrame& light,
+                      uint32_t cascade_update_mask) {
     ZoneScopedN("shadow_pass");
     if (light.shadow_strength <= 0.0f) return;
+    if ((cascade_update_mask & ((1u << gfx::kNumCascades) - 1u)) == 0u) return;
 
     depth_shader.use();
+    bool any_bound = false;
     for (int c = 0; c < gfx::kNumCascades; ++c) {
+        if ((cascade_update_mask & (1u << c)) == 0u) continue;
         shadow_map.begin_pass(c);
+        any_bound = true;
         depth_shader.set_mat4("u_light_vp", fv.light_vp[c]);
         gfx::Frustum light_frustum;
         light_frustum.from_view_proj(fv.light_vp[c]);
         wrld.draw_visible_with(light_frustum,
             [&](const glm::mat4& m) { depth_shader.set_mat4("u_model", m); });
     }
-    shadow_map.end_pass(fv.window_w, fv.window_h);
+    if (any_bound) shadow_map.end_pass(fv.window_w, fv.window_h);
 }
 
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
