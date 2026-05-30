@@ -76,33 +76,44 @@ fs::path find_asset_root(const char* argv0) {
 }
 
 int run_bench() {
-    world::TerrainGen terrain(1337);
-    world::Chunk chunk;
-    terrain.fill_chunk(0, 0, chunk);
-
     constexpr int kRuns = 25;
-    double naive_total = 0.0, greedy_total = 0.0;
-    world::ChunkMeshData last_naive, last_greedy;
-    for (int i = 0; i < kRuns; ++i) {
-        last_naive  = world::build_chunk_mesh_naive(chunk);
-        last_greedy = world::build_chunk_mesh_greedy(chunk);
-        naive_total  += last_naive.build_ms;
-        greedy_total += last_greedy.build_ms;
-    }
 
-    std::size_t naive_tris  = last_naive.indices.size()  / 3;
-    std::size_t greedy_tris = last_greedy.indices.size() / 3;
+    auto bench_one = [&](bool caves, const char* label) {
+        world::TerrainGen terrain(1337);
+        terrain.set_caves_enabled(caves);
+        world::Chunk chunk;
+        terrain.fill_chunk(0, 0, chunk);
+
+        double naive_total = 0.0, greedy_total = 0.0;
+        world::ChunkMeshData last_naive, last_greedy;
+        for (int i = 0; i < kRuns; ++i) {
+            last_naive  = world::build_chunk_mesh_naive(chunk);
+            last_greedy = world::build_chunk_mesh_greedy(chunk);
+            naive_total  += last_naive.build_ms;
+            greedy_total += last_greedy.build_ms;
+        }
+        std::size_t naive_tris  = last_naive.indices.size()  / 3;
+        std::size_t greedy_tris = last_greedy.indices.size() / 3;
+
+        std::printf("---- %s ----\n", label);
+        std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                    last_naive.quad_count, naive_tris, naive_total / kRuns);
+        std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                    last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
+        if (last_greedy.quad_count > 0 && greedy_tris > 0) {
+            std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris\n",
+                        static_cast<double>(last_naive.quad_count)  / last_greedy.quad_count,
+                        static_cast<double>(naive_tris)             / greedy_tris);
+        }
+    };
 
     std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0) ====\n", kRuns);
-    std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
-                last_naive.quad_count, naive_tris, naive_total / kRuns);
-    std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
-                last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
-    if (last_greedy.quad_count > 0 && greedy_tris > 0) {
-        std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris\n",
-                    static_cast<double>(last_naive.quad_count)  / last_greedy.quad_count,
-                    static_cast<double>(naive_tris)             / greedy_tris);
-    }
+    // Caves-off measures the greedy algorithm against contiguous terrain
+    // — this is what the CI gate checks. Caves-on is the realistic
+    // gameplay path; lower ratio is expected because caves break up
+    // mergeable face runs.
+    bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
+    bench_one(/*caves=*/true,  "with caves (gameplay terrain)");
     return EXIT_SUCCESS;
 }
 
