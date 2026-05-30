@@ -146,6 +146,21 @@ TerrainGen::TerrainGen(std::uint32_t seed) {
     biome_.SetSeed(static_cast<int>(seed) + 4);
     biome_.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
     biome_.SetFrequency(0.008f);
+
+    temp_.SetSeed(static_cast<int>(seed) + 5);
+    temp_.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+    temp_.SetFrequency(0.006f);
+
+    // Two orthogonal 3D fields — the intersection of their iso-surfaces
+    // (|n_a| and |n_b| both small) carves tube-like caves instead of the
+    // blobby Swiss-cheese single-threshold pattern.
+    cave_a_.SetSeed(static_cast<int>(seed) + 6);
+    cave_a_.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    cave_a_.SetFrequency(0.038f);
+
+    cave_b_.SetSeed(static_cast<int>(seed) + 7);
+    cave_b_.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    cave_b_.SetFrequency(0.038f);
 }
 
 int TerrainGen::height_at(int wx, int wz) const {
@@ -161,6 +176,7 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
 
     int surface[kChunkSizeZ][kChunkSizeX];
     float biome_val[kChunkSizeZ][kChunkSizeX];
+    bool  is_desert[kChunkSizeZ][kChunkSizeX];
 
     for (int z = 0; z < kChunkSizeZ; ++z) {
         for (int x = 0; x < kChunkSizeX; ++x) {
@@ -173,6 +189,11 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
             surface[z][x] = height;
             biome_val[z][x] = biome_.GetNoise(static_cast<float>(wx),
                                               static_cast<float>(wz));
+            const float temp = temp_.GetNoise(static_cast<float>(wx),
+                                              static_cast<float>(wz));
+            // Hot + low-altitude = desert. Snow band still wins above it,
+            // so deserts stay below the snow line naturally.
+            is_desert[z][x] = (temp > 0.35f) && (height < kSnowBand);
 
             for (int y = 0; y <= height; ++y) {
                 BlockId b;
@@ -180,6 +201,7 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
                 else if (height <= kSeaLevel + kSandBand && y >= height-1)  b = BlockId::Sand;
                 else if (y == height && height >= kSnowBand)                b = BlockId::Snow;
                 else if (height >= kStoneBand && y == height)               b = BlockId::Stone;
+                else if (is_desert[z][x] && y >= height - 2)                b = BlockId::Sand;
                 else if (y == height)                                       b = BlockId::Grass;
                 else if (y >= height - 3)                                   b = BlockId::Dirt;
                 else                                                        b = BlockId::Stone;
@@ -188,11 +210,42 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
         }
     }
 
-    // Tree pass: variant depends on biome noise + altitude.
+    // Cave pass: carve the intersection of two 3D iso-surfaces. Both fields
+    // are zero-mean Perlin in [-1, 1]; cells where |n_a| and |n_b| are both
+    // small lie on the intersection of two zero-crossings, which traces out
+    // tube-shaped passages instead of blob caves. Cap by kCaveCeiling below
+    // the surface so we don't pock-mark the terrain.
+    if (caves_enabled_) {
+        constexpr int   kCaveCeiling   = 5;
+        constexpr int   kCaveFloor     = 1;
+        constexpr float kCaveIsoWidth  = 0.05f;
+        for (int z = 0; z < kChunkSizeZ; ++z) {
+            for (int x = 0; x < kChunkSizeX; ++x) {
+                const int wx = origin_x + x;
+                const int wz = origin_z + z;
+                const int y_max = surface[z][x] - kCaveCeiling;
+                for (int y = kCaveFloor; y <= y_max; ++y) {
+                    const float na = cave_a_.GetNoise(static_cast<float>(wx),
+                                                      static_cast<float>(y) * 1.6f,
+                                                      static_cast<float>(wz));
+                    const float nb = cave_b_.GetNoise(static_cast<float>(wx),
+                                                      static_cast<float>(y) * 1.6f,
+                                                      static_cast<float>(wz));
+                    if (std::abs(na) < kCaveIsoWidth && std::abs(nb) < kCaveIsoWidth) {
+                        out.set(x, y, z, BlockId::Air);
+                    }
+                }
+            }
+        }
+    }
+
+    // Tree pass: variant depends on biome noise + altitude. Deserts get no
+    // trees — sand surface alone is enough to read as a different biome.
     constexpr int kMargin = 2;
     for (int z = kMargin; z < kChunkSizeZ - kMargin; ++z) {
         for (int x = kMargin; x < kChunkSizeX - kMargin; ++x) {
             int h = surface[z][x];
+            if (is_desert[z][x]) continue;
             if (h <= kSeaLevel + kSandBand) continue;
             if (h >= kStoneBand) continue;
             if (out.get(x, h, z) != BlockId::Grass) continue;
