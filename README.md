@@ -44,28 +44,28 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
-mesher's algorithmic gain on continuous terrain — that's what the CI gate
+mesher's algorithmic gain on continuous terrain, which is what the CI gate
 enforces (>= 15x). Caves break face runs into smaller mergeable rectangles,
 so the same algorithm produces fewer quads but a lower ratio. Both numbers
 come out of `./build/voxel_engine --bench`.
 
-The frustum cull numbers come from `--bench`'s deterministic pose (camera at
-(0, 80, 0), yaw -90, pitch -15, 70° FOV, 16:9). The chunk row counts loaded
-chunks that survive the per-chunk tight AABB test. The section rows split
-each chunk into eight 32-block vertical sections (each with its own AABB),
-test each independently, and count survivors. Two denominators are shown
-because both framings are valid:
+The frustum cull rows come from `--bench`'s deterministic pose (camera at
+(0, 80, 0), yaw -90, pitch -15, 70° FOV, 16:9). The chunk row counts
+loaded chunks that survive the per-chunk tight AABB test. The section rows
+split each chunk into eight 32-block vertical sections, each with its own
+AABB, and count survivors.
 
-- *vs non-empty* compares against the realistic baseline (~1250 sections
-  actually contain geometry, the other 3750 are air the renderer would
-  never have drawn anyway).
-- *vs all loaded sections* compares against a naive "draw every loaded
-  section" baseline. It's the bigger number but the less-honest framing.
+Two denominators because both are useful:
 
-Per-chunk frustum culling at 70° FOV has a geometric ceiling near ~3× (the
-cone covers about a third of the surrounding disc); the section pass adds a
-modest tightening within visible chunks. Bigger reductions need occlusion
-culling, not finer-grain AABBs.
+- vs non-empty: ~1250 sections actually contain geometry; the other 3750
+  are air the renderer never had to draw.
+- vs all loaded sections: the naive "draw every loaded section" baseline.
+  Bigger number, weaker comparison.
+
+Frustum-only culling at 70° FOV ceilings near 3x because the cone covers
+roughly a third of the surrounding disc. The section pass adds modest
+tightening within visible chunks. Bigger reductions from here need
+occlusion, not finer AABBs.
 
 ## What's in here
 
