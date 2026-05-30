@@ -101,7 +101,6 @@ add_executable(voxel_engine
   src/gfx/mesh.cpp
   src/gfx/shader.cpp
   src/gfx/cascaded_shadow_map.cpp
-  src/gfx/shadow_map.cpp
   src/gfx/texture_atlas.cpp
   src/gfx/post_process.cpp
   src/gfx/screenshot.cpp

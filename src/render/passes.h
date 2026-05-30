@@ -2,7 +2,6 @@
 
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
-#include "gfx/shadow_map.h"
 #include "gfx/cascaded_shadow_map.h"
 #include "gfx/water.h"
 #include "gfx/wireframe_cube.h"

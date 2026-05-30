@@ -338,8 +338,8 @@ int main(int argc, char** argv) {
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
-    std::printf("[input] F5 = save world, F6 = load world, F12 = screenshot (./screenshots)\n");
     std::printf("[input] F5 = save world, F6 = load world (./saves/world1)\n");
+    std::printf("[input] F12 = screenshot (./screenshots)\n");
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
