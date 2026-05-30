@@ -85,7 +85,9 @@ CascadedShadowMap::fit_cascades(const glm::mat4& camera_view,
                                 const glm::vec3& light_dir,
                                 float near_plane,
                                 float far_plane,
-                                float lambda) {
+                                float lambda,
+                                int   shadow_map_size,
+                                float caster_pullback) {
     std::array<float, kNumCascades + 1> splits{};
     splits[0] = near_plane;
     splits[kNumCascades] = far_plane;
@@ -138,19 +140,37 @@ CascadedShadowMap::fit_cascades(const glm::mat4& camera_view,
         }
         radius = std::ceil(radius);
 
-        const glm::vec3 max_ext(radius);
-        const glm::vec3 min_ext = -max_ext;
+        const glm::vec3 up_ref = (std::abs(L.y) > 0.95f) ? glm::vec3(0, 0, 1)
+                                                          : glm::vec3(0, 1, 0);
+        // World-fixed light-space axes — derived only from L and up_ref, so
+        // their orientation doesn't depend on center. This is what makes the
+        // texel snap meaningful: we quantize center's projection onto a
+        // basis that doesn't slide when center moves a fraction of a texel.
+        const glm::vec3 light_right = glm::normalize(glm::cross(L, up_ref));
+        const glm::vec3 light_up    = glm::normalize(glm::cross(light_right, L));
 
-        glm::vec3 up = (std::abs(L.y) > 0.95f) ? glm::vec3(0, 0, 1)
-                                                : glm::vec3(0, 1, 0);
+        // Snap center along the world-fixed right/up axes to the texel grid,
+        // preserve its projection on L untouched.
+        const float texel = (2.0f * radius) / static_cast<float>(shadow_map_size);
+        const float cx = std::floor(glm::dot(center, light_right) / texel) * texel;
+        const float cy = std::floor(glm::dot(center, light_up)    / texel) * texel;
+        const float cz = glm::dot(center, L);
+        const glm::vec3 center_snapped = cx * light_right + cy * light_up + cz * L;
+
         // L points TOWARD the sun, so the light camera sits at center + L*r,
-        // looking back at the scene. (Previous - sign was flipped and caused
-        // an entire frame of missing shadows.)
-        glm::vec3 eye = center + L * radius;
-        glm::mat4 lview = glm::lookAt(eye, center, up);
-        glm::mat4 lproj = glm::ortho(min_ext.x, max_ext.x,
-                                     min_ext.y, max_ext.y,
-                                     0.0f, max_ext.z - min_ext.z);
+        // looking back at the scene. Pull the eye back by caster_pullback so
+        // occluders BETWEEN the sphere and the sun (tall blocks just outside
+        // the frustum) still appear in the depth pass instead of being
+        // clipped by near.
+        const float eye_dist = radius + caster_pullback;
+        const glm::vec3 eye = center_snapped + L * eye_dist;
+        const glm::mat4 lview = glm::lookAt(eye, center_snapped, up_ref);
+
+        // Depth range: near=0 (at eye), far covers the pullback corridor
+        // plus the full 2*radius sphere depth.
+        glm::mat4 lproj = glm::ortho(-radius, radius,
+                                     -radius, radius,
+                                     0.0f, 2.0f * radius + caster_pullback);
 
         out[c].light_vp = lproj * lview;
         out[c].split_far_view = zf;
