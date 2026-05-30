@@ -132,8 +132,11 @@ int run_bench() {
     world::TerrainGen cull_terrain(1337);
     std::vector<gfx::AABB> wide_aabbs;
     std::vector<gfx::AABB> tight_aabbs;
+    std::vector<std::array<world::SectionBounds, world::kSectionsPerChunk>> section_bounds;
     wide_aabbs.reserve(total);
     tight_aabbs.reserve(total);
+    section_bounds.reserve(total);
+    int total_sections_nonempty = 0;
     auto gen_t0 = std::chrono::steady_clock::now();
     for (int cz = -kRadius; cz <= kRadius; ++cz) {
         for (int cx = -kRadius; cx <= kRadius; ++cx) {
@@ -146,6 +149,9 @@ int run_bench() {
                                    static_cast<float>(world::kChunkSizeY),
                                    oz + world::kChunkSizeZ}});
             tight_aabbs.push_back(world::make_chunk_aabb({cx, cz}, c));
+            auto secs = world::compute_section_bounds({cx, cz}, c);
+            for (const auto& s : secs) if (s.has_mesh) ++total_sections_nonempty;
+            section_bounds.push_back(std::move(secs));
         }
     }
     auto gen_t1 = std::chrono::steady_clock::now();
@@ -171,19 +177,43 @@ int run_bench() {
     const int wide_fartight = count_visible(wide_aabbs,  kFarTight);
     const int tight_fartight= count_visible(tight_aabbs, kFarTight);
 
-    auto ratio = [&](int drawn) { return drawn > 0 ? double(total)/drawn : 0.0; };
+    // Section-level cull: same frustum, but each visible chunk's sections
+    // are tested individually. Mirrors what World::draw_visible_with does.
+    auto count_sections_visible = [&](float zfar) {
+        gfx::Frustum f;
+        f.from_view_proj(cam.proj_matrix(kAspect, kFovDeg, 0.1f, zfar) * view);
+        int drawn = 0;
+        for (std::size_t i = 0; i < tight_aabbs.size(); ++i) {
+            if (!f.intersects_aabb(tight_aabbs[i])) continue;
+            for (const auto& s : section_bounds[i]) {
+                if (s.has_mesh && f.intersects_aabb(s.aabb)) ++drawn;
+            }
+        }
+        return drawn;
+    };
+    const int sections_drawn = count_sections_visible(kFarTight);
+
+    auto ratio = [&](int drawn, int denom) { return drawn > 0 ? double(denom)/drawn : 0.0; };
 
     std::printf("\n==== frustum cull benchmark (radius %d, %d chunks, pos (0,80,0), yaw -90, pitch -15, fov %.0f) ====\n",
                 kRadius, total, kFovDeg);
     std::printf("(grid built in %.1f ms)\n", gen_ms);
-    std::printf("wide AABB,  far 500 m  : %3d/%d drawn  (%.2fx cull)   <- baseline (matches old README)\n",
-                wide_far500, total, ratio(wide_far500));
-    std::printf("tight AABB, far 500 m  : %3d/%d drawn  (%.2fx cull)\n",
-                tight_far500, total, ratio(tight_far500));
-    std::printf("wide AABB,  far %3.0f m  : %3d/%d drawn  (%.2fx cull)\n",
-                kFarTight, wide_fartight, total, ratio(wide_fartight));
-    std::printf("tight AABB, far %3.0f m  : %3d/%d drawn  (%.2fx cull)   <- after this commit\n",
-                kFarTight, tight_fartight, total, ratio(tight_fartight));
+    std::printf("chunk-level cull:\n");
+    std::printf("  wide AABB,  far 500 m  : %3d/%d drawn  (%.2fx)   <- baseline (matches old README)\n",
+                wide_far500, total, ratio(wide_far500, total));
+    std::printf("  tight AABB, far 500 m  : %3d/%d drawn  (%.2fx)\n",
+                tight_far500, total, ratio(tight_far500, total));
+    std::printf("  wide AABB,  far %3.0f m  : %3d/%d drawn  (%.2fx)\n",
+                kFarTight, wide_fartight, total, ratio(wide_fartight, total));
+    std::printf("  tight AABB, far %3.0f m  : %3d/%d drawn  (%.2fx)   <- previous commit\n",
+                kFarTight, tight_fartight, total, ratio(tight_fartight, total));
+    std::printf("section-level cull (32-block vertical sections, tight AABB, far %3.0f m):\n", kFarTight);
+    std::printf("  vs non-empty sections    : %4d / %d  (%.2fx)   <- honest per-section cull ratio\n",
+                sections_drawn, total_sections_nonempty,
+                ratio(sections_drawn, total_sections_nonempty));
+    std::printf("  vs all loaded sections   : %4d / %d  (%.2fx)   <- vs naive 'draw every section'\n",
+                sections_drawn, total * world::kSectionsPerChunk,
+                ratio(sections_drawn, total * world::kSectionsPerChunk));
     return EXIT_SUCCESS;
 }
 

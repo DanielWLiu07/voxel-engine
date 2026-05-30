@@ -5,10 +5,13 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <vector>
 
 namespace {
 
@@ -68,16 +71,149 @@ gfx::AABB make_chunk_aabb(ChunkCoord c, const Chunk& chunk) {
 
 namespace {
 
+// One section's mesh in-build form. Vertices are the same chunk-LOCAL
+// positions the mesher emits; the world-space AABB folds in the chunk
+// origin so cull tests don't need the model matrix.
+struct SectionBuild {
+    std::vector<gfx::VertexPNT> vertices;
+    std::vector<std::uint32_t>  indices;
+    glm::vec3 aabb_min{};
+    glm::vec3 aabb_max{};
+    int  quad_count   = 0;
+    bool initialized  = false;
+};
+
+// Bucket the chunk-wide greedy mesh into per-section slices. Each quad is
+// assigned to the section that contains its bottom Y; the section's AABB
+// extends to the quad's actual extent, so a side face that spans two
+// sections still draws correctly when the higher section is in-frustum
+// (the AABB pulls the lower section in too — conservative, correct).
+//
+// Bucketing instead of meshing-per-section keeps the greedy merger
+// chunk-wide, so we don't lose face runs at section boundaries — bullet
+// #1 (greedy ratio) doesn't regress.
+std::array<SectionBuild, kSectionsPerChunk>
+bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
+    std::array<SectionBuild, kSectionsPerChunk> out;
+    const float ox = static_cast<float>(coord.x * kChunkSizeX);
+    const float oz = static_cast<float>(coord.z * kChunkSizeZ);
+
+    const std::size_t quad_count = src.vertices.size() / 4;
+    for (std::size_t q = 0; q < quad_count; ++q) {
+        const auto& v0 = src.vertices[4 * q + 0];
+        const auto& v1 = src.vertices[4 * q + 1];
+        const auto& v2 = src.vertices[4 * q + 2];
+        const auto& v3 = src.vertices[4 * q + 3];
+
+        const float ymin = std::min({v0.position.y, v1.position.y,
+                                     v2.position.y, v3.position.y});
+        const float ymax = std::max({v0.position.y, v1.position.y,
+                                     v2.position.y, v3.position.y});
+        const float xmin = std::min({v0.position.x, v1.position.x,
+                                     v2.position.x, v3.position.x});
+        const float xmax = std::max({v0.position.x, v1.position.x,
+                                     v2.position.x, v3.position.x});
+        const float zmin = std::min({v0.position.z, v1.position.z,
+                                     v2.position.z, v3.position.z});
+        const float zmax = std::max({v0.position.z, v1.position.z,
+                                     v2.position.z, v3.position.z});
+
+        const int section_idx = std::clamp(
+            static_cast<int>(std::floor(ymin)) / kSectionHeight,
+            0, kSectionsPerChunk - 1);
+        SectionBuild& s = out[section_idx];
+
+        const std::uint32_t base = static_cast<std::uint32_t>(s.vertices.size());
+        s.vertices.push_back(v0);
+        s.vertices.push_back(v1);
+        s.vertices.push_back(v2);
+        s.vertices.push_back(v3);
+        s.indices.push_back(base + 0);
+        s.indices.push_back(base + 1);
+        s.indices.push_back(base + 2);
+        s.indices.push_back(base + 0);
+        s.indices.push_back(base + 2);
+        s.indices.push_back(base + 3);
+        ++s.quad_count;
+
+        const glm::vec3 lo{xmin + ox, ymin, zmin + oz};
+        const glm::vec3 hi{xmax + ox, ymax, zmax + oz};
+        if (!s.initialized) {
+            s.aabb_min = lo;
+            s.aabb_max = hi;
+            s.initialized = true;
+        } else {
+            s.aabb_min = glm::min(s.aabb_min, lo);
+            s.aabb_max = glm::max(s.aabb_max, hi);
+        }
+    }
+    return out;
+}
+
+// Upload the bucketed sections into a slot, rebuild the chunk-level
+// union AABB. Sections with no quads are marked has_mesh=false and
+// skipped at draw time (their leftover GL buffers from a previous
+// build, if any, just sit dormant — Mesh::upload is what would replace
+// them on a re-upload).
+void apply_sections(ChunkSlot& slot,
+                    std::array<SectionBuild, kSectionsPerChunk>&& built) {
+    slot.any_section_has_mesh = false;
+    slot.quad_count_total     = 0;
+    bool union_init = false;
+
+    for (int i = 0; i < kSectionsPerChunk; ++i) {
+        auto& dst = slot.sections[i];
+        auto& src = built[i];
+        if (!src.indices.empty()) {
+            dst.mesh.upload(src.vertices, src.indices);
+            dst.aabb       = {src.aabb_min, src.aabb_max};
+            dst.quad_count = src.quad_count;
+            dst.has_mesh   = true;
+            slot.any_section_has_mesh = true;
+            slot.quad_count_total += src.quad_count;
+            if (!union_init) {
+                slot.chunk_aabb = dst.aabb;
+                union_init = true;
+            } else {
+                slot.chunk_aabb.min = glm::min(slot.chunk_aabb.min, dst.aabb.min);
+                slot.chunk_aabb.max = glm::max(slot.chunk_aabb.max, dst.aabb.max);
+            }
+        } else {
+            dst.has_mesh   = false;
+            dst.quad_count = 0;
+        }
+    }
+    if (!union_init) {
+        // Fully empty chunk — fall back to the block-extent AABB
+        // (returns a zero-extent box; nothing will pass the cull test).
+        slot.chunk_aabb = make_chunk_aabb(slot.coord, slot.chunk);
+    }
+}
+
+}  // namespace
+
+std::array<SectionBounds, kSectionsPerChunk>
+compute_section_bounds(ChunkCoord coord, const Chunk& chunk) {
+    auto mesh_data = build_chunk_mesh_greedy(chunk);
+    auto built     = bucket_quads_by_section(mesh_data, coord);
+    std::array<SectionBounds, kSectionsPerChunk> out;
+    for (int i = 0; i < kSectionsPerChunk; ++i) {
+        if (built[i].initialized) {
+            out[i].aabb     = {built[i].aabb_min, built[i].aabb_max};
+            out[i].has_mesh = true;
+        }
+    }
+    return out;
+}
+
+namespace {
+
 std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk, ChunkMeshData&& mesh_data) {
     auto slot = std::make_unique<ChunkSlot>();
     slot->coord = coord;
     slot->chunk = std::move(chunk);
-    slot->quad_count = mesh_data.quad_count;
-    if (!mesh_data.indices.empty()) {
-        slot->mesh.upload(mesh_data.vertices, mesh_data.indices);
-        slot->has_mesh = true;
-    }
-    slot->aabb = make_chunk_aabb(coord, slot->chunk);
+    auto built = bucket_quads_by_section(mesh_data, coord);
+    apply_sections(*slot, std::move(built));
     return slot;
 }
 
@@ -267,13 +403,13 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
 
     slot.chunk.set(lx, wy, lz, b);
     auto mesh_data = build_chunk_mesh_greedy(slot.chunk);
-    slot.mesh.upload(mesh_data.vertices, mesh_data.indices);
-    slot.has_mesh = !mesh_data.indices.empty();
-    slot.quad_count = mesh_data.quad_count;
-    // Edits can extend the chunk's solid Y range upward (placing a block in
-    // air) or contract it (breaking the bottom-most solid block), so the
-    // tight AABB has to follow or culling will drop the edit.
-    slot.aabb = make_chunk_aabb(slot.coord, slot.chunk);
+    // Edits can shift quads across section boundaries (placing a block on
+    // top of a tall column, breaking the lowest solid in a section), so
+    // every section is re-bucketed and the chunk_aabb gets rebuilt. Greedy
+    // meshing on a 16x256x16 chunk is sub-millisecond, so doing it again
+    // per edit is fine.
+    auto built = bucket_quads_by_section(mesh_data, slot.coord);
+    apply_sections(slot, std::move(built));
     return true;
 }
 
@@ -337,7 +473,7 @@ void World::debug_dump_visibility(const gfx::Frustum& frustum) const {
     int drawn = 0;
     for (const auto& kv : chunks_) {
         const ChunkSlot& s = *kv.second;
-        bool vis = frustum.intersects_aabb(s.aabb);
+        bool vis = frustum.intersects_aabb(s.chunk_aabb);
         if (vis) ++drawn;
         std::printf("  chunk (%+3d,%+3d)  %s\n",
                     s.coord.x, s.coord.z, vis ? "VISIBLE" : "culled");
@@ -348,16 +484,29 @@ void World::debug_dump_visibility(const gfx::Frustum& frustum) const {
 DrawStats World::draw_visible(const gfx::Frustum& frustum,
                               const gfx::Shader& shader) const {
     DrawStats stats;
-    stats.chunks_total = static_cast<int>(chunks_.size());
+    stats.chunks_total   = static_cast<int>(chunks_.size());
+    stats.sections_total = stats.chunks_total * kSectionsPerChunk;
     for (const auto& kv : chunks_) {
         const ChunkSlot& slot = *kv.second;
-        if (!slot.has_mesh || !frustum.intersects_aabb(slot.aabb)) continue;
-        glm::mat4 model = glm::translate(glm::mat4(1.0f),
-            glm::vec3(slot.aabb.min.x, 0.0f, slot.aabb.min.z));
-        shader.set_mat4("u_model", model);
-        slot.mesh.draw();
-        ++stats.chunks_drawn;
-        stats.triangles_drawn += slot.mesh.index_count() / 3;
+        if (!slot.any_section_has_mesh) continue;
+        if (!frustum.intersects_aabb(slot.chunk_aabb)) continue;
+
+        const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
+        const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
+        bool model_set = false;
+        bool drew_any  = false;
+        for (int i = 0; i < kSectionsPerChunk; ++i) {
+            const auto& sec = slot.sections[i];
+            if (!sec.has_mesh) continue;
+            if (!frustum.intersects_aabb(sec.aabb)) continue;
+            if (!model_set) { shader.set_mat4("u_model", model); model_set = true; }
+            sec.mesh.draw();
+            ++stats.sections_drawn;
+            stats.triangles_drawn += sec.mesh.index_count() / 3;
+            drew_any = true;
+        }
+        if (drew_any) ++stats.chunks_drawn;
     }
     return stats;
 }
@@ -365,16 +514,29 @@ DrawStats World::draw_visible(const gfx::Frustum& frustum,
 DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
     std::function<void(const glm::mat4& model)> set_model) const {
     DrawStats stats;
-    stats.chunks_total = static_cast<int>(chunks_.size());
+    stats.chunks_total   = static_cast<int>(chunks_.size());
+    stats.sections_total = stats.chunks_total * kSectionsPerChunk;
     for (const auto& kv : chunks_) {
         const ChunkSlot& slot = *kv.second;
-        if (!slot.has_mesh || !frustum.intersects_aabb(slot.aabb)) continue;
-        glm::mat4 model = glm::translate(glm::mat4(1.0f),
-            glm::vec3(slot.aabb.min.x, 0.0f, slot.aabb.min.z));
-        set_model(model);
-        slot.mesh.draw();
-        ++stats.chunks_drawn;
-        stats.triangles_drawn += slot.mesh.index_count() / 3;
+        if (!slot.any_section_has_mesh) continue;
+        if (!frustum.intersects_aabb(slot.chunk_aabb)) continue;
+
+        const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
+        const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
+        bool model_set = false;
+        bool drew_any  = false;
+        for (int i = 0; i < kSectionsPerChunk; ++i) {
+            const auto& sec = slot.sections[i];
+            if (!sec.has_mesh) continue;
+            if (!frustum.intersects_aabb(sec.aabb)) continue;
+            if (!model_set) { set_model(model); model_set = true; }
+            sec.mesh.draw();
+            ++stats.sections_drawn;
+            stats.triangles_drawn += sec.mesh.index_count() / 3;
+            drew_any = true;
+        }
+        if (drew_any) ++stats.chunks_drawn;
     }
     return stats;
 }
