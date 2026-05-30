@@ -200,8 +200,8 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
                 if      (y == 0)                                            b = BlockId::Stone;
                 else if (height <= kSeaLevel + kSandBand && y >= height-1)  b = BlockId::Sand;
                 else if (y == height && height >= kSnowBand)                b = BlockId::Snow;
-                else if (height >= kStoneBand && y == height)               b = BlockId::Stone;
                 else if (is_desert[z][x] && y >= height - 2)                b = BlockId::Sand;
+                else if (height >= kStoneBand && y == height)               b = BlockId::Stone;
                 else if (y == height)                                       b = BlockId::Grass;
                 else if (y >= height - 3)                                   b = BlockId::Dirt;
                 else                                                        b = BlockId::Stone;
