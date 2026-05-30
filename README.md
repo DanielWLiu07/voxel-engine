@@ -36,7 +36,8 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build) |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | ~940 chunks/sec, 9 workers |
-| Frustum cull ratio, gameplay viewpoint | 304 / 625 chunks drawn (~2.1x) |
+| Frustum cull, wide AABB (pre-tightening baseline) | 228 / 625 drawn (~2.7x) |
+| Frustum cull, tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
 | Frame time, radius 12, ~61k tris | 8.5 ms (150 fps) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
@@ -45,6 +46,14 @@ mesher's algorithmic gain on continuous terrain — that's what the CI gate
 enforces (>= 15x). Caves break face runs into smaller mergeable rectangles,
 so the same algorithm produces fewer quads but a lower ratio. Both numbers
 come out of `./build/voxel_engine --bench`.
+
+The frustum cull numbers come from `--bench`'s deterministic pose (camera at
+(0, 80, 0), yaw -90, pitch -15, 70° FOV, 16:9). Tight AABB means the per-chunk
+box uses the chunk's actual min/max solid-block Y instead of the full
+16×256×16 column — chunks whose terrain sits well above or below the camera
+get culled. Frustum-only culling at 70° FOV has a hard ceiling near 3×
+(geometric: the cone covers roughly a third of the surrounding disc); pushing
+past that needs occlusion culling or per-section AABBs.
 
 ## What's in here
 

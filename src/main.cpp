@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -114,6 +115,75 @@ int run_bench() {
     // mergeable face runs.
     bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
     bench_one(/*caves=*/true,  "with caves (gameplay terrain)");
+
+    // ---- Frustum cull benchmark ---------------------------------------
+    // CPU-only, deterministic. Generates a 25x25 chunk grid and counts how
+    // many AABBs the view frustum keeps, under four (AABB, far-plane)
+    // combinations so the improvement from tightening either dimension is
+    // visible side-by-side. No GL context needed.
+    constexpr int kRadius = kStreamRadius;
+    const int side = 2 * kRadius + 1;
+    const int total = side * side;
+    const float kFogEnd   = static_cast<float>(kRadius * world::kChunkSizeX) * 0.95f;
+    const float kFarTight = kFogEnd + static_cast<float>(world::kChunkSizeX);
+    constexpr float kFovDeg = 70.0f;
+    constexpr float kAspect = 16.0f / 9.0f;
+
+    world::TerrainGen cull_terrain(1337);
+    std::vector<gfx::AABB> wide_aabbs;
+    std::vector<gfx::AABB> tight_aabbs;
+    wide_aabbs.reserve(total);
+    tight_aabbs.reserve(total);
+    auto gen_t0 = std::chrono::steady_clock::now();
+    for (int cz = -kRadius; cz <= kRadius; ++cz) {
+        for (int cx = -kRadius; cx <= kRadius; ++cx) {
+            world::Chunk c;
+            cull_terrain.fill_chunk(cx, cz, c);
+            const float ox = static_cast<float>(cx * world::kChunkSizeX);
+            const float oz = static_cast<float>(cz * world::kChunkSizeZ);
+            wide_aabbs.push_back({{ox, 0.0f, oz},
+                                  {ox + world::kChunkSizeX,
+                                   static_cast<float>(world::kChunkSizeY),
+                                   oz + world::kChunkSizeZ}});
+            tight_aabbs.push_back(world::make_chunk_aabb({cx, cz}, c));
+        }
+    }
+    auto gen_t1 = std::chrono::steady_clock::now();
+    const double gen_ms = std::chrono::duration<double, std::milli>(gen_t1 - gen_t0).count();
+
+    // Pose roughly matches the README's "gameplay viewpoint": mid-air over
+    // the origin, looking down -Z with a slight downward pitch.
+    gfx::FlyCamera cam;
+    cam.set_position({0.0f, 80.0f, 0.0f});
+    cam.set_yaw_pitch(-90.0f, -15.0f);
+    const glm::mat4 view = cam.view_matrix();
+
+    auto count_visible = [&](const std::vector<gfx::AABB>& boxes, float zfar) {
+        gfx::Frustum f;
+        f.from_view_proj(cam.proj_matrix(kAspect, kFovDeg, 0.1f, zfar) * view);
+        int drawn = 0;
+        for (const auto& b : boxes) if (f.intersects_aabb(b)) ++drawn;
+        return drawn;
+    };
+
+    const int wide_far500   = count_visible(wide_aabbs,  500.0f);
+    const int tight_far500  = count_visible(tight_aabbs, 500.0f);
+    const int wide_fartight = count_visible(wide_aabbs,  kFarTight);
+    const int tight_fartight= count_visible(tight_aabbs, kFarTight);
+
+    auto ratio = [&](int drawn) { return drawn > 0 ? double(total)/drawn : 0.0; };
+
+    std::printf("\n==== frustum cull benchmark (radius %d, %d chunks, pos (0,80,0), yaw -90, pitch -15, fov %.0f) ====\n",
+                kRadius, total, kFovDeg);
+    std::printf("(grid built in %.1f ms)\n", gen_ms);
+    std::printf("wide AABB,  far 500 m  : %3d/%d drawn  (%.2fx cull)   <- baseline (matches old README)\n",
+                wide_far500, total, ratio(wide_far500));
+    std::printf("tight AABB, far 500 m  : %3d/%d drawn  (%.2fx cull)\n",
+                tight_far500, total, ratio(tight_far500));
+    std::printf("wide AABB,  far %3.0f m  : %3d/%d drawn  (%.2fx cull)\n",
+                kFarTight, wide_fartight, total, ratio(wide_fartight));
+    std::printf("tight AABB, far %3.0f m  : %3d/%d drawn  (%.2fx cull)   <- after this commit\n",
+                kFarTight, tight_fartight, total, ratio(tight_fartight));
     return EXIT_SUCCESS;
 }
 
@@ -478,12 +548,17 @@ int main(int argc, char** argv) {
 
         render::FrameView fv;
         fv.view       = cam.view_matrix();
-        fv.proj       = cam.proj_matrix(aspect);
         fv.camera_pos = cam.position();
         fv.window_w   = fb_w;
         fv.window_h   = fb_h;
         fv.fog_end    = static_cast<float>(kStreamRadius * world::kChunkSizeX) * 0.95f;
         fv.fog_start  = fv.fog_end * 0.78f;  // less aggressive midrange wash-out
+        // Camera far plane sits just past the fog plane: anything further is
+        // fully fogged out and contributes nothing. Tightening it from the
+        // 500 m default also gives the frustum a real far-plane cull instead
+        // of one that never trips at radius 12.
+        const float kCameraFar = fv.fog_end + static_cast<float>(world::kChunkSizeX);
+        fv.proj       = cam.proj_matrix(aspect, 70.0f, 0.1f, kCameraFar);
         fv.time_seconds = static_cast<float>(now);
 
         render::LightingFrame light = render::compute_lighting(time_of_day);

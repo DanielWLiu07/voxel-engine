@@ -46,6 +46,12 @@ struct ChunkSlot {
     bool       has_mesh = false;
 };
 
+// Tight per-chunk AABB: XZ from the chunk's world origin, Y from the actual
+// min/max of solid blocks (closed range, +1 on max). Exposed so the cull
+// benchmark can build the same AABBs the renderer uses without going through
+// the GL-backed ChunkSlot path.
+gfx::AABB make_chunk_aabb(ChunkCoord coord, const Chunk& chunk);
+
 struct DrawStats {
     int chunks_total = 0;
     int chunks_drawn = 0;

@@ -31,12 +31,42 @@ namespace world {
 
 namespace {
 
-gfx::AABB make_chunk_aabb(ChunkCoord c) {
+// Min/max Y of any solid block in the chunk. Returned as a closed range
+// (max_y is inclusive). Empty chunks return {0,0} — slot has no mesh so
+// the AABB is never tested anyway.
+std::pair<int,int> tight_y_range(const Chunk& chunk) {
+    int min_y = -1, max_y = -1;
+    for (int y = 0; y < kChunkSizeY; ++y) {
+        bool any_solid = false;
+        for (int z = 0; z < kChunkSizeZ && !any_solid; ++z) {
+            for (int x = 0; x < kChunkSizeX; ++x) {
+                if (is_solid(chunk.get(x, y, z))) { any_solid = true; break; }
+            }
+        }
+        if (any_solid) {
+            if (min_y < 0) min_y = y;
+            max_y = y;
+        }
+    }
+    if (min_y < 0) return {0, 0};
+    return {min_y, max_y};
+}
+
+}  // namespace
+
+// Tight per-chunk AABB derived from the chunk's solid extents. With wide
+// (0..256) Y, a horizontally-forward frustum intersects almost every column
+// it overlaps in XZ — vertical pruning collapses to nothing. Tight Y means
+// chunks whose terrain sits well above or below the camera get culled.
+gfx::AABB make_chunk_aabb(ChunkCoord c, const Chunk& chunk) {
     const float ox = static_cast<float>(c.x * kChunkSizeX);
     const float oz = static_cast<float>(c.z * kChunkSizeZ);
-    return {{ox, 0.0f, oz},
-            {ox + kChunkSizeX, static_cast<float>(kChunkSizeY), oz + kChunkSizeZ}};
+    auto [min_y, max_y] = tight_y_range(chunk);
+    return {{ox,                 static_cast<float>(min_y),    oz},
+            {ox + kChunkSizeX,   static_cast<float>(max_y + 1), oz + kChunkSizeZ}};
 }
+
+namespace {
 
 std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk, ChunkMeshData&& mesh_data) {
     auto slot = std::make_unique<ChunkSlot>();
@@ -47,7 +77,7 @@ std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk, ChunkMesh
         slot->mesh.upload(mesh_data.vertices, mesh_data.indices);
         slot->has_mesh = true;
     }
-    slot->aabb = make_chunk_aabb(coord);
+    slot->aabb = make_chunk_aabb(coord, slot->chunk);
     return slot;
 }
 
@@ -240,6 +270,10 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     slot.mesh.upload(mesh_data.vertices, mesh_data.indices);
     slot.has_mesh = !mesh_data.indices.empty();
     slot.quad_count = mesh_data.quad_count;
+    // Edits can extend the chunk's solid Y range upward (placing a block in
+    // air) or contract it (breaking the bottom-most solid block), so the
+    // tight AABB has to follow or culling will drop the edit.
+    slot.aabb = make_chunk_aabb(slot.coord, slot.chunk);
     return true;
 }
 
