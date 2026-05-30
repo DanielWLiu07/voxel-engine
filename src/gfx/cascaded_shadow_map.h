@@ -36,13 +36,18 @@ public:
         glm::mat4 light_vp;
         float     split_far_view; // distance along camera forward
     };
+    // shadow_map_size enables texel-grid snap (kills shimmering).
+    // caster_pullback extends the light camera back along +light_dir so
+    // occluders just outside the cascade sphere still cast into the depth pass.
     static std::array<Split, kNumCascades> fit_cascades(
         const glm::mat4& camera_view,
         const glm::mat4& camera_proj,
         const glm::vec3& light_dir,
         float near_plane,
         float far_plane,
-        float lambda = 0.5f);
+        float lambda = 0.5f,
+        int   shadow_map_size = 2048,
+        float caster_pullback = 80.0f);
 
 private:
     void destroy();
