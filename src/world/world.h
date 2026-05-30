@@ -10,6 +10,7 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -37,13 +38,31 @@ struct ChunkCoordHash {
     }
 };
 
-struct ChunkSlot {
-    ChunkCoord coord{};
-    Chunk      chunk;
+// Vertical sub-chunks. The mesh is still built chunk-wide (so the greedy
+// merger doesn't get split at section boundaries), then bucketed into
+// kSectionsPerChunk per-section meshes. Each section has its own tight
+// AABB and is culled independently — the chunk AABB is the union.
+inline constexpr int kSectionHeight    = 32;
+inline constexpr int kSectionsPerChunk = kChunkSizeY / kSectionHeight;
+static_assert(kSectionHeight * kSectionsPerChunk == kChunkSizeY,
+              "kChunkSizeY must be a clean multiple of kSectionHeight");
+
+struct ChunkSection {
     gfx::Mesh  mesh;
     gfx::AABB  aabb{};
     int        quad_count = 0;
     bool       has_mesh = false;
+};
+
+struct ChunkSlot {
+    ChunkCoord coord{};
+    Chunk      chunk;
+    std::array<ChunkSection, kSectionsPerChunk> sections{};
+    // Union of section AABBs — the chunk-level fast-path test. If this
+    // misses the frustum, we skip all section tests for the chunk.
+    gfx::AABB  chunk_aabb{};
+    int        quad_count_total = 0;  // sum of section quad counts
+    bool       any_section_has_mesh = false;
 };
 
 // Tight per-chunk AABB: XZ from the chunk's world origin, Y from the actual
@@ -52,9 +71,25 @@ struct ChunkSlot {
 // the GL-backed ChunkSlot path.
 gfx::AABB make_chunk_aabb(ChunkCoord coord, const Chunk& chunk);
 
+// One row of the bench's section-AABB readout: the world-space AABB plus
+// whether the section actually contains any meshed quads (empty sections
+// shouldn't count against the cull ratio).
+struct SectionBounds {
+    gfx::AABB aabb{};
+    bool      has_mesh = false;
+};
+
+// Runs the greedy mesher + the same per-section bucketing the renderer uses
+// and returns just the section AABBs. CPU-only, no GL needed — meant for
+// --bench, not the hot path.
+std::array<SectionBounds, kSectionsPerChunk>
+compute_section_bounds(ChunkCoord coord, const Chunk& chunk);
+
 struct DrawStats {
     int chunks_total = 0;
     int chunks_drawn = 0;
+    int sections_total = 0;
+    int sections_drawn = 0;
     std::size_t triangles_drawn = 0;
 };
 

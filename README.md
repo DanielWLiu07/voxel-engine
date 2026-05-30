@@ -36,8 +36,10 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build) |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | ~940 chunks/sec, 9 workers |
-| Frustum cull, wide AABB (pre-tightening baseline) | 228 / 625 drawn (~2.7x) |
-| Frustum cull, tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
+| Frustum cull (chunks), wide AABB (pre-tightening) | 228 / 625 drawn (~2.7x) |
+| Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
+| Frustum cull (sections), 32-block sub-chunks, vs non-empty | 405 / 1250 drawn (~3.1x) |
+| Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
 | Frame time, radius 12, ~61k tris | 8.5 ms (150 fps) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
@@ -48,12 +50,22 @@ so the same algorithm produces fewer quads but a lower ratio. Both numbers
 come out of `./build/voxel_engine --bench`.
 
 The frustum cull numbers come from `--bench`'s deterministic pose (camera at
-(0, 80, 0), yaw -90, pitch -15, 70° FOV, 16:9). Tight AABB means the per-chunk
-box uses the chunk's actual min/max solid-block Y instead of the full
-16×256×16 column — chunks whose terrain sits well above or below the camera
-get culled. Frustum-only culling at 70° FOV has a hard ceiling near 3×
-(geometric: the cone covers roughly a third of the surrounding disc); pushing
-past that needs occlusion culling or per-section AABBs.
+(0, 80, 0), yaw -90, pitch -15, 70° FOV, 16:9). The chunk row counts loaded
+chunks that survive the per-chunk tight AABB test. The section rows split
+each chunk into eight 32-block vertical sections (each with its own AABB),
+test each independently, and count survivors. Two denominators are shown
+because both framings are valid:
+
+- *vs non-empty* compares against the realistic baseline (~1250 sections
+  actually contain geometry, the other 3750 are air the renderer would
+  never have drawn anyway).
+- *vs all loaded sections* compares against a naive "draw every loaded
+  section" baseline. It's the bigger number but the less-honest framing.
+
+Per-chunk frustum culling at 70° FOV has a geometric ceiling near ~3× (the
+cone covers about a third of the surrounding disc); the section pass adds a
+modest tightening within visible chunks. Bigger reductions need occlusion
+culling, not finer-grain AABBs.
 
 ## What's in here
 
