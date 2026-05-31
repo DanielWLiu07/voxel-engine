@@ -47,19 +47,26 @@ inline constexpr int kSectionsPerChunk = kChunkSizeY / kSectionHeight;
 static_assert(kSectionHeight * kSectionsPerChunk == kChunkSizeY,
               "kChunkSizeY must be a clean multiple of kSectionHeight");
 
+// One section's slice of its chunk's shared mesh: an index range into the
+// chunk EBO + the section's own world-space AABB for culling. Sharing one
+// VBO per chunk (instead of one per section) is what keeps load-time GL
+// throughput on par with the pre-section pipeline.
 struct ChunkSection {
-    gfx::Mesh  mesh;
-    gfx::AABB  aabb{};
-    int        quad_count = 0;
-    bool       has_mesh = false;
+    gfx::AABB    aabb{};
+    std::uint32_t index_offset = 0;
+    std::uint32_t index_count  = 0;
+    int           quad_count   = 0;
+    bool          has_mesh     = false;
 };
 
 struct ChunkSlot {
     ChunkCoord coord{};
     Chunk      chunk;
+    // One mesh per chunk; sections index into it via (index_offset, index_count).
+    gfx::Mesh  chunk_mesh;
     std::array<ChunkSection, kSectionsPerChunk> sections{};
-    // Union of section AABBs — the chunk-level fast-path test. If this
-    // misses the frustum, we skip all section tests for the chunk.
+    // Union of section AABBs - the chunk-level fast-path test. If this misses
+    // the frustum, we skip all section tests for the chunk.
     gfx::AABB  chunk_aabb{};
     int        quad_count_total = 0;  // sum of section quad counts
     bool       any_section_has_mesh = false;

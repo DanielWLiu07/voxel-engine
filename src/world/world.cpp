@@ -150,42 +150,62 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
     return out;
 }
 
-// Upload the bucketed sections into a slot, rebuild the chunk-level
-// union AABB. Sections with no quads are marked has_mesh=false and
-// skipped at draw time (their leftover GL buffers from a previous
-// build, if any, just sit dormant — Mesh::upload is what would replace
-// them on a re-upload).
+// Concatenate all non-empty section meshes into one vertex+index buffer
+// per chunk and upload once. Each section keeps an (index_offset,
+// index_count) slice into that shared EBO so culling and drawing happen
+// at section granularity, but the GL upload + VAO bind happen at chunk
+// granularity. Without this, each chunk does up to 8 glBufferData calls
+// at load time and one glBindVertexArray per visible section at draw.
 void apply_sections(ChunkSlot& slot,
                     std::array<SectionBuild, kSectionsPerChunk>&& built) {
     slot.any_section_has_mesh = false;
     slot.quad_count_total     = 0;
     bool union_init = false;
 
+    std::vector<gfx::VertexPNT> all_vertices;
+    std::vector<std::uint32_t>  all_indices;
+    std::size_t reserved_v = 0, reserved_i = 0;
+    for (const auto& s : built) { reserved_v += s.vertices.size(); reserved_i += s.indices.size(); }
+    all_vertices.reserve(reserved_v);
+    all_indices.reserve(reserved_i);
+
     for (int i = 0; i < kSectionsPerChunk; ++i) {
         auto& dst = slot.sections[i];
         auto& src = built[i];
-        if (!src.indices.empty()) {
-            dst.mesh.upload(src.vertices, src.indices);
-            dst.aabb       = {src.aabb_min, src.aabb_max};
-            dst.quad_count = src.quad_count;
-            dst.has_mesh   = true;
-            slot.any_section_has_mesh = true;
-            slot.quad_count_total += src.quad_count;
-            if (!union_init) {
-                slot.chunk_aabb = dst.aabb;
-                union_init = true;
-            } else {
-                slot.chunk_aabb.min = glm::min(slot.chunk_aabb.min, dst.aabb.min);
-                slot.chunk_aabb.max = glm::max(slot.chunk_aabb.max, dst.aabb.max);
-            }
+        if (src.indices.empty()) {
+            dst.has_mesh     = false;
+            dst.quad_count   = 0;
+            dst.index_offset = 0;
+            dst.index_count  = 0;
+            continue;
+        }
+        const std::uint32_t vert_base = static_cast<std::uint32_t>(all_vertices.size());
+        const std::uint32_t idx_start = static_cast<std::uint32_t>(all_indices.size());
+        all_vertices.insert(all_vertices.end(), src.vertices.begin(), src.vertices.end());
+        for (auto idx : src.indices) all_indices.push_back(idx + vert_base);
+
+        dst.aabb         = {src.aabb_min, src.aabb_max};
+        dst.quad_count   = src.quad_count;
+        dst.index_offset = idx_start;
+        dst.index_count  = static_cast<std::uint32_t>(src.indices.size());
+        dst.has_mesh     = true;
+        slot.any_section_has_mesh = true;
+        slot.quad_count_total += src.quad_count;
+
+        if (!union_init) {
+            slot.chunk_aabb = dst.aabb;
+            union_init = true;
         } else {
-            dst.has_mesh   = false;
-            dst.quad_count = 0;
+            slot.chunk_aabb.min = glm::min(slot.chunk_aabb.min, dst.aabb.min);
+            slot.chunk_aabb.max = glm::max(slot.chunk_aabb.max, dst.aabb.max);
         }
     }
+    if (slot.any_section_has_mesh) {
+        slot.chunk_mesh.upload(all_vertices, all_indices);
+    }
     if (!union_init) {
-        // Fully empty chunk — fall back to the block-extent AABB
-        // (returns a zero-extent box; nothing will pass the cull test).
+        // Fully empty chunk - fall back to the block-extent AABB (returns a
+        // zero-extent box; nothing will pass the cull test).
         slot.chunk_aabb = make_chunk_aabb(slot.coord, slot.chunk);
     }
 }
@@ -494,16 +514,20 @@ DrawStats World::draw_visible(const gfx::Frustum& frustum,
         const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
         const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
         glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
-        bool model_set = false;
+        bool vao_bound = false;
         bool drew_any  = false;
         for (int i = 0; i < kSectionsPerChunk; ++i) {
             const auto& sec = slot.sections[i];
             if (!sec.has_mesh) continue;
             if (!frustum.intersects_aabb(sec.aabb)) continue;
-            if (!model_set) { shader.set_mat4("u_model", model); model_set = true; }
-            sec.mesh.draw();
+            if (!vao_bound) {
+                shader.set_mat4("u_model", model);
+                slot.chunk_mesh.bind();
+                vao_bound = true;
+            }
+            slot.chunk_mesh.draw_range_bound(sec.index_offset, sec.index_count);
             ++stats.sections_drawn;
-            stats.triangles_drawn += sec.mesh.index_count() / 3;
+            stats.triangles_drawn += sec.index_count / 3;
             drew_any = true;
         }
         if (drew_any) ++stats.chunks_drawn;
@@ -524,16 +548,20 @@ DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
         const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
         const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
         glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
-        bool model_set = false;
+        bool vao_bound = false;
         bool drew_any  = false;
         for (int i = 0; i < kSectionsPerChunk; ++i) {
             const auto& sec = slot.sections[i];
             if (!sec.has_mesh) continue;
             if (!frustum.intersects_aabb(sec.aabb)) continue;
-            if (!model_set) { set_model(model); model_set = true; }
-            sec.mesh.draw();
+            if (!vao_bound) {
+                set_model(model);
+                slot.chunk_mesh.bind();
+                vao_bound = true;
+            }
+            slot.chunk_mesh.draw_range_bound(sec.index_offset, sec.index_count);
             ++stats.sections_drawn;
-            stats.triangles_drawn += sec.mesh.index_count() / 3;
+            stats.triangles_drawn += sec.index_count / 3;
             drew_any = true;
         }
         if (drew_any) ++stats.chunks_drawn;
