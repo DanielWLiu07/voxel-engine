@@ -205,14 +205,25 @@ int run_bench() {
                 tight_far500, total, ratio(tight_far500, total));
     std::printf("  wide AABB,  far %3.0f m  : %3d/%d drawn  (%.2fx)\n",
                 kFarTight, wide_fartight, total, ratio(wide_fartight, total));
-    std::printf("  tight AABB, far %3.0f m  : %3d/%d drawn  (%.2fx)   <- previous commit\n",
+    std::printf("  tight AABB, far %3.0f m  : %3d/%d drawn  (%.2fx)   <- chunk-level final\n",
                 kFarTight, tight_fartight, total, ratio(tight_fartight, total));
     std::printf("section-level cull (32-block vertical sections, tight AABB, far %3.0f m):\n", kFarTight);
-    std::printf("  vs non-empty sections    : %4d / %d  (%.2fx)   <- honest per-section cull ratio\n",
+    std::printf("  vs non-empty sections    : %4d / %d  (%.2fx)   <- per-section cull ratio\n",
                 sections_drawn, total_sections_nonempty,
                 ratio(sections_drawn, total_sections_nonempty));
     std::printf("  vs all loaded sections   : %4d / %d  (%.2fx)   <- vs naive 'draw every section'\n",
                 sections_drawn, total * world::kSectionsPerChunk,
+                ratio(sections_drawn, total * world::kSectionsPerChunk));
+
+    // Stable, machine-readable summary line so CI can gate the cull ratios
+    // without fishing through the prose. Whitespace-separated key=value
+    // pairs after a fixed prefix.
+    std::printf("\nBENCH_SUMMARY"
+                " chunk_tight=%.2f"
+                " section_nonempty=%.2f"
+                " section_total=%.2f\n",
+                ratio(tight_fartight, total),
+                ratio(sections_drawn, total_sections_nonempty),
                 ratio(sections_drawn, total * world::kSectionsPerChunk));
     return EXIT_SUCCESS;
 }
