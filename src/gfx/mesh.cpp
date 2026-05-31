@@ -68,4 +68,14 @@ void Mesh::draw() const {
                    GL_UNSIGNED_INT, nullptr);
 }
 
+void Mesh::bind() const {
+    if (vao_) glBindVertexArray(vao_);
+}
+
+void Mesh::draw_range_bound(std::size_t index_offset, std::size_t count) const {
+    if (!vao_ || count == 0) return;
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(count), GL_UNSIGNED_INT,
+                   reinterpret_cast<void*>(index_offset * sizeof(std::uint32_t)));
+}
+
 }  // namespace gfx

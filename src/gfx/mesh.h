@@ -30,6 +30,12 @@ public:
     void upload(std::span<const VertexPNT> vertices, std::span<const std::uint32_t> indices);
     void draw() const;
 
+    // Index-range draw for sliced meshes (e.g. per-section sub-chunks sharing
+    // one VBO per chunk). Caller is responsible for binding the VAO first
+    // (typically via bind() before the first draw_range_bound in a batch).
+    void bind() const;
+    void draw_range_bound(std::size_t index_offset, std::size_t index_count) const;
+
     std::size_t index_count() const { return index_count_; }
 
 private:
