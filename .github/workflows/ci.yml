@@ -41,16 +41,37 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Run benchmark and validate greedy ratio
+      - name: Run benchmark and validate ratios
         run: |
           set -euo pipefail
           OUTPUT=$(./build/voxel_engine --bench)
           echo "$OUTPUT"
-          RATIO=$(echo "$OUTPUT" | grep -oE '[0-9]+\.[0-9]+x fewer quads' | head -1 | grep -oE '[0-9]+\.[0-9]+')
-          if [ -z "$RATIO" ]; then
-            echo "Failed to parse greedy ratio from --bench output"
-            exit 1
+
+          # Greedy meshing ratio (contiguous chunk, first 'NN.NNx fewer quads' line).
+          GREEDY=$(echo "$OUTPUT" | grep -oE '[0-9]+\.[0-9]+x fewer quads' | head -1 | grep -oE '[0-9]+\.[0-9]+')
+          if [ -z "$GREEDY" ]; then
+            echo "Failed to parse greedy ratio from --bench output"; exit 1
           fi
-          echo "Measured ratio: ${RATIO}x"
-          awk -v r="$RATIO" 'BEGIN { if (r+0 < 15.0) { printf "ratio %s below threshold 15.0\n", r; exit 1 } }'
-          echo "Greedy ratio ${RATIO}x meets threshold (>= 15.0x)"
+
+          # Cull ratios from the stable BENCH_SUMMARY line.
+          SUMMARY=$(echo "$OUTPUT" | grep '^BENCH_SUMMARY ' | head -1)
+          if [ -z "$SUMMARY" ]; then
+            echo "Failed to find BENCH_SUMMARY line in --bench output"; exit 1
+          fi
+          CHUNK_TIGHT=$(echo "$SUMMARY"      | grep -oE 'chunk_tight=[0-9]+\.[0-9]+'      | cut -d= -f2)
+          SECTION_NONEMPTY=$(echo "$SUMMARY" | grep -oE 'section_nonempty=[0-9]+\.[0-9]+' | cut -d= -f2)
+          SECTION_TOTAL=$(echo "$SUMMARY"    | grep -oE 'section_total=[0-9]+\.[0-9]+'    | cut -d= -f2)
+
+          echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x"
+
+          # Thresholds carry ~10% slack below current measurements (M4 18.1 / 2.96 / 3.09 / 12.35).
+          # If GH-hosted runners drift further, raise the slack rather than tightening the code.
+          gate() {
+              awk -v name="$1" -v val="$2" -v min="$3" \
+                'BEGIN { if (val+0 < min+0) { printf "%s = %s below threshold %s\n", name, val, min; exit 1 }
+                         else                 { printf "%s = %s OK (>= %s)\n",        name, val, min } }'
+          }
+          gate greedy            "$GREEDY"           15.0
+          gate chunk_tight       "$CHUNK_TIGHT"       2.7
+          gate section_nonempty  "$SECTION_NONEMPTY"  2.8
+          gate section_total     "$SECTION_TOTAL"    11.0
