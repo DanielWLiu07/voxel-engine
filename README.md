@@ -35,12 +35,12 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build) |
 | Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build) |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
-| Async chunk pipeline, radius 12 (625 chunks) | ~940 chunks/sec, 9 workers |
+| Async chunk pipeline, radius 12 (625 chunks) | ~1040 chunks/sec, 9 workers |
 | Frustum cull (chunks), wide AABB (pre-tightening) | 228 / 625 drawn (~2.7x) |
 | Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
 | Frustum cull (sections), 32-block sub-chunks, vs non-empty | 405 / 1250 drawn (~3.1x) |
 | Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
-| Frame time, radius 12, ~61k tris | 8.5 ms (150 fps) |
+| Frame time, radius 12, 159k tris, vsync off | 7.55 ms avg, 7.68 ms p50, 16.1 ms p99 (~133 fps) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
@@ -66,6 +66,13 @@ Frustum-only culling at 70° FOV ceilings near 3x because the cone covers
 roughly a third of the surrounding disc. The section pass adds modest
 tightening within visible chunks. Bigger reductions from here need
 occlusion, not finer AABBs.
+
+The frame-time row comes from `./build/voxel_engine --bench-frame 300`,
+which opens a hidden window, locks the camera to the same pose as the
+cull bench, lets the chunk stream settle, then collects 300 vsync-off
+samples and prints one stable summary line. p99 reflects occasional
+heavy frames (cascade refresh, chunk stream events). The avg is the
+steady-state gameplay number at this pose.
 
 ## What's in here
 
