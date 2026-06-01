@@ -24,6 +24,7 @@
 #include "world/world.h"
 #include "world/world_io.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -311,8 +312,18 @@ void update_movement(core::Input& input, float dt,
 }  // namespace
 
 int main(int argc, char** argv) {
+    // --bench (CPU mesher + cull bench) returns early.
+    // --bench-frame N (GL frame-time bench) opens a hidden window, locks the
+    // camera to a fixed pose, runs N frames vsync-off, prints a stable
+    // BENCH_FRAME line and exits. Same renderer the gameplay uses.
+    int bench_frames = 0;
     for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--bench") return run_bench();
+        std::string_view arg = argv[i];
+        if (arg == "--bench") return run_bench();
+        if (arg == "--bench-frame" && i + 1 < argc) {
+            bench_frames = std::atoi(argv[i + 1]);
+            ++i;
+        }
     }
 
     glfwSetErrorCallback(glfw_error);
@@ -327,6 +338,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 2);
+    if (bench_frames > 0) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
     if (!window) {
@@ -334,8 +346,8 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     glfwMakeContextCurrent(window);
-    bool vsync_enabled = true;
-    glfwSwapInterval(1);
+    bool vsync_enabled = (bench_frames == 0);
+    glfwSwapInterval(vsync_enabled ? 1 : 0);
 
     int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0) {
@@ -436,6 +448,12 @@ int main(int argc, char** argv) {
     gfx::FlyCamera cam;
     cam.set_position({0.0f, 80.0f, 80.0f});
     cam.set_yaw_pitch(-90.0f, -35.0f);
+    if (bench_frames > 0) {
+        // Match the --bench cull pose so frame-time and cull-ratio numbers
+        // are taken from the same vantage and stay comparable.
+        cam.set_position({0.0f, 80.0f, 0.0f});
+        cam.set_yaw_pitch(-90.0f, -15.0f);
+    }
 
     core::Input input;
     input.attach(window);
@@ -477,6 +495,12 @@ int main(int argc, char** argv) {
     world::DrawStats last_stats{};
     float smoothed_fps      = 0.0f;
     float smoothed_frame_ms = 0.0f;
+
+    // --bench-frame state: collected per-frame after the initial chunk load
+    // settles, so the samples reflect steady-state rendering rather than
+    // the streaming ramp.
+    std::vector<double> bench_samples;
+    if (bench_frames > 0) bench_samples.reserve(static_cast<std::size_t>(bench_frames));
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -697,6 +721,37 @@ int main(int argc, char** argv) {
 
         ++frame_count;
         ++frame_index;
+
+        if (bench_frames > 0 && initial_load_logged) {
+            bench_samples.push_back(static_cast<double>(dt) * 1000.0);
+            if (static_cast<int>(bench_samples.size()) >= bench_frames) {
+                std::vector<double> sorted = bench_samples;
+                std::sort(sorted.begin(), sorted.end());
+                const std::size_t n = sorted.size();
+                double sum = 0.0;
+                for (double v : sorted) sum += v;
+                const double avg = sum / static_cast<double>(n);
+                const double p50 = sorted[n / 2];
+                const double p99 = sorted[std::min<std::size_t>(n - 1,
+                                            static_cast<std::size_t>(n * 0.99))];
+                const double mn  = sorted.front();
+                const double mx  = sorted.back();
+                std::printf("\nBENCH_FRAME"
+                            " radius=%d chunks=%d frames=%zu"
+                            " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
+                            " min_ms=%.2f max_ms=%.2f avg_fps=%.1f"
+                            " drawn_chunks=%d drawn_sections=%d tris=%zu\n",
+                            kStreamRadius, total_chunks, n,
+                            avg, p50, p99, mn, mx,
+                            (avg > 0.0 ? 1000.0 / avg : 0.0),
+                            last_stats.chunks_drawn,
+                            last_stats.sections_drawn,
+                            last_stats.triangles_drawn);
+                std::fflush(stdout);
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
+        }
+
         if (now - last_time >= 1.0) {
             char title[256];
             std::snprintf(title, sizeof(title),
