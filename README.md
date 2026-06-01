@@ -44,19 +44,22 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
 Frame time scaling, vsync off, deterministic bench pose, M4:
 
-| Radius | Chunks | Tris drawn | Sections drawn | Avg ms | p50 ms | p99 ms | Avg fps |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |  289 |  71,920 | 184 | 7.54 | 7.56 | 18.97 | 132.7 |
-| 10 |  441 | 111,194 | 285 | 7.37 | 7.62 | 15.85 | 135.6 |
-| 12 |  625 | 159,080 | 405 | 8.01 | 7.88 | 18.00 | 124.9 |
-| 14 |  841 | 217,430 | 542 | 8.22 | 8.12 | 18.35 | 121.6 |
-| 16 | 1,089 | 278,890 | 699 | 8.81 | 8.39 | 18.30 | 113.5 |
+| Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+|  8 |   289 | 184 |  71,920 | 7.27 | 7.23 | 17.87 | 137.5 |  9.9M | 177 MB |
+| 10 |   441 | 285 | 111,194 | 8.20 | 7.94 | 29.63 | 122.0 | 13.6M | 212 MB |
+| 12 |   625 | 405 | 159,080 | 7.58 | 7.93 | 13.92 | 131.9 | 21.0M | 236 MB |
+| 14 |   841 | 542 | 217,430 | 8.31 | 8.25 | 16.46 | 120.4 | 26.2M | 280 MB |
+| 16 | 1,089 | 699 | 278,890 | 8.53 | 8.38 | 16.49 | 117.3 | 32.7M | 297 MB |
 
 Triangle count grows 3.9x from radius 8 to 16; avg frame time grows
-only 17%. The section-AABB cull holds the per-frame draw work close
-to a constant while the loaded world quadruples. Fixed per-frame cost
-(sky, water, post-process, base shadow pass) accounts for most of the
-~7 ms floor.
+17%. Section-AABB culling holds drawn-section count close to a
+constant fraction (60-65% of non-empty sections) while the loaded
+world quadruples. Most of the ~7 ms floor is fixed per-frame work
+(sky, water, post-process, base shadow pass). Peak RSS scales
+sub-linearly with chunk count because the worker pool, FBOs, and
+post-process chain are constant cost on top of the per-chunk
+mesh + block data.
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
 mesher's algorithmic gain on continuous terrain, which is what the CI gate

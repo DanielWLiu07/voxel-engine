@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string_view>
+#include <sys/resource.h>
 #include <thread>
 #include <vector>
 
@@ -736,17 +737,31 @@ int main(int argc, char** argv) {
                                             static_cast<std::size_t>(n * 0.99))];
                 const double mn  = sorted.front();
                 const double mx  = sorted.back();
+                // Peak RSS. ru_maxrss is bytes on macOS, kilobytes on Linux.
+                struct rusage ru{};
+                getrusage(RUSAGE_SELF, &ru);
+#ifdef __APPLE__
+                const double peak_mb = static_cast<double>(ru.ru_maxrss) / (1024.0 * 1024.0);
+#else
+                const double peak_mb = static_cast<double>(ru.ru_maxrss) / 1024.0;
+#endif
+                const double tris_per_sec = (avg > 0.0)
+                    ? static_cast<double>(last_stats.triangles_drawn) * 1000.0 / avg
+                    : 0.0;
+
                 std::printf("\nBENCH_FRAME"
                             " radius=%d chunks=%d frames=%zu"
                             " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
                             " min_ms=%.2f max_ms=%.2f avg_fps=%.1f"
-                            " drawn_chunks=%d drawn_sections=%d tris=%zu\n",
+                            " drawn_chunks=%d drawn_sections=%d tris=%zu"
+                            " tris_per_sec=%.0f peak_rss_mb=%.1f\n",
                             kStreamRadius, total_chunks, n,
                             avg, p50, p99, mn, mx,
                             (avg > 0.0 ? 1000.0 / avg : 0.0),
                             last_stats.chunks_drawn,
                             last_stats.sections_drawn,
-                            last_stats.triangles_drawn);
+                            last_stats.triangles_drawn,
+                            tris_per_sec, peak_mb);
                 std::fflush(stdout);
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
