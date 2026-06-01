@@ -318,6 +318,7 @@ int main(int argc, char** argv) {
     // camera to a fixed pose, runs N frames vsync-off, prints a stable
     // BENCH_FRAME line and exits. Same renderer the gameplay uses.
     int bench_frames = 0;
+    bool bench_pass_breakdown = false;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--bench") return run_bench();
@@ -325,6 +326,7 @@ int main(int argc, char** argv) {
             bench_frames = std::atoi(argv[i + 1]);
             ++i;
         }
+        if (arg == "--pass-breakdown") bench_pass_breakdown = true;
     }
 
     glfwSetErrorCallback(glfw_error);
@@ -503,6 +505,38 @@ int main(int argc, char** argv) {
     std::vector<double> bench_samples;
     if (bench_frames > 0) bench_samples.reserve(static_cast<std::size_t>(bench_frames));
 
+    // --pass-breakdown state. Each per-pass accumulator captures one entry
+    // per frame after initial_load_logged becomes true. glFinish bracketing
+    // forces the GPU to drain before timing, so these reflect actual
+    // dispatch+execution wall time rather than CPU command-submission only;
+    // the trade-off is that the frame-level avg_ms in this mode is slightly
+    // inflated by the synchronization itself.
+    std::vector<double> pass_ms_shadow, pass_ms_sky, pass_ms_terrain,
+                        pass_ms_water,  pass_ms_postfx;
+    if (bench_pass_breakdown) {
+        const std::size_t reserve_n = bench_frames > 0
+            ? static_cast<std::size_t>(bench_frames) : 1024;
+        pass_ms_shadow.reserve(reserve_n);
+        pass_ms_sky.reserve(reserve_n);
+        pass_ms_terrain.reserve(reserve_n);
+        pass_ms_water.reserve(reserve_n);
+        pass_ms_postfx.reserve(reserve_n);
+    }
+    std::chrono::steady_clock::time_point pass_t0{};
+    auto pass_start = [&](void) {
+        if (bench_pass_breakdown && initial_load_logged) {
+            glFinish();
+            pass_t0 = std::chrono::steady_clock::now();
+        }
+    };
+    auto pass_end = [&](std::vector<double>& acc) {
+        if (bench_pass_breakdown && initial_load_logged) {
+            glFinish();
+            acc.push_back(std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - pass_t0).count());
+        }
+    };
+
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
         float dt = static_cast<float>(now - prev_frame_time);
@@ -667,19 +701,27 @@ int main(int argc, char** argv) {
 
         // Shadow pass writes to its own FBO; the other scene passes write
         // into the HDR FBO via begin_scene().
+        pass_start();
         render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light,
                                  shadow_cascade_mask);
+        pass_end(pass_ms_shadow);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, block_atlas);
 
         postfx.begin_scene();
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        pass_start();
         render::draw_sky(sky_shader, sky_vao, fv, light);
+        pass_end(pass_ms_sky);
+        pass_start();
         last_stats = render::draw_terrain(shader, shadow_map, wrld, fv, light,
                                           kBlockPalette, view_frustum);
+        pass_end(pass_ms_terrain);
+        pass_start();
         render::draw_water(water_shader, water, fv, light,
                            static_cast<float>(world::kSeaLevel));
+        pass_end(pass_ms_water);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.
@@ -692,12 +734,14 @@ int main(int argc, char** argv) {
             target.block_x, target.block_y, target.block_z);
 
         // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
+        pass_start();
         postfx.resolve_to_backbuffer(bright_shader, blur_shader, tonemap_shader,
                                      fb_w, fb_h,
                                      /*blur_iter*/ 4,
                                      /*threshold*/ 1.0f,
                                      /*intensity*/ 0.7f,
                                      /*exposure*/  1.0f);
+        pass_end(pass_ms_postfx);
 
         hud.begin_frame();
         ui::PerfFrame pf;
@@ -762,6 +806,23 @@ int main(int argc, char** argv) {
                             last_stats.sections_drawn,
                             last_stats.triangles_drawn,
                             tris_per_sec, peak_mb);
+                if (bench_pass_breakdown && !pass_ms_shadow.empty()) {
+                    auto mean = [](const std::vector<double>& v) {
+                        double s = 0.0; for (double x : v) s += x;
+                        return v.empty() ? 0.0 : s / static_cast<double>(v.size());
+                    };
+                    const double s_sh = mean(pass_ms_shadow);
+                    const double s_sk = mean(pass_ms_sky);
+                    const double s_te = mean(pass_ms_terrain);
+                    const double s_wa = mean(pass_ms_water);
+                    const double s_pf = mean(pass_ms_postfx);
+                    std::printf("PASS_BREAKDOWN frames=%zu"
+                                " shadow=%.2f sky=%.2f terrain=%.2f"
+                                " water=%.2f postfx=%.2f sum_passes=%.2f\n",
+                                pass_ms_shadow.size(),
+                                s_sh, s_sk, s_te, s_wa, s_pf,
+                                s_sh + s_sk + s_te + s_wa + s_pf);
+                }
                 std::fflush(stdout);
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
