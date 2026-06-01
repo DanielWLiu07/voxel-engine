@@ -93,6 +93,23 @@ collects 300 vsync-off samples and prints one stable summary line.
 p99 reflects occasional heavy frames (cascade refresh, chunk stream
 events). Avg is the steady-state gameplay number at this pose.
 
+Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
+(glFinish bracketing makes the per-pass numbers real wall time at the
+cost of inflating frame-level avg_ms; that mode is a diagnostic, not
+the perf number):
+
+| Pass | ms | Share |
+| --- | ---: | ---: |
+| post-process (HDR -> bloom chain -> ACES tonemap) | 5.02 | 44% |
+| terrain (visible sections, atlas + CSM sample) | 2.04 | 18% |
+| shadow pass (3 cascades, staggered) | 2.01 | 17% |
+| water (sine-animated plane + Fresnel + depth fog) | 1.35 | 12% |
+| sky (gradient + sun glow) | 1.11 | 10% |
+| sum of measured passes | 11.53 | |
+
+Post-process dominates; the next clear lever for frame-time savings is
+halving bloom iterations or dropping the bloom mip chain a level.
+
 ## What's in here
 
 Rendering
