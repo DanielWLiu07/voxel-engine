@@ -40,8 +40,23 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
 | Frustum cull (sections), 32-block sub-chunks, vs non-empty | 405 / 1250 drawn (~3.1x) |
 | Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
-| Frame time, radius 12, 159k tris, vsync off | 7.55 ms avg, 7.68 ms p50, 16.1 ms p99 (~133 fps) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
+
+Frame time scaling, vsync off, deterministic bench pose, M4:
+
+| Radius | Chunks | Tris drawn | Sections drawn | Avg ms | p50 ms | p99 ms | Avg fps |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+|  8 |  289 |  71,920 | 184 | 7.54 | 7.56 | 18.97 | 132.7 |
+| 10 |  441 | 111,194 | 285 | 7.37 | 7.62 | 15.85 | 135.6 |
+| 12 |  625 | 159,080 | 405 | 8.01 | 7.88 | 18.00 | 124.9 |
+| 14 |  841 | 217,430 | 542 | 8.22 | 8.12 | 18.35 | 121.6 |
+| 16 | 1,089 | 278,890 | 699 | 8.81 | 8.39 | 18.30 | 113.5 |
+
+Triangle count grows 3.9x from radius 8 to 16; avg frame time grows
+only 17%. The section-AABB cull holds the per-frame draw work close
+to a constant while the loaded world quadruples. Fixed per-frame cost
+(sky, water, post-process, base shadow pass) accounts for most of the
+~7 ms floor.
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
 mesher's algorithmic gain on continuous terrain, which is what the CI gate
@@ -67,12 +82,13 @@ roughly a third of the surrounding disc. The section pass adds modest
 tightening within visible chunks. Bigger reductions from here need
 occlusion, not finer AABBs.
 
-The frame-time row comes from `./build/voxel_engine --bench-frame 300`,
-which opens a hidden window, locks the camera to the same pose as the
-cull bench, lets the chunk stream settle, then collects 300 vsync-off
-samples and prints one stable summary line. p99 reflects occasional
-heavy frames (cascade refresh, chunk stream events). The avg is the
-steady-state gameplay number at this pose.
+The scaling table comes from `./build/voxel_engine --bench-frame 300`,
+once per radius (kStreamRadius edited in src/main.cpp before each
+build). The bench opens a hidden window, locks the camera to the same
+pose as the cull bench, waits for the chunk stream to settle, then
+collects 300 vsync-off samples and prints one stable summary line.
+p99 reflects occasional heavy frames (cascade refresh, chunk stream
+events). Avg is the steady-state gameplay number at this pose.
 
 ## What's in here
 
