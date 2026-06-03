@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# Sweeps --bench-frame across a range of kStreamRadius values and prints one
-# BENCH_FRAME row per radius. Each iteration edits src/main.cpp in place,
-# rebuilds, runs the bench, and (when the loop completes) restores
-# kStreamRadius to the original value so the CI cull-bench gates keep
-# measuring the same world.
+# Sweeps --bench-frame across kStreamRadius values and optionally a list of
+# camera poses per radius. Prints one BENCH_FRAME row per (radius, pose)
+# combination. Each radius rebuilds once; poses share the build because
+# they only change the camera at runtime. On any exit path, kStreamRadius
+# is restored to the original value (and the binary rebuilt with it) so
+# the CI cull-bench gates keep measuring the same world.
 #
 # Usage:
-#   scripts/bench_sweep.sh                # default: 8 10 12 14 16, 300 frames each
-#   scripts/bench_sweep.sh 6 8 10         # custom radii (300 frames each)
-#   SAMPLES=600 scripts/bench_sweep.sh    # custom frame count
+#   scripts/bench_sweep.sh                          # 8 10 12 14 16, 300 frames, pose=center
+#   scripts/bench_sweep.sh 6 8 10                   # custom radii
+#   POSES="center ground high" scripts/bench_sweep.sh   # multi-pose per radius
+#   SAMPLES=600 scripts/bench_sweep.sh              # override frame count
 #
 # Run from the repo root. Requires a prior cmake configure (cmake -B build).
 
@@ -24,6 +26,7 @@ if [ ! -f src/main.cpp ] || [ ! -d build ]; then
 fi
 
 SAMPLES="${SAMPLES:-300}"
+POSES="${POSES:-center}"
 
 if [ "$#" -gt 0 ]; then
   RADII=("$@")
@@ -48,12 +51,14 @@ restore_radius() {
 }
 trap restore_radius EXIT
 
-echo "Sweeping radii: ${RADII[*]} (samples=${SAMPLES})"
+echo "Sweeping radii: ${RADII[*]}  poses: ${POSES}  samples: ${SAMPLES}"
 for R in "${RADII[@]}"; do
   sed -i.bak -E \
     "s/constexpr int   kStreamRadius   = [0-9]+;/constexpr int   kStreamRadius   = ${R};/" \
     src/main.cpp
   rm -f src/main.cpp.bak
   cmake --build build -j >/dev/null
-  ./build/voxel_engine --bench-frame "$SAMPLES" | grep '^BENCH_FRAME'
+  for P in $POSES; do
+    ./build/voxel_engine --bench-frame "$SAMPLES" --pose "$P" | grep '^BENCH_FRAME'
+  done
 done
