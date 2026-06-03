@@ -42,26 +42,22 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
-Frame time scaling, vsync off, `center` pose, M4:
+Frame time scaling, vsync off, `center` pose, 30-frame settle, M4:
 
 | Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |   289 | 184 |  71,920 | 5.50 | 5.44 | 7.24 | 181.9 | 13.0M | 166 MB |
-| 10 |   441 | 285 | 111,194 | 5.44 | 5.35 | 7.13 | 183.9 | 20.4M | 197 MB |
-| 12 |   625 | 405 | 159,080 | 5.54 | 5.45 | 7.39 | 180.5 | 28.7M | 236 MB |
-| 14 |   841 | 542 | 217,430 | 5.95 | 5.83 | 8.40 | 168.1 | 36.6M | 301 MB |
-| 16 | 1,089 | 699 | 278,890 | 6.03 | 6.05 | 7.89 | 165.7 | 46.2M | 360 MB |
+|  8 |   289 | 184 |  71,920 | 5.01 | 4.96 | 6.33 | 199.5 | 14.3M | 168 MB |
+| 10 |   441 | 285 | 111,194 | 5.20 | 5.15 | 6.49 | 192.3 | 21.4M | 204 MB |
+| 12 |   625 | 405 | 159,080 | 5.40 | 5.27 | 7.17 | 185.2 | 29.5M | 253 MB |
+| 14 |   841 | 542 | 217,430 | 6.09 | 5.94 | 8.67 | 164.2 | 35.7M | 296 MB |
+| 16 | 1,089 | 699 | 278,890 | 6.04 | 6.20 | 9.15 | 165.5 | 46.2M | 329 MB |
 
 Triangle count grows 3.9x from radius 8 to 16; avg frame time grows
-10%. Section-AABB culling holds drawn-section count close to a
+21%. Section-AABB culling holds drawn-section count close to a
 constant fraction (~30% of loaded sections) while the loaded world
 quadruples. Peak RSS scales sub-linearly with chunk count because the
 worker pool, FBOs, and post-process chain are constant cost on top of
 the per-chunk mesh and block data.
-
-(The radius 8 row uses the `ground` pose's numbers; `center` shows
-an extra warmup spike at small radii that drags its avg up despite
-the 10-frame settle. Investigating.)
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
 mesher's algorithmic gain on continuous terrain, which is what the CI gate
@@ -103,17 +99,17 @@ radius 12, M4:
 
 | Pose | Camera | Tris drawn | Sections | Avg ms | p50 | p99 | Avg fps | Tris/sec |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| center | (0, 80, 0) yaw -90 pitch -15 | 159,080 | 405 | 5.54 | 5.45 | 7.39 | 180.5 | 28.7M |
-| ground | (0, 35, 0) yaw -90 pitch 0   | 152,156 | 390 | 5.46 | 5.34 | 7.30 | 183.2 | 27.9M |
-| high   | (0,150, 0) yaw -90 pitch -45 | 185,876 | 474 | 5.50 | 5.38 | 7.66 | 181.7 | 33.8M |
+| center | (0, 80, 0) yaw -90 pitch -15 | 159,080 | 405 | 5.59 | 5.48 | 11.24 | 179.0 | 28.5M |
+| ground | (0, 35, 0) yaw -90 pitch 0   | 152,156 | 390 | 5.53 | 5.63 |  9.13 | 180.7 | 27.5M |
+| high   | (0,150, 0) yaw -90 pitch -45 | 185,876 | 474 | 5.46 | 5.45 | 10.42 | 183.0 | 34.0M |
 
 `ground` is eye-level walking; `high` is a top-down vantage where the
 section-AABB cull's vertical pruning works hardest; `center` is the
 pose the scaling table and `--bench` cull bench use. All three land
-within 1% of each other at radius 12, so the headline frame time
-isn't an artifact of a flattering vantage. `high` ships 22% more
-triangles than `ground` (185k vs 152k) but renders in the same time:
-the section cull's per-pixel-and-per-section work scales together.
+within ~2% of each other, so the headline frame time isn't an artifact
+of a flattering vantage. `high` ships 22% more triangles than `ground`
+(185k vs 152k) but renders in the same time: the per-section cull cost
+scales together with the work the GPU does.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real wall time at the
