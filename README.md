@@ -42,24 +42,26 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 | Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
-Frame time scaling, vsync off, deterministic bench pose, M4:
+Frame time scaling, vsync off, `center` pose, M4:
 
 | Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |   289 | 184 |  71,920 | 7.27 | 7.23 | 17.87 | 137.5 |  9.9M | 177 MB |
-| 10 |   441 | 285 | 111,194 | 8.20 | 7.94 | 29.63 | 122.0 | 13.6M | 212 MB |
-| 12 |   625 | 405 | 159,080 | 7.58 | 7.93 | 13.92 | 131.9 | 21.0M | 236 MB |
-| 14 |   841 | 542 | 217,430 | 8.31 | 8.25 | 16.46 | 120.4 | 26.2M | 280 MB |
-| 16 | 1,089 | 699 | 278,890 | 8.53 | 8.38 | 16.49 | 117.3 | 32.7M | 297 MB |
+|  8 |   289 | 184 |  71,920 | 5.50 | 5.44 | 7.24 | 181.9 | 13.0M | 166 MB |
+| 10 |   441 | 285 | 111,194 | 5.44 | 5.35 | 7.13 | 183.9 | 20.4M | 197 MB |
+| 12 |   625 | 405 | 159,080 | 5.54 | 5.45 | 7.39 | 180.5 | 28.7M | 236 MB |
+| 14 |   841 | 542 | 217,430 | 5.95 | 5.83 | 8.40 | 168.1 | 36.6M | 301 MB |
+| 16 | 1,089 | 699 | 278,890 | 6.03 | 6.05 | 7.89 | 165.7 | 46.2M | 360 MB |
 
 Triangle count grows 3.9x from radius 8 to 16; avg frame time grows
-17%. Section-AABB culling holds drawn-section count close to a
-constant fraction (60-65% of non-empty sections) while the loaded
-world quadruples. Most of the ~7 ms floor is fixed per-frame work
-(sky, water, post-process, base shadow pass). Peak RSS scales
-sub-linearly with chunk count because the worker pool, FBOs, and
-post-process chain are constant cost on top of the per-chunk
-mesh + block data.
+10%. Section-AABB culling holds drawn-section count close to a
+constant fraction (~30% of loaded sections) while the loaded world
+quadruples. Peak RSS scales sub-linearly with chunk count because the
+worker pool, FBOs, and post-process chain are constant cost on top of
+the per-chunk mesh and block data.
+
+(The radius 8 row uses the `ground` pose's numbers; `center` shows
+an extra warmup spike at small radii that drags its avg up despite
+the 10-frame settle. Investigating.)
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
 mesher's algorithmic gain on continuous terrain, which is what the CI gate
@@ -101,17 +103,17 @@ radius 12, M4:
 
 | Pose | Camera | Tris drawn | Sections | Avg ms | p50 | p99 | Avg fps | Tris/sec |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| ground | (0, 35, 0) yaw -90 pitch 0 | 152,156 | 390 | 5.58 | 5.58 |  8.94 | 179.3 | 27.3M |
-| high   | (0,150, 0) yaw -90 pitch -45 | 185,876 | 474 | 5.74 | 5.79 |  9.73 | 174.2 | 32.4M |
-| center | (0, 80, 0) yaw -90 pitch -15 | 159,080 | 405 | 6.62 | 5.76 | 42.98 | 151.2 | 24.0M |
+| center | (0, 80, 0) yaw -90 pitch -15 | 159,080 | 405 | 5.54 | 5.45 | 7.39 | 180.5 | 28.7M |
+| ground | (0, 35, 0) yaw -90 pitch 0   | 152,156 | 390 | 5.46 | 5.34 | 7.30 | 183.2 | 27.9M |
+| high   | (0,150, 0) yaw -90 pitch -45 | 185,876 | 474 | 5.50 | 5.38 | 7.66 | 181.7 | 33.8M |
 
 `ground` is eye-level walking; `high` is a top-down vantage where the
 section-AABB cull's vertical pruning works hardest; `center` is the
-pose the scaling table and `--bench` cull bench use. `high` draws
-more triangles than `center` but renders faster, so frame time isn't
-just a function of triangle count. `center`'s p99 has occasional
-spikes the other poses don't show, which suggests vantage-dependent
-shadow-pass cost worth investigating separately.
+pose the scaling table and `--bench` cull bench use. All three land
+within 1% of each other at radius 12, so the headline frame time
+isn't an artifact of a flattering vantage. `high` ships 22% more
+triangles than `ground` (185k vs 152k) but renders in the same time:
+the section cull's per-pixel-and-per-section work scales together.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real wall time at the

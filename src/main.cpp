@@ -493,7 +493,9 @@ int main(int argc, char** argv) {
 
     float time_of_day = 0.35f;
     const float day_speed = 1.0f / 240.0f;
-    bool  time_paused = false;
+    // Bench mode pauses time-of-day so a sunrise/sunset transition mid-bench
+    // can't fire the shadow-resync force-refresh path and inject a spike.
+    bool  time_paused = (bench_frames > 0);
 
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
@@ -518,10 +520,13 @@ int main(int argc, char** argv) {
     float smoothed_frame_ms = 0.0f;
 
     // --bench-frame state: collected per-frame after the initial chunk load
-    // settles, so the samples reflect steady-state rendering rather than
-    // the streaming ramp.
+    // settles plus a short warmup, so the samples reflect steady-state
+    // rendering rather than the streaming ramp or first-frame GL state
+    // transitions.
     std::vector<double> bench_samples;
     if (bench_frames > 0) bench_samples.reserve(static_cast<std::size_t>(bench_frames));
+    constexpr int kBenchSettleFrames = 10;
+    int bench_settle_remaining = kBenchSettleFrames;
 
     // --pass-breakdown state. Each per-pass accumulator captures one entry
     // per frame after initial_load_logged becomes true. glFinish bracketing
@@ -786,7 +791,8 @@ int main(int argc, char** argv) {
         ++frame_index;
 
         if (bench_frames > 0 && initial_load_logged) {
-            bench_samples.push_back(static_cast<double>(dt) * 1000.0);
+            if (bench_settle_remaining > 0) { --bench_settle_remaining; }
+            else bench_samples.push_back(static_cast<double>(dt) * 1000.0);
             if (static_cast<int>(bench_samples.size()) >= bench_frames) {
                 std::vector<double> sorted = bench_samples;
                 std::sort(sorted.begin(), sorted.end());
