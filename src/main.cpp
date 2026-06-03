@@ -525,7 +525,12 @@ int main(int argc, char** argv) {
     // transitions.
     std::vector<double> bench_samples;
     if (bench_frames > 0) bench_samples.reserve(static_cast<std::size_t>(bench_frames));
-    constexpr int kBenchSettleFrames = 10;
+    // 30 settle frames after initial_load_logged is generous (~200 ms at
+    // typical bench frame times) but cleanly clears post-load shader
+    // re-jit, driver buffer-orphan settling, and the cascade-warmup spike
+    // that was still surfacing in the radius-8 center-pose tail with a
+    // 10-frame settle.
+    constexpr int kBenchSettleFrames = 30;
     int bench_settle_remaining = kBenchSettleFrames;
 
     // --pass-breakdown state. Each per-pass accumulator captures one entry
