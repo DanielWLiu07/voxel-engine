@@ -319,6 +319,7 @@ int main(int argc, char** argv) {
     // BENCH_FRAME line and exits. Same renderer the gameplay uses.
     int bench_frames = 0;
     bool bench_pass_breakdown = false;
+    std::string_view bench_pose = "center";
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--bench") return run_bench();
@@ -327,6 +328,10 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--pass-breakdown") bench_pass_breakdown = true;
+        if (arg == "--pose" && i + 1 < argc) {
+            bench_pose = argv[i + 1];
+            ++i;
+        }
     }
 
     glfwSetErrorCallback(glfw_error);
@@ -452,10 +457,23 @@ int main(int argc, char** argv) {
     cam.set_position({0.0f, 80.0f, 80.0f});
     cam.set_yaw_pitch(-90.0f, -35.0f);
     if (bench_frames > 0) {
-        // Match the --bench cull pose so frame-time and cull-ratio numbers
-        // are taken from the same vantage and stay comparable.
-        cam.set_position({0.0f, 80.0f, 0.0f});
-        cam.set_yaw_pitch(-90.0f, -15.0f);
+        // Named poses keep the perf table reproducible across vantage
+        // points. "center" matches the --bench cull pose for direct
+        // comparability with the cull-ratio table; "ground" is an
+        // eye-level walk pose; "high" is a top-down vantage that
+        // exercises the section-AABB cull's vertical pruning.
+        if (bench_pose == "ground") {
+            cam.set_position({0.0f, 35.0f, 0.0f});
+            cam.set_yaw_pitch(-90.0f, 0.0f);
+        } else if (bench_pose == "high") {
+            cam.set_position({0.0f, 150.0f, 0.0f});
+            cam.set_yaw_pitch(-90.0f, -45.0f);
+        } else {
+            // default: "center"
+            bench_pose = "center";
+            cam.set_position({0.0f, 80.0f, 0.0f});
+            cam.set_yaw_pitch(-90.0f, -15.0f);
+        }
     }
 
     core::Input input;
@@ -794,12 +812,14 @@ int main(int argc, char** argv) {
                     : 0.0;
 
                 std::printf("\nBENCH_FRAME"
-                            " radius=%d chunks=%d frames=%zu"
+                            " radius=%d pose=%.*s chunks=%d frames=%zu"
                             " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
                             " min_ms=%.2f max_ms=%.2f avg_fps=%.1f"
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
                             " tris_per_sec=%.0f peak_rss_mb=%.1f\n",
-                            kStreamRadius, total_chunks, n,
+                            kStreamRadius,
+                            static_cast<int>(bench_pose.size()), bench_pose.data(),
+                            total_chunks, n,
                             avg, p50, p99, mn, mx,
                             (avg > 0.0 ? 1000.0 / avg : 0.0),
                             last_stats.chunks_drawn,

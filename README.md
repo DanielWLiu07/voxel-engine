@@ -96,6 +96,23 @@ prints one stable summary line. p99 reflects occasional heavy frames
 (cascade refresh, chunk stream events). Avg is the steady-state
 gameplay number at this pose.
 
+Frame time across three named poses (`--bench-frame 300 --pose <name>`),
+radius 12, M4:
+
+| Pose | Camera | Tris drawn | Sections | Avg ms | p50 | p99 | Avg fps | Tris/sec |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ground | (0, 35, 0) yaw -90 pitch 0 | 152,156 | 390 | 5.58 | 5.58 |  8.94 | 179.3 | 27.3M |
+| high   | (0,150, 0) yaw -90 pitch -45 | 185,876 | 474 | 5.74 | 5.79 |  9.73 | 174.2 | 32.4M |
+| center | (0, 80, 0) yaw -90 pitch -15 | 159,080 | 405 | 6.62 | 5.76 | 42.98 | 151.2 | 24.0M |
+
+`ground` is eye-level walking; `high` is a top-down vantage where the
+section-AABB cull's vertical pruning works hardest; `center` is the
+pose the scaling table and `--bench` cull bench use. `high` draws
+more triangles than `center` but renders faster, so frame time isn't
+just a function of triangle count. `center`'s p99 has occasional
+spikes the other poses don't show, which suggests vantage-dependent
+shadow-pass cost worth investigating separately.
+
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real wall time at the
 cost of inflating frame-level avg_ms; that mode is a diagnostic, not
