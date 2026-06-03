@@ -85,13 +85,16 @@ roughly a third of the surrounding disc. The section pass adds modest
 tightening within visible chunks. Bigger reductions from here need
 occlusion, not finer AABBs.
 
-The scaling table comes from `./build/voxel_engine --bench-frame 300`,
-once per radius (kStreamRadius edited in src/main.cpp before each
-build). The bench opens a hidden window, locks the camera to the same
-pose as the cull bench, waits for the chunk stream to settle, then
-collects 300 vsync-off samples and prints one stable summary line.
-p99 reflects occasional heavy frames (cascade refresh, chunk stream
-events). Avg is the steady-state gameplay number at this pose.
+The scaling table comes from `scripts/bench_sweep.sh`, which loops
+over a list of radii (default `8 10 12 14 16`), edits `kStreamRadius`
+in `src/main.cpp` in place, rebuilds, runs `--bench-frame 300`, and
+restores the original radius on exit so the CI cull-bench gates keep
+measuring the same world. The bench itself opens a hidden window,
+locks the camera to the same pose as the cull bench, waits for the
+chunk stream to settle, then collects 300 vsync-off samples and
+prints one stable summary line. p99 reflects occasional heavy frames
+(cascade refresh, chunk stream events). Avg is the steady-state
+gameplay number at this pose.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real wall time at the
