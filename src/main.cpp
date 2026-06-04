@@ -665,12 +665,18 @@ int main(int argc, char** argv) {
             std::printf("[world] %d chunks loaded in %.1f ms  (%.0f chunks/sec, %zu workers)\n",
                         total_chunks, initial_load_ms, cps, worker_count);
             const double w_total = wrld.total_worker_ms();
+            const double t_total = wrld.total_terrain_ms();
+            const double m_total = wrld.total_mesh_ms();
             const double u_total = wrld.total_upload_ms();
             std::printf("[world]   worker total %.1f ms (avg %.2f ms/chunk, %.1fx wall-clock across %zu workers)\n",
                         w_total, w_total / total_chunks,
                         w_total / std::max(initial_load_ms, 0.001),
                         worker_count);
-            std::printf("[world]   main-thread upload total %.1f ms (avg %.2f ms/chunk on main thread)\n",
+            std::printf("[world]     terrain.fill_chunk total %.1f ms (avg %.2f ms/chunk)\n",
+                        t_total, t_total / total_chunks);
+            std::printf("[world]     greedy mesh        total %.1f ms (avg %.2f ms/chunk)\n",
+                        m_total, m_total / total_chunks);
+            std::printf("[world]   main-thread upload   total %.1f ms (avg %.2f ms/chunk on main thread)\n",
                         u_total, u_total / total_chunks);
         }
 
