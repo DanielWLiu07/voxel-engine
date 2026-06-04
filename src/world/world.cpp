@@ -308,6 +308,9 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
                 FinishedChunk fc;
                 fc.coord = c;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
+                const auto t_after_terrain = clock::now();
+                fc.terrain_ms = std::chrono::duration<double, std::milli>(
+                    t_after_terrain - t0).count();
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
                 fc.worker_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - t0).count();
@@ -352,6 +355,9 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 FinishedChunk fc;
                 fc.coord = c;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
+                const auto t_after_terrain = clock::now();
+                fc.terrain_ms = std::chrono::duration<double, std::milli>(
+                    t_after_terrain - t0).count();
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
                 fc.worker_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - t0).count();
@@ -377,7 +383,9 @@ int World::drain_finished(int max_per_frame) {
         }
 
         jobs_in_flight_.fetch_sub(1);
-        total_worker_ms_ += fc.worker_ms;
+        total_worker_ms_  += fc.worker_ms;
+        total_terrain_ms_ += fc.terrain_ms;
+        total_mesh_ms_    += fc.mesh_data.build_ms;
 
         auto req_it = requested_.find(fc.coord);
         if (req_it == requested_.end()) continue;  // evicted mid-flight
