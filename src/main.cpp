@@ -664,6 +664,14 @@ int main(int argc, char** argv) {
                 ? total_chunks * 1000.0 / initial_load_ms : 0.0;
             std::printf("[world] %d chunks loaded in %.1f ms  (%.0f chunks/sec, %zu workers)\n",
                         total_chunks, initial_load_ms, cps, worker_count);
+            const double w_total = wrld.total_worker_ms();
+            const double u_total = wrld.total_upload_ms();
+            std::printf("[world]   worker total %.1f ms (avg %.2f ms/chunk, %.1fx wall-clock across %zu workers)\n",
+                        w_total, w_total / total_chunks,
+                        w_total / std::max(initial_load_ms, 0.001),
+                        worker_count);
+            std::printf("[world]   main-thread upload total %.1f ms (avg %.2f ms/chunk on main thread)\n",
+                        u_total, u_total / total_chunks);
         }
 
         glfwGetFramebufferSize(window, &fb_w, &fb_h);

@@ -161,11 +161,20 @@ public:
 
     std::size_t chunk_count() const { return chunks_.size(); }
 
+    // Cumulative timing counters across all completed chunks. Worker side
+    // is wall time spent in terrain.fill_chunk + greedy meshing on a worker
+    // thread (so 9 workers in parallel see this number race ahead of wall
+    // clock). Upload side is wall time spent in apply_sections on the main
+    // thread (GL is single-threaded so this is a real serialization point).
+    double total_worker_ms() const { return total_worker_ms_; }
+    double total_upload_ms() const { return total_upload_ms_; }
+
 private:
     struct FinishedChunk {
         ChunkCoord    coord;
         Chunk         chunk;
         ChunkMeshData mesh_data;
+        double        worker_ms = 0.0;
     };
 
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
@@ -174,6 +183,8 @@ private:
     mutable std::mutex                 finished_mutex_;
     std::queue<FinishedChunk>          finished_;
     std::atomic<int>                   jobs_in_flight_{0};
+    double                             total_worker_ms_ = 0.0;
+    double                             total_upload_ms_ = 0.0;
 };
 
 }  // namespace world

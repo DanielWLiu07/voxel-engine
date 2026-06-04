@@ -303,10 +303,14 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
             jobs_in_flight_.fetch_add(1);
             pool.submit([this, &terrain, c]() {
                 ZoneScopedN("chunk_worker_job");
+                using clock = std::chrono::steady_clock;
+                const auto t0 = clock::now();
                 FinishedChunk fc;
                 fc.coord = c;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+                fc.worker_ms = std::chrono::duration<double, std::milli>(
+                    clock::now() - t0).count();
                 std::lock_guard<std::mutex> lock(finished_mutex_);
                 finished_.push(std::move(fc));
             });
@@ -343,10 +347,14 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             ++stats.requested;
             pool.submit([this, &terrain, c]() {
                 ZoneScopedN("chunk_worker_job");
+                using clock = std::chrono::steady_clock;
+                const auto t0 = clock::now();
                 FinishedChunk fc;
                 fc.coord = c;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+                fc.worker_ms = std::chrono::duration<double, std::milli>(
+                    clock::now() - t0).count();
                 std::lock_guard<std::mutex> lock(finished_mutex_);
                 finished_.push(std::move(fc));
             });
@@ -357,6 +365,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
 
 int World::drain_finished(int max_per_frame) {
     ZoneScopedN("drain_finished");
+    using clock = std::chrono::steady_clock;
     int uploaded = 0;
     for (int i = 0; i < max_per_frame; ++i) {
         FinishedChunk fc;
@@ -368,13 +377,17 @@ int World::drain_finished(int max_per_frame) {
         }
 
         jobs_in_flight_.fetch_sub(1);
+        total_worker_ms_ += fc.worker_ms;
 
         auto req_it = requested_.find(fc.coord);
         if (req_it == requested_.end()) continue;  // evicted mid-flight
         requested_.erase(req_it);
 
+        const auto up_t0 = clock::now();
         chunks_.emplace(fc.coord,
                         build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data)));
+        total_upload_ms_ += std::chrono::duration<double, std::milli>(
+            clock::now() - up_t0).count();
         ++uploaded;
     }
     return uploaded;
