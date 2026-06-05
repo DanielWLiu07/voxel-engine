@@ -30,6 +30,20 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
+**Headline (radius 12, gameplay pose, vsync off):**
+5.40 ms avg frame time, **185 fps**, **29 M triangles/sec**, 253 MB peak RSS.
+Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
+workers. Per-frame work: 405 of 5000 loaded sub-chunks drawn (12x cull),
+159k triangles rendered, post-process dominates per-pass cost at 44%.
+
+Reproduce:
+```
+./build/voxel_engine --bench               # mesher + cull bench, CI-gated
+./build/voxel_engine --bench-frame 300     # 300-frame timing bench, center pose
+scripts/bench_sweep.sh                     # scaling table across radii 8..16
+POSES="center ground high" scripts/bench_sweep.sh 12
+```
+
 | Metric | Value |
 | --- | --- |
 | Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build) |
