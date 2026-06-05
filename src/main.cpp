@@ -322,6 +322,22 @@ int main(int argc, char** argv) {
     std::string_view bench_pose = "center";
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
+        if (arg == "--help" || arg == "-h") {
+            std::printf(
+                "voxel_engine - desktop voxel engine, C++20 / OpenGL 4.1\n"
+                "\n"
+                "Usage:\n"
+                "  voxel_engine                          launch the gameplay window\n"
+                "  voxel_engine --bench                  CPU mesher + cull bench (no GL window)\n"
+                "  voxel_engine --bench-frame N          run N vsync-off frames, print BENCH_FRAME\n"
+                "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high)\n"
+                "  voxel_engine --bench-frame N --pass-breakdown\n"
+                "                                        wall time per render pass (glFinish-bracketed)\n"
+                "  voxel_engine --help                   this text\n"
+                "\n"
+                "See README.md for the reproducible perf tables and CI gates.\n");
+            return EXIT_SUCCESS;
+        }
         if (arg == "--bench") return run_bench();
         if (arg == "--bench-frame" && i + 1 < argc) {
             bench_frames = std::atoi(argv[i + 1]);
