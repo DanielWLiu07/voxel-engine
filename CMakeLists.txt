@@ -147,3 +147,38 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     -Wall -Wextra -Wpedantic -Wno-unused-parameter
   )
 endif()
+
+# --- Unit tests --------------------------------------------------------------
+# voxel_tests covers the GL-independent voxel bookkeeping (chunk AABB, section
+# bounds, mesher equivalence). It links against the same translation units the
+# engine uses, but never instantiates Mesh or calls any gl* function at
+# runtime - the glad lib is there only to satisfy compile/link of the headers
+# the world/gfx layer transitively depends on.
+option(VOXEL_BUILD_TESTS "Build the unit tests" ON)
+if(VOXEL_BUILD_TESTS)
+  enable_testing()
+  add_executable(voxel_tests
+    tests/test_world.cpp
+    src/world/world.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_serialize.cpp
+    src/world/terrain_gen.cpp
+    src/gfx/frustum.cpp
+    src/gfx/mesh.cpp
+    src/gfx/shader.cpp
+    src/core/thread_pool.cpp
+  )
+  target_include_directories(voxel_tests PRIVATE src)
+  target_link_libraries(voxel_tests PRIVATE glm::glm fastnoise glad)
+  if(APPLE)
+    target_link_libraries(voxel_tests PRIVATE
+      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
+    )
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(voxel_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Wno-unused-parameter
+    )
+  endif()
+  add_test(NAME world_unit COMMAND voxel_tests)
+endif()
