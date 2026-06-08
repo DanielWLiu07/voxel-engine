@@ -612,12 +612,17 @@ int main(int argc, char** argv) {
                 std::chrono::steady_clock::now() - t0).count();
             double ratio = s.bytes_written > 0
                 ? static_cast<double>(s.bytes_raw) / s.bytes_written : 0.0;
+            const double secs = ms / 1000.0;
+            const double mb_disk = s.bytes_written / (1024.0 * 1024.0);
+            const double mb_raw  = s.bytes_raw     / (1024.0 * 1024.0);
+            const double disk_mbps = secs > 0.0 ? mb_disk / secs : 0.0;
+            const double raw_mbps  = secs > 0.0 ? mb_raw  / secs : 0.0;
             std::printf("[save] wrote %d chunks in %.1f ms  |  "
-                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  %s\n",
+                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  "
+                        "%.0f MB/s disk, %.0f MB/s raw  |  %s\n",
                         s.chunks_written, ms,
-                        s.bytes_written / (1024.0 * 1024.0),
-                        s.bytes_raw     / (1024.0 * 1024.0),
-                        ratio,
+                        mb_disk, mb_raw, ratio,
+                        disk_mbps, raw_mbps,
                         s.ok ? "ok" : "ERRORS");
         }
         if (input.key_pressed(GLFW_KEY_F6)) {
@@ -628,12 +633,17 @@ int main(int argc, char** argv) {
                 std::chrono::steady_clock::now() - t0).count();
             double ratio = l.bytes_read > 0
                 ? static_cast<double>(l.bytes_raw) / l.bytes_read : 0.0;
+            const double secs = ms / 1000.0;
+            const double mb_disk = l.bytes_read / (1024.0 * 1024.0);
+            const double mb_raw  = l.bytes_raw  / (1024.0 * 1024.0);
+            const double disk_mbps = secs > 0.0 ? mb_disk / secs : 0.0;
+            const double raw_mbps  = secs > 0.0 ? mb_raw  / secs : 0.0;
             std::printf("[load] read %d chunks in %.1f ms  |  "
-                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  %s\n",
+                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  "
+                        "%.0f MB/s disk, %.0f MB/s raw  |  %s\n",
                         l.chunks_read, ms,
-                        l.bytes_read / (1024.0 * 1024.0),
-                        l.bytes_raw  / (1024.0 * 1024.0),
-                        ratio,
+                        mb_disk, mb_raw, ratio,
+                        disk_mbps, raw_mbps,
                         l.ok ? "ok" : "ERRORS");
             // Reset streaming bookkeeping so the next move triggers a refill
             // around the player for anything missing on disk.
