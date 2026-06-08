@@ -49,8 +49,8 @@ POSES="center ground high" scripts/bench_sweep.sh 12
 | Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build) |
 | Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build) |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
-| Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: 2365 ms worker CPU compressed 8.4x in parallel, 34 ms main-thread upload) |
-| Worker breakdown (per chunk avg) | terrain.fill_chunk 0.79 ms, greedy mesh 2.99 ms, GL upload 0.05 ms |
+| Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
+| Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
 | Frustum cull (chunks), wide AABB (pre-tightening) | 228 / 625 drawn (~2.7x) |
 | Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
 | Frustum cull (sections), 32-block sub-chunks, vs non-empty | 405 / 1250 drawn (~3.1x) |
