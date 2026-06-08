@@ -140,32 +140,42 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
         const int d_size = axis_size(d);
         const int u_size = axis_size(u_axis);
         const int v_size = axis_size(v_axis);
+        const std::size_t mask_size = static_cast<size_t>(u_size * v_size);
 
-        thread_local std::vector<std::uint8_t> mask;
-        mask.assign(static_cast<size_t>(u_size * v_size), 0);
+        // Two masks built in a single sweep through the slice: mask_pos
+        // catches +d-direction faces, mask_neg catches -d-direction. Sharing
+        // the lookup of (a, b) per cell halves the chunk.get_or_air call
+        // count vs. the prior two-pass implementation. thread_local so the
+        // worker pool doesn't fight a shared allocation.
+        thread_local std::vector<std::uint8_t> mask_pos;
+        thread_local std::vector<std::uint8_t> mask_neg;
+        if (mask_pos.size() < mask_size) mask_pos.resize(mask_size);
+        if (mask_neg.size() < mask_size) mask_neg.resize(mask_size);
 
-        for (int dir : {-1, +1}) {
-            for (int s = 0; s <= d_size; ++s) {
-                std::memset(mask.data(), 0, mask.size());
+        for (int s = 0; s <= d_size; ++s) {
+            std::memset(mask_pos.data(), 0, mask_size);
+            std::memset(mask_neg.data(), 0, mask_size);
 
-                for (int v = 0; v < v_size; ++v) {
-                    for (int u = 0; u < u_size; ++u) {
-                        int xa, ya, za, xb, yb, zb;
-                        slice_coords(d, u_axis, v_axis, s - 1, u, v, xa, ya, za);
-                        slice_coords(d, u_axis, v_axis, s,     u, v, xb, yb, zb);
+            for (int v = 0; v < v_size; ++v) {
+                for (int u = 0; u < u_size; ++u) {
+                    int xa, ya, za, xb, yb, zb;
+                    slice_coords(d, u_axis, v_axis, s - 1, u, v, xa, ya, za);
+                    slice_coords(d, u_axis, v_axis, s,     u, v, xb, yb, zb);
 
-                        BlockId a = chunk.get_or_air(xa, ya, za);
-                        BlockId b = chunk.get_or_air(xb, yb, zb);
+                    BlockId a = chunk.get_or_air(xa, ya, za);
+                    BlockId b = chunk.get_or_air(xb, yb, zb);
 
-                        BlockId face = BlockId::Air;
-                        if (dir == +1 && face_visible(a, b)) face = a;
-                        if (dir == -1 && face_visible(b, a)) face = b;
-
-                        mask[static_cast<size_t>(v * u_size + u)] = static_cast<std::uint8_t>(face);
-                    }
+                    const std::size_t idx = static_cast<std::size_t>(v * u_size + u);
+                    if (face_visible(a, b)) mask_pos[idx] = static_cast<std::uint8_t>(a);
+                    if (face_visible(b, a)) mask_neg[idx] = static_cast<std::uint8_t>(b);
                 }
+            }
 
-                for (int v = 0; v < v_size; ++v) {
+            // Rectangle merge + emit for one direction's mask. Called twice
+            // per slice (once for each direction) so the actual geometry
+            // for both faces of the slice ships in this iteration.
+            auto emit_dir = [&](std::vector<std::uint8_t>& mask, int dir) {
+            for (int v = 0; v < v_size; ++v) {
                     for (int u = 0; u < u_size; ) {
                         std::uint8_t id = mask[static_cast<size_t>(v * u_size + u)];
                         if (id == 0) { ++u; continue; }
@@ -270,9 +280,12 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                         u += w;
                     }
                 }
-            }
-        }
-    }
+            };  // emit_dir lambda
+
+            emit_dir(mask_pos, +1);
+            emit_dir(mask_neg, -1);
+        }  // for s
+    }  // for d
 
     out.build_ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
     return out;
