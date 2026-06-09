@@ -132,6 +132,13 @@ public:
     // it on the calling thread, so the caller must own a current GL context.
     void insert_chunk(ChunkCoord c, Chunk chunk);
 
+    // Submits a worker job that greedy-meshes the already-decoded chunk and
+    // pushes the result onto the finished queue. The caller drains via
+    // drain_finished on the main (GL) thread. Used by load_world to
+    // parallelize meshing during F6 / --bench-io load - mirrors the
+    // enqueue_grid_async path but skips terrain.fill_chunk.
+    void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool);
+
     // Drops every chunk + pending request. Intended for full-world reload
     // (save/load); does not cancel in-flight worker jobs but their results
     // get discarded in drain_finished().

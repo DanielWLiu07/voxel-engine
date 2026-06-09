@@ -631,7 +631,7 @@ int main(int argc, char** argv) {
         if (input.key_pressed(GLFW_KEY_F6)) {
             auto t0 = std::chrono::steady_clock::now();
             wrld.clear_all();
-            auto l = world::load_world(wrld, kSaveDir, terrain);
+            auto l = world::load_world(wrld, kSaveDir, terrain, pool);
             double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
             double ratio = l.bytes_read > 0
@@ -725,7 +725,7 @@ int main(int argc, char** argv) {
                 wrld.clear_all();
 
                 const auto load_t0 = clock::now();
-                auto l = world::load_world(wrld, io_dir.string(), terrain);
+                auto l = world::load_world(wrld, io_dir.string(), terrain, pool);
                 const double load_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - load_t0).count();
 
