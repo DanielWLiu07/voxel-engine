@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/thread_pool.h"
 #include "world/terrain_gen.h"
 #include "world/world.h"
 
@@ -27,9 +28,15 @@ SaveStats save_world(const World& w, const std::string& dir);
 
 // Decodes every "chunk_<x>_<z>.vchk" file in dir into the World. Caller is
 // expected to clear_all() first if they want a fresh state; this routine
-// just inserts what it finds and ignores everything else. The terrain
-// reference is unused on the success path and reserved for future fallback.
+// just inserts what it finds and ignores everything else.
+//
+// Greedy meshing happens on the worker pool in parallel; the caller's
+// thread (which must own the GL context) drains the finished queue and
+// performs the GL upload. Blocks until all loaded chunks have been
+// inserted into the world. The terrain reference is reserved for future
+// fallback when a saved chunk is missing.
 LoadStats load_world(World& w, const std::string& dir,
-                     const TerrainGen& fallback_terrain);
+                     const TerrainGen& fallback_terrain,
+                     core::ThreadPool& pool);
 
 }  // namespace world

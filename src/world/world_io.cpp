@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <thread>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -102,7 +103,8 @@ SaveStats save_world(const World& w, const std::string& dir) {
 }
 
 LoadStats load_world(World& w, const std::string& dir,
-                     const TerrainGen& /*fallback_terrain*/) {
+                     const TerrainGen& /*fallback_terrain*/,
+                     core::ThreadPool& pool) {
     LoadStats stats;
     std::error_code ec;
     if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return stats;
@@ -110,7 +112,14 @@ LoadStats load_world(World& w, const std::string& dir,
     fs::directory_iterator it(dir, ec);
     if (ec) return stats;
 
+    // Read + RLE-decode each file on the calling thread (fast - the
+    // decompression payload at 144x ratio is ~270 KB total for radius 12)
+    // then hand the chunk to the worker pool for greedy meshing. The pool
+    // pushes results onto the world's finished queue; we drain that on the
+    // caller thread because the GL upload that happens in build_slot has
+    // to run on the GL-owning thread.
     std::vector<std::uint8_t> buf;
+    int enqueued = 0;
     for (const auto& entry : it) {
         if (!entry.is_regular_file()) continue;
         const std::string name = entry.path().filename().string();
@@ -123,11 +132,18 @@ LoadStats load_world(World& w, const std::string& dir,
         Chunk chunk;
         if (!decode_chunk_rle(buf, chunk)) continue;
 
-        w.insert_chunk(coord, std::move(chunk));
-        ++stats.chunks_read;
         stats.bytes_read += buf.size();
         stats.bytes_raw  += static_cast<std::size_t>(kChunkVolume);
+        w.enqueue_decoded_chunk(coord, std::move(chunk), pool);
+        ++enqueued;
     }
+
+    // Drain until every enqueued chunk has its mesh and slot built.
+    while (w.pending_async() > 0) {
+        const int got = w.drain_finished(64);
+        if (got == 0) std::this_thread::yield();
+    }
+    stats.chunks_read = enqueued;
     stats.ok = true;
     return stats;
 }

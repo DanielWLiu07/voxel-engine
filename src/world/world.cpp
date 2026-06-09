@@ -403,6 +403,28 @@ int World::drain_finished(int max_per_frame) {
 
 int World::pending_async() const { return jobs_in_flight_.load(); }
 
+void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
+                                  core::ThreadPool& pool) {
+    requested_.insert(c);
+    jobs_in_flight_.fetch_add(1);
+    pool.submit([this, c, chunk = std::move(chunk)]() mutable {
+        ZoneScopedN("chunk_loaded_worker_job");
+        using clock = std::chrono::steady_clock;
+        const auto t0 = clock::now();
+        FinishedChunk fc;
+        fc.coord = c;
+        fc.chunk = std::move(chunk);
+        // terrain step is skipped on the load path; the chunk came off disk
+        // already populated, so worker time is just the mesh build.
+        fc.terrain_ms = 0.0;
+        fc.mesh_data  = build_chunk_mesh_greedy(fc.chunk);
+        fc.worker_ms  = std::chrono::duration<double, std::milli>(
+            clock::now() - t0).count();
+        std::lock_guard<std::mutex> lock(finished_mutex_);
+        finished_.push(std::move(fc));
+    });
+}
+
 void World::insert_chunk(ChunkCoord c, Chunk chunk) {
     auto mesh_data = build_chunk_mesh_greedy(chunk);
     chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data));
