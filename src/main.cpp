@@ -319,6 +319,7 @@ int main(int argc, char** argv) {
     // BENCH_FRAME line and exits. Same renderer the gameplay uses.
     int bench_frames = 0;
     bool bench_pass_breakdown = false;
+    bool bench_io = false;
     std::string_view bench_pose = "center";
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
@@ -333,6 +334,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high)\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
+                "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
                 "  voxel_engine --help                   this text\n"
                 "\n"
                 "See README.md for the reproducible perf tables and CI gates.\n");
@@ -344,6 +346,7 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--pass-breakdown") bench_pass_breakdown = true;
+        if (arg == "--bench-io") bench_io = true;
         if (arg == "--pose" && i + 1 < argc) {
             bench_pose = argv[i + 1];
             ++i;
@@ -362,7 +365,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 2);
-    if (bench_frames > 0) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    if (bench_frames > 0 || bench_io) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
     if (!window) {
@@ -704,6 +707,60 @@ int main(int argc, char** argv) {
                         m_total, m_total / total_chunks);
             std::printf("[world]   main-thread upload   total %.1f ms (avg %.2f ms/chunk on main thread)\n",
                         u_total, u_total / total_chunks);
+
+            if (bench_io) {
+                // Deterministic save/load throughput. Same loaded world the
+                // cull bench measures; writes to /tmp to keep ./saves clean.
+                namespace fsi = std::filesystem;
+                const fsi::path io_dir = fsi::temp_directory_path() / "voxel-bench-io";
+                fsi::remove_all(io_dir);
+                fsi::create_directories(io_dir);
+
+                using clock = std::chrono::steady_clock;
+                const auto save_t0 = clock::now();
+                auto s = world::save_world(wrld, io_dir.string());
+                const double save_ms = std::chrono::duration<double, std::milli>(
+                    clock::now() - save_t0).count();
+
+                wrld.clear_all();
+
+                const auto load_t0 = clock::now();
+                auto l = world::load_world(wrld, io_dir.string(), terrain);
+                const double load_ms = std::chrono::duration<double, std::milli>(
+                    clock::now() - load_t0).count();
+
+                fsi::remove_all(io_dir);
+
+                const double save_secs = save_ms / 1000.0;
+                const double load_secs = load_ms / 1000.0;
+                const double save_disk_mbps = save_secs > 0.0
+                    ? (s.bytes_written / (1024.0 * 1024.0)) / save_secs : 0.0;
+                const double save_raw_mbps  = save_secs > 0.0
+                    ? (s.bytes_raw     / (1024.0 * 1024.0)) / save_secs : 0.0;
+                const double load_disk_mbps = load_secs > 0.0
+                    ? (l.bytes_read    / (1024.0 * 1024.0)) / load_secs : 0.0;
+                const double load_raw_mbps  = load_secs > 0.0
+                    ? (l.bytes_raw     / (1024.0 * 1024.0)) / load_secs : 0.0;
+                const double ratio = s.bytes_written > 0
+                    ? static_cast<double>(s.bytes_raw) / s.bytes_written : 0.0;
+
+                std::printf("\nBENCH_IO radius=%d chunks=%d"
+                            " save_ms=%.1f load_ms=%.1f"
+                            " disk_mb=%.2f raw_mb=%.2f ratio=%.1fx"
+                            " save_disk_mbps=%.0f save_raw_mbps=%.0f"
+                            " load_disk_mbps=%.0f load_raw_mbps=%.0f"
+                            " save_ok=%d load_ok=%d\n",
+                            kStreamRadius, s.chunks_written,
+                            save_ms, load_ms,
+                            s.bytes_written / (1024.0 * 1024.0),
+                            s.bytes_raw     / (1024.0 * 1024.0),
+                            ratio,
+                            save_disk_mbps, save_raw_mbps,
+                            load_disk_mbps, load_raw_mbps,
+                            s.ok ? 1 : 0, l.ok ? 1 : 0);
+                std::fflush(stdout);
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
         }
 
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
