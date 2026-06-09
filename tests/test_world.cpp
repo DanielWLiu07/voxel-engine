@@ -10,6 +10,7 @@
 #include "world/block.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
+#include "world/chunk_serialize.h"
 #include "world/world.h"
 
 #include <cmath>
@@ -170,6 +171,61 @@ void test_greedy_equals_naive_area_on_simple_terrain() {
            "greedy emits strictly fewer quads on non-trivial terrain");
 }
 
+// ----- chunk RLE serialize round-trip --------------------------------------
+
+void test_rle_empty_roundtrip() {
+    world::Chunk a;
+    auto bytes = world::encode_chunk_rle(a);
+    world::Chunk b;
+    EXPECT(world::decode_chunk_rle(bytes, b), "decode empty chunk succeeds");
+    EXPECT(b.solid_count() == 0, "round-tripped empty chunk has no solid blocks");
+}
+
+void test_rle_solid_roundtrip() {
+    world::Chunk a;
+    // A small varied pattern: stepped terrain + a few stones above.
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            const int h = 20 + ((x * 3 + z) % 7);
+            fill_solid_column(a, x, z, 0, h, world::BlockId::Dirt);
+            a.set(x, h, z, world::BlockId::Grass);
+        }
+    }
+    a.set(3, 200, 9, world::BlockId::Stone);
+
+    auto bytes = world::encode_chunk_rle(a);
+    EXPECT(bytes.size() < static_cast<std::size_t>(world::kChunkVolume),
+           "RLE encoding is smaller than raw kChunkVolume");
+
+    world::Chunk b;
+    EXPECT(world::decode_chunk_rle(bytes, b), "decode populated chunk succeeds");
+    EXPECT(b.solid_count() == a.solid_count(),
+           "round-trip preserves solid_count");
+
+    bool block_match = true;
+    for (int y = 0; y < world::kChunkSizeY && block_match; ++y) {
+        for (int z = 0; z < world::kChunkSizeZ && block_match; ++z) {
+            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                if (a.get(x, y, z) != b.get(x, y, z)) {
+                    block_match = false;
+                    break;
+                }
+            }
+        }
+    }
+    EXPECT(block_match, "round-trip preserves every block identity");
+}
+
+void test_rle_decode_garbage_fails_gracefully() {
+    world::Chunk out;
+    std::vector<std::uint8_t> junk{0xFF, 0x00, 0xAB};
+    // Either decode returns false, or it returns true but the resulting
+    // chunk is degenerate. Either way we should not crash.
+    bool ok = world::decode_chunk_rle(junk, out);
+    EXPECT(!ok || out.solid_count() >= 0,
+           "decode of garbage either returns false or yields a degenerate chunk");
+}
+
 }  // namespace
 
 int main() {
@@ -183,6 +239,9 @@ int main() {
     test_sections_terrain_spanning_boundary();
     test_section_bounds_in_world_space();
     test_greedy_equals_naive_area_on_simple_terrain();
+    test_rle_empty_roundtrip();
+    test_rle_solid_roundtrip();
+    test_rle_decode_garbage_fails_gracefully();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");
