@@ -17,23 +17,19 @@ uniform float u_fog_start;
 uniform float u_fog_end;
 uniform vec3  u_palette[8];
 
-uniform sampler2D            u_atlas;
+uniform sampler2DArray       u_atlas;
 uniform sampler2DArrayShadow u_shadow_array;
 uniform float u_cascade_far[3];
 uniform float u_shadow_strength;
 
 out vec4 frag_color;
 
-// 4x4 grid of 16x16 tiles in a 64x64 atlas. v_uv runs 0..w/h across the
-// face; fract wraps it into a single tile, which tiles across merged
-// greedy quads exactly like Minecraft.
+// One array layer per tile. v_uv runs 0..w/h across the face; GL_REPEAT
+// tiles it across merged greedy quads natively, and per-layer mipmaps
+// work without atlas bleed (the old packed-atlas + fract() path broke
+// both mip selection and wrap filtering at tile borders).
 vec3 sample_atlas(int tile_id, vec2 face_uv) {
-    int col = tile_id & 3;
-    int row = tile_id >> 2;
-    vec2 tile_origin = vec2(col, row) / 4.0;
-    vec2 in_tile = fract(face_uv);
-    vec2 uv = tile_origin + in_tile * (1.0 / 4.0);
-    return texture(u_atlas, uv).rgb;
+    return texture(u_atlas, vec3(face_uv, float(tile_id))).rgb;
 }
 
 // Per-face tile picker. Grass / wood / snow have distinct top vs side
