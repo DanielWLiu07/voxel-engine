@@ -11,11 +11,15 @@
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
 #include "world/chunk_serialize.h"
+#include "world/section_visibility.h"
 #include "world/world.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 namespace {
 
@@ -226,6 +230,224 @@ void test_rle_decode_garbage_fails_gracefully() {
            "decode of garbage either returns false or yields a degenerate chunk");
 }
 
+// ----- section visibility (occlusion culling) ------------------------------
+
+void test_face_pair_bits_unique() {
+    unsigned seen = 0;
+    for (int a = 0; a < 6; ++a) {
+        for (int b = a + 1; b < 6; ++b) {
+            const int bit = world::face_pair_bit(a, b);
+            EXPECT(bit >= 0 && bit < 15, "pair bit in [0,15)");
+            EXPECT(!((seen >> bit) & 1u), "pair bit not reused");
+            seen |= 1u << bit;
+            EXPECT(world::face_pair_bit(b, a) == bit,
+                   "pair bit is order-independent");
+        }
+    }
+    EXPECT(seen == 0x7FFFu, "15 pairs cover exactly 15 bits");
+}
+
+void test_visibility_empty_and_solid() {
+    world::Chunk c;
+    auto vis = world::compute_section_visibility(c);
+    for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+        EXPECT(vis[sy] == world::kSectionVisAll, "air section fully connected");
+    }
+
+    // Fill section 1 (y 32..63) solid; it must block everything while its
+    // neighbors stay open.
+    for (int y = 32; y < 64; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                c.set(x, y, z, world::BlockId::Stone);
+    vis = world::compute_section_visibility(c);
+    EXPECT(vis[1] == 0, "solid section has no connectivity");
+    EXPECT(vis[0] == world::kSectionVisAll, "section below stays open");
+    EXPECT(vis[2] == world::kSectionVisAll, "section above stays open");
+}
+
+void test_visibility_slab_blocks_vertical_only() {
+    world::Chunk c;
+    // Full horizontal slab at y=16: section 0 splits into a lower and an
+    // upper air component.
+    for (int z = 0; z < world::kChunkSizeZ; ++z)
+        for (int x = 0; x < world::kChunkSizeX; ++x)
+            c.set(x, 16, z, world::BlockId::Stone);
+    auto vis = world::compute_section_visibility(c);
+    EXPECT(!world::faces_connected(vis[0], world::kFaceNegY, world::kFacePosY),
+           "slab cuts -Y/+Y");
+    EXPECT(world::faces_connected(vis[0], world::kFaceNegX, world::kFacePosX),
+           "slab keeps -X/+X (both components bridge)");
+    EXPECT(world::faces_connected(vis[0], world::kFaceNegY, world::kFaceNegX),
+           "lower component links -Y to -X");
+    EXPECT(world::faces_connected(vis[0], world::kFacePosY, world::kFacePosZ),
+           "upper component links +Y to +Z");
+}
+
+void test_visibility_wall_blocks_x_only() {
+    world::Chunk c;
+    // Full vertical wall at x=8 through section 0.
+    for (int y = 0; y < world::kSectionHeight; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            c.set(8, y, z, world::BlockId::Stone);
+    auto vis = world::compute_section_visibility(c);
+    EXPECT(!world::faces_connected(vis[0], world::kFaceNegX, world::kFacePosX),
+           "wall cuts -X/+X");
+    EXPECT(world::faces_connected(vis[0], world::kFaceNegZ, world::kFacePosZ),
+           "wall keeps -Z/+Z");
+    EXPECT(world::faces_connected(vis[0], world::kFaceNegY, world::kFacePosY),
+           "wall keeps -Y/+Y");
+}
+
+// ----- occlusion BFS --------------------------------------------------------
+
+gfx::Frustum frustum_from(const glm::vec3& eye, const glm::vec3& forward,
+                          float zfar) {
+    gfx::Frustum f;
+    const glm::mat4 proj = glm::perspective(glm::radians(70.0f),
+                                            16.0f / 9.0f, 0.1f, zfar);
+    const glm::mat4 view = glm::lookAt(eye, eye + forward,
+                                       glm::vec3(0.0f, 1.0f, 0.0f));
+    f.from_view_proj(proj * view);
+    return f;
+}
+
+void test_bfs_solid_chunk_blocks_sightline() {
+    // Three chunks along +X: air, fully solid, air. The camera in chunk 0
+    // looking +X must reach the wall chunk's sections (their near faces are
+    // visible) but nothing in the far chunk behind it.
+    world::Chunk air, wall;
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                wall.set(x, y, z, world::BlockId::Stone);
+
+    auto vis_air  = world::compute_section_visibility(air);
+    auto vis_wall = world::compute_section_visibility(wall);
+
+    auto visibility_of = [&](world::ChunkCoord c) -> const world::SectionVisArray* {
+        if (c.z != 0) return nullptr;
+        if (c.x == 0) return &vis_air;
+        if (c.x == 1) return &vis_wall;
+        if (c.x == 2) return &vis_air;
+        return nullptr;
+    };
+
+    const glm::vec3 eye{8.0f, 40.0f, 8.0f};
+    world::SectionReachableMap reachable;
+    const bool ok = world::occlusion_bfs(
+        eye, frustum_from(eye, {1.0f, 0.0f, 0.0f}, 500.0f),
+        visibility_of, reachable);
+    EXPECT(ok, "BFS runs when the camera chunk is loaded");
+    EXPECT(reachable.count({1, 0}) == 1, "wall chunk is reached (visible faces)");
+    EXPECT(reachable.count({2, 0}) == 0, "chunk behind the solid wall is not");
+
+    // Unloaded camera chunk refuses to run.
+    world::SectionReachableMap r2;
+    EXPECT(!world::occlusion_bfs({500.0f, 40.0f, 500.0f},
+                                 frustum_from(eye, {1.0f, 0.0f, 0.0f}, 500.0f),
+                                 visibility_of, r2),
+           "BFS reports fallback when camera chunk is unloaded");
+}
+
+// Line-of-sight property: for real terrain, every air cell a straight
+// unobstructed ray passes through (well inside the frustum) must land in a
+// BFS-reachable section. Over-culling here is what would show up as holes
+// in the rendered world.
+void test_bfs_never_culls_line_of_sight() {
+    constexpr int kR = 4;  // 9x9 chunk grid
+    const int side = 2 * kR + 1;
+    world::TerrainGen terrain(1337);
+
+    std::vector<world::Chunk> chunks(static_cast<std::size_t>(side) * side);
+    std::vector<world::SectionVisArray> vis(chunks.size());
+    for (int cz = -kR; cz <= kR; ++cz) {
+        for (int cx = -kR; cx <= kR; ++cx) {
+            const std::size_t i =
+                static_cast<std::size_t>(cz + kR) * side + (cx + kR);
+            terrain.fill_chunk(cx, cz, chunks[i]);
+            vis[i] = world::compute_section_visibility(chunks[i]);
+        }
+    }
+
+    auto chunk_of = [](int w) { return w >= 0 ? w / 16 : (w - 15) / 16; };
+    auto index_of = [&](int cx, int cz) -> int {
+        if (cx < -kR || cx > kR || cz < -kR || cz > kR) return -1;
+        return (cz + kR) * side + (cx + kR);
+    };
+    auto visibility_of = [&](world::ChunkCoord c) -> const world::SectionVisArray* {
+        const int i = index_of(c.x, c.z);
+        return i < 0 ? nullptr : &vis[static_cast<std::size_t>(i)];
+    };
+    auto block_at = [&](int wx, int wy, int wz) -> world::BlockId {
+        if (wy < 0 || wy >= world::kChunkSizeY) return world::BlockId::Air;
+        const int cx = chunk_of(wx), cz = chunk_of(wz);
+        const int i = index_of(cx, cz);
+        if (i < 0) return world::BlockId::Air;
+        return chunks[static_cast<std::size_t>(i)].get(
+            wx - cx * 16, wy, wz - cz * 16);
+    };
+    auto reachable_has = [&](const world::SectionReachableMap& r,
+                             int wx, int wy, int wz) -> bool {
+        auto it = r.find({chunk_of(wx), chunk_of(wz)});
+        if (it == r.end()) return false;
+        return ((it->second >> (wy / world::kSectionHeight)) & 1) != 0;
+    };
+
+    const float zfar = static_cast<float>(kR * 16) * 0.95f + 16.0f;
+
+    // Surface pose mirrors --bench; the second pose sits low (cave-ish).
+    // The ray fan stays well inside the 70-degree frustum.
+    struct Pose { glm::vec3 eye; float yaw_deg; float pitch_deg; };
+    const Pose poses[] = {
+        {{0.0f, 80.0f, 0.0f}, -90.0f, -15.0f},
+        {{8.5f, 30.5f, 8.5f}, -90.0f,   0.0f},
+    };
+
+    int rays_checked = 0;
+    for (const auto& pose : poses) {
+        const float cy = glm::radians(pose.yaw_deg);
+        const float cp = glm::radians(pose.pitch_deg);
+        const glm::vec3 fwd{std::cos(cy) * std::cos(cp), std::sin(cp),
+                            std::sin(cy) * std::cos(cp)};
+        const gfx::Frustum f = frustum_from(pose.eye, fwd, zfar);
+
+        world::SectionReachableMap reachable;
+        if (!world::occlusion_bfs(pose.eye, f, visibility_of, reachable)) {
+            EXPECT(false, "BFS must run for an in-grid pose");
+            continue;
+        }
+
+        bool all_visible = true;
+        for (int dh = -25; dh <= 25 && all_visible; dh += 5) {
+            for (int dv = -15; dv <= 15 && all_visible; dv += 5) {
+                const float ry = glm::radians(pose.yaw_deg + dh);
+                const float rp = glm::radians(pose.pitch_deg + dv);
+                const glm::vec3 dir{std::cos(ry) * std::cos(rp), std::sin(rp),
+                                    std::sin(ry) * std::cos(rp)};
+                for (float t = 0.0f; t < zfar - 16.0f; t += 0.25f) {
+                    const glm::vec3 p = pose.eye + dir * t;
+                    const int wx = static_cast<int>(std::floor(p.x));
+                    const int wy = static_cast<int>(std::floor(p.y));
+                    const int wz = static_cast<int>(std::floor(p.z));
+                    if (wy < 0 || wy >= world::kChunkSizeY) break;
+                    if (index_of(chunk_of(wx), chunk_of(wz)) < 0) break;
+                    if (world::is_solid(block_at(wx, wy, wz))) break;
+                    if (!reachable_has(reachable, wx, wy, wz)) {
+                        std::printf("  LOS miss at (%d,%d,%d) t=%.1f pose y=%.0f\n",
+                                    wx, wy, wz, t, pose.eye.y);
+                        all_visible = false;
+                        break;
+                    }
+                }
+                ++rays_checked;
+            }
+        }
+        EXPECT(all_visible, "every air cell on a clear sightline is reachable");
+    }
+    EXPECT(rays_checked > 100, "ray fan actually ran");
+}
+
 }  // namespace
 
 int main() {
@@ -242,6 +464,12 @@ int main() {
     test_rle_empty_roundtrip();
     test_rle_solid_roundtrip();
     test_rle_decode_garbage_fails_gracefully();
+    test_face_pair_bits_unique();
+    test_visibility_empty_and_solid();
+    test_visibility_slab_blocks_vertical_only();
+    test_visibility_wall_blocks_x_only();
+    test_bfs_solid_chunk_blocks_sightline();
+    test_bfs_never_culls_line_of_sight();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");
