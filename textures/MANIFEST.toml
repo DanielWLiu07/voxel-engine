@@ -1,0 +1,89 @@
+# AI-generated texture provenance. Regenerate with
+#   python3 scripts/gen_textures.py
+# These assets are AI-generated and labeled as such on
+# purpose - see TEXTURES.md.
+
+[stone]
+file = "textures/stone.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "rough grey granite stone surface, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 101
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "956e9cb5d4f90937"
+seam_ratio = 1.337
+
+[dirt]
+file = "textures/dirt.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "brown soil dirt ground with small pebbles, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 102
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "cdd61012004d1850"
+seam_ratio = 1.287
+
+[grass]
+file = "textures/grass.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "dense green grass lawn seen from directly above, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 103
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "b858bc6609f50d16"
+seam_ratio = 0.849
+
+[sand]
+file = "textures/sand.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "fine pale desert sand with gentle ripples, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 104
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "40def6089d8ae8c3"
+seam_ratio = 2.097
+
+[wood]
+file = "textures/wood.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "vertical oak wood bark planks, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 105
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "fc495e4e5c77efc2"
+seam_ratio = 1.200
+
+[leaves]
+file = "textures/leaves.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "dense dark green leafy foliage canopy, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 106
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "212c34ff3353de48"
+seam_ratio = 0.968
+
+[snow]
+file = "textures/snow.png"
+model = "stabilityai/sdxl-turbo"
+prompt = "clean white snow surface with subtle sparkle, seamless tileable game texture, top-down flat view, stylized pixel art, even diffuse lighting, no shadows, no border, high detail"
+seed = 107
+steps = 4
+guidance = 0.0
+generated = "2026-06-10"
+pipeline = "circular-conv padding, 512px -> LANCZOS 64px"
+sha256_16 = "08d8cf3984017414"
+seam_ratio = 1.313
+
