@@ -28,7 +28,8 @@ std::string timestamp_filename() {
 
 }  // namespace
 
-std::string save_screenshot(int w, int h, const std::string& dir) {
+std::string save_screenshot(int w, int h, const std::string& dir,
+                            const std::string& filename) {
     if (w <= 0 || h <= 0) return {};
 
     std::error_code ec;
@@ -57,7 +58,8 @@ std::string save_screenshot(int w, int h, const std::string& dir) {
                     &pixels[static_cast<size_t>(h - 1 - y) * row], row);
     }
 
-    std::filesystem::path out = std::filesystem::path(dir) / timestamp_filename();
+    std::filesystem::path out = std::filesystem::path(dir) /
+        (filename.empty() ? timestamp_filename() : filename);
     if (!stbi_write_png(out.string().c_str(), w, h, channels,
                         flipped.data(), static_cast<int>(row))) {
         std::fprintf(stderr, "[screenshot] write %s failed\n", out.string().c_str());
