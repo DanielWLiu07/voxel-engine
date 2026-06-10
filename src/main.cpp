@@ -317,7 +317,7 @@ int run_bench() {
                 surf_frustum, surf_occl,
                 surf_occl > 0 ? double(surf_frustum) / surf_occl : 0.0);
     if (cave_found && cave_occl >= 0) {
-        std::printf("  cave pose (%.0f,%.0f,%.0f)     : %4d -> %4d sections  (%.2fx fewer)\n",
+        std::printf("  cave pose (%.1f,%.1f,%.1f)     : %4d -> %4d sections  (%.2fx fewer)\n",
                     cave_pos.x, cave_pos.y, cave_pos.z,
                     cave_frustum, cave_occl,
                     cave_occl > 0 ? double(cave_frustum) / cave_occl : 0.0);
@@ -433,6 +433,13 @@ int main(int argc, char** argv) {
     bool bench_pass_breakdown = false;
     bool bench_io = false;
     std::string_view bench_pose = "center";
+    // --screenshot-after N: render until the world is loaded plus N settle
+    // frames, save the scene (pre-HUD) to a fixed filename, exit. Drives
+    // visual regression checks from scripts; pairs with --no-occlusion for
+    // pixel A/B of the occlusion culler.
+    int shot_after = 0;
+    std::string shot_file;
+    bool no_occlusion = false;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -447,6 +454,9 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
+                "  voxel_engine --screenshot-after N     load world, settle N frames, save PNG, exit\n"
+                "  voxel_engine --shot-file NAME         filename for --screenshot-after (in ./screenshots)\n"
+                "  voxel_engine --no-occlusion           start with occlusion culling disabled\n"
                 "  voxel_engine --help                   this text\n"
                 "\n"
                 "See README.md for the reproducible perf tables and CI gates.\n");
@@ -463,6 +473,15 @@ int main(int argc, char** argv) {
             bench_pose = argv[i + 1];
             ++i;
         }
+        if (arg == "--screenshot-after" && i + 1 < argc) {
+            shot_after = std::atoi(argv[i + 1]);
+            ++i;
+        }
+        if (arg == "--shot-file" && i + 1 < argc) {
+            shot_file = argv[i + 1];
+            ++i;
+        }
+        if (arg == "--no-occlusion") no_occlusion = true;
     }
 
     glfwSetErrorCallback(glfw_error);
@@ -485,11 +504,12 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     glfwMakeContextCurrent(window);
-    bool vsync_enabled = (bench_frames == 0);
+    bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     glfwSwapInterval(vsync_enabled ? 1 : 0);
     // Section-graph occlusion culling (O to toggle). On by default; the
-    // frustum-only path stays one keypress away for A/B comparison.
-    bool occlusion_cull_enabled = true;
+    // frustum-only path stays one keypress away (or --no-occlusion) for
+    // A/B comparison.
+    bool occlusion_cull_enabled = !no_occlusion;
 
     int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0) {
@@ -590,18 +610,22 @@ int main(int argc, char** argv) {
     gfx::FlyCamera cam;
     cam.set_position({0.0f, 80.0f, 80.0f});
     cam.set_yaw_pitch(-90.0f, -35.0f);
-    if (bench_frames > 0) {
+    if (bench_frames > 0 || shot_after > 0) {
         // Named poses keep the perf table reproducible across vantage
         // points. "center" matches the --bench cull pose for direct
         // comparability with the cull-ratio table; "ground" is an
         // eye-level walk pose; "high" is a top-down vantage that
-        // exercises the section-AABB cull's vertical pruning.
+        // exercises the section-AABB cull's vertical pruning; "cave" is
+        // the --bench occlusion pose inside an air pocket (seed 1337).
         if (bench_pose == "ground") {
             cam.set_position({0.0f, 35.0f, 0.0f});
             cam.set_yaw_pitch(-90.0f, 0.0f);
         } else if (bench_pose == "high") {
             cam.set_position({0.0f, 150.0f, 0.0f});
             cam.set_yaw_pitch(-90.0f, -45.0f);
+        } else if (bench_pose == "cave") {
+            cam.set_position({-30.5f, 15.5f, -31.5f});
+            cam.set_yaw_pitch(-90.0f, 0.0f);
         } else {
             // default: "center"
             bench_pose = "center";
@@ -627,9 +651,10 @@ int main(int argc, char** argv) {
 
     float time_of_day = 0.35f;
     const float day_speed = 1.0f / 240.0f;
-    // Bench mode pauses time-of-day so a sunrise/sunset transition mid-bench
-    // can't fire the shadow-resync force-refresh path and inject a spike.
-    bool  time_paused = (bench_frames > 0);
+    // Bench/shot modes pause time-of-day so a sunrise/sunset transition
+    // mid-run can't fire the shadow-resync force-refresh path (bench: timing
+    // spike) or change the lighting between A/B captures.
+    bool  time_paused = (bench_frames > 0 || shot_after > 0);
 
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
@@ -790,7 +815,9 @@ int main(int argc, char** argv) {
             std::printf("[mode] %s\n", walk_mode ? "walk" : "fly");
         }
 
-        if (input.cursor_captured()) {
+        // Scripted capture locks the pose: live mouse/keys would steer the
+        // camera mid-run and make the shot non-reproducible.
+        if (input.cursor_captured() && shot_after == 0) {
             update_movement(input, dt, cam, player, wrld, walk_mode);
             handle_block_interaction(input, cam, player, walk_mode, wrld);
         }
@@ -905,7 +932,9 @@ int main(int argc, char** argv) {
         // of one that never trips at radius 12.
         const float kCameraFar = fv.fog_end + static_cast<float>(world::kChunkSizeX);
         fv.proj       = cam.proj_matrix(aspect, 70.0f, 0.1f, kCameraFar);
-        fv.time_seconds = static_cast<float>(now);
+        // Scripted captures freeze shader time (water waves) so identical
+        // scenes produce byte-identical PNGs.
+        fv.time_seconds = (shot_after > 0) ? 100.0f : static_cast<float>(now);
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
 
@@ -989,6 +1018,21 @@ int main(int argc, char** argv) {
                                      /*intensity*/ 0.7f,
                                      /*exposure*/  1.0f);
         pass_end(pass_ms_postfx);
+
+        // Scripted capture: scene only (pre-HUD), after the world finished
+        // loading plus shot_after settle frames. Fixed filename makes runs
+        // pixel-diffable (occlusion on/off A/B).
+        if (shot_after > 0 && initial_load_logged && --shot_after == 0) {
+            const std::string path =
+                gfx::save_screenshot(fb_w, fb_h, "./screenshots", shot_file);
+            std::printf("[screenshot] %s  (pose=%.*s occlusion=%s sections=%d)\n",
+                        path.empty() ? "FAILED" : path.c_str(),
+                        static_cast<int>(bench_pose.size()), bench_pose.data(),
+                        occlusion_cull_enabled ? "on" : "off",
+                        last_stats.sections_drawn);
+            std::fflush(stdout);
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
 
         hud.begin_frame();
         ui::PerfFrame pf;
