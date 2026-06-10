@@ -10,7 +10,13 @@ namespace world {
 
 inline constexpr int kSeaLevel  = 24;
 inline constexpr int kSandBand  = 2;
-inline constexpr int kStoneBand = 28;
+// Stone band at 28 left only a 4-block grass strip above sea level —
+// virtually all mid-altitude terrain (heights ~30-40) rendered bare stone
+// or snow and the world read as monochrome white-grey. 36 gives grassland
+// and forest at mid-altitudes, a rock band at 36-39, snow caps above 40.
+// Heights are unchanged, so cull/cave bench geometry is identical; only
+// surface block types (and the greedy merge runs across them) shift.
+inline constexpr int kStoneBand = 36;
 inline constexpr int kSnowBand  = 40;  // grass above this altitude turns to snow
 
 class TerrainGen {
