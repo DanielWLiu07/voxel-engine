@@ -14,6 +14,7 @@ struct PerfFrame {
     int   sections_drawn = 0;
     int   sections_occluded = 0;   // frustum-visible but skipped by the BFS
     bool  occlusion_enabled = false;
+    const char* place_block_name = nullptr;
     std::size_t triangles_drawn = 0;
     int   pending_async = 0;
     double initial_load_ms = 0.0;

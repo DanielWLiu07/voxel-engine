@@ -65,6 +65,9 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         }
         ImGui::Text("triangles    : %zu", f.triangles_drawn);
         ImGui::Text("pending gen  : %d", f.pending_async);
+        if (f.place_block_name) {
+            ImGui::Text("place block  : %s (1-7 to switch)", f.place_block_name);
+        }
 
         if (f.initial_load_ms > 0.0 && f.total_chunks > 0) {
             ImGui::Separator();
