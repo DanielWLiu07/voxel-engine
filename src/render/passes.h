@@ -42,14 +42,17 @@ void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light);
 
-// Returns the visible chunks / triangles draw stats.
+// Returns the visible chunks / triangles draw stats. occlusion_cull routes
+// through the section-graph BFS (camera at fv.camera_pos); off = frustum
+// culling only.
 world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
                               gfx::CascadedShadowMap& shadow_map,
                               const world::World& wrld,
                               const FrameView& fv,
                               const LightingFrame& light,
                               const glm::vec3 palette[8],
-                              const gfx::Frustum& view_frustum);
+                              const gfx::Frustum& view_frustum,
+                              bool occlusion_cull);
 
 void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
                 const FrameView& fv, const LightingFrame& light,

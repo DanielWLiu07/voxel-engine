@@ -23,6 +23,16 @@ constexpr bool in_chunk_bounds(int x, int y, int z) {
         && z >= 0 && z < kChunkSizeZ;
 }
 
+// Vertical sub-chunks. The mesh is still built chunk-wide (so the greedy
+// merger doesn't get split at section boundaries), then bucketed into
+// kSectionsPerChunk per-section meshes. Lives here (not world.h) so the
+// section-visibility flood fill can size its output without pulling in the
+// world container.
+inline constexpr int kSectionHeight    = 32;
+inline constexpr int kSectionsPerChunk = kChunkSizeY / kSectionHeight;
+static_assert(kSectionHeight * kSectionsPerChunk == kChunkSizeY,
+              "kChunkSizeY must be a clean multiple of kSectionHeight");
+
 class Chunk {
 public:
     Chunk() { blocks_.fill(static_cast<std::uint8_t>(BlockId::Air)); }

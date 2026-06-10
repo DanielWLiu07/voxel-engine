@@ -111,6 +111,7 @@ add_executable(voxel_engine
   src/ui/debug_hud.cpp
   src/world/chunk_mesh.cpp
   src/world/chunk_serialize.cpp
+  src/world/section_visibility.cpp
   src/world/terrain_gen.cpp
   src/world/world.cpp
   src/world/world_io.cpp
@@ -162,6 +163,7 @@ if(VOXEL_BUILD_TESTS)
     src/world/world.cpp
     src/world/chunk_mesh.cpp
     src/world/chunk_serialize.cpp
+    src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
     src/gfx/frustum.cpp
     src/gfx/mesh.cpp

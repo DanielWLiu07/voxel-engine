@@ -67,7 +67,8 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
                               const FrameView& fv,
                               const LightingFrame& light,
                               const glm::vec3 palette[8],
-                              const gfx::Frustum& view_frustum) {
+                              const gfx::Frustum& view_frustum,
+                              bool occlusion_cull) {
     ZoneScopedN("terrain_pass");
     terrain_shader.use();
     terrain_shader.set_mat4("u_view", fv.view);
@@ -97,6 +98,10 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     GLint pal_loc = glGetUniformLocation(terrain_shader.id(), "u_palette");
     if (pal_loc >= 0) glUniform3fv(pal_loc, 8, &palette[0].x);
 
+    if (occlusion_cull) {
+        return wrld.draw_visible_occluded(view_frustum, fv.camera_pos,
+                                          terrain_shader);
+    }
     return wrld.draw_visible(view_frustum, terrain_shader);
 }
 
