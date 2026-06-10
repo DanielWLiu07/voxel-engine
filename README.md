@@ -218,6 +218,7 @@ Tooling
 | F | Toggle walk / fly |
 | Left click | Break block |
 | Right click | Place block |
+| 1–7 | Pick block to place (Stone, Dirt, Grass, Sand, Wood, Leaves, Snow) |
 | Tab | Toggle mouse capture |
 | F2 | Toggle HUD |
 | F5 / F6 | Save / load world (`./saves/world1/`) |

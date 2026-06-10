@@ -354,7 +354,8 @@ void handle_block_interaction(core::Input& input,
                               const gfx::FlyCamera& cam,
                               const game::Player& player,
                               bool walk_mode,
-                              world::World& wrld) {
+                              world::World& wrld,
+                              world::BlockId place_id) {
     bool break_block = input.mouse_button_pressed(GLFW_MOUSE_BUTTON_LEFT);
     bool place_block = input.mouse_button_pressed(GLFW_MOUSE_BUTTON_RIGHT);
     if (!break_block && !place_block) return;
@@ -380,7 +381,20 @@ void handle_block_interaction(core::Input& input,
             return;
         }
     }
-    wrld.set_block(px, py, pz, world::BlockId::Stone);
+    wrld.set_block(px, py, pz, place_id);
+}
+
+const char* block_name(world::BlockId b) {
+    switch (b) {
+    case world::BlockId::Stone:  return "Stone";
+    case world::BlockId::Dirt:   return "Dirt";
+    case world::BlockId::Grass:  return "Grass";
+    case world::BlockId::Sand:   return "Sand";
+    case world::BlockId::Wood:   return "Wood";
+    case world::BlockId::Leaves: return "Leaves";
+    case world::BlockId::Snow:   return "Snow";
+    default:                     return "?";
+    }
 }
 
 void update_movement(core::Input& input, float dt,
@@ -676,6 +690,7 @@ int main(int argc, char** argv) {
     game::Player player;
     player.set_position({0.0f, 80.0f, 0.0f});
     bool walk_mode = false;
+    world::BlockId place_id = world::BlockId::Stone;
 
     float time_of_day = 0.35f;
     const float day_speed = 1.0f / 240.0f;
@@ -685,7 +700,7 @@ int main(int argc, char** argv) {
     bool  time_paused = (bench_frames > 0 || shot_after > 0);
 
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
-    std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
+    std::printf("[input] LClick = break, RClick = place, 1-7 = pick block, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
     std::printf("[input] O = toggle occlusion culling\n");
@@ -845,9 +860,15 @@ int main(int argc, char** argv) {
 
         // Scripted capture locks the pose: live mouse/keys would steer the
         // camera mid-run and make the shot non-reproducible.
+        for (int k = 0; k < 7; ++k) {
+            if (input.key_pressed(GLFW_KEY_1 + k)) {
+                place_id = static_cast<world::BlockId>(k + 1);
+                std::printf("[place] %s\n", block_name(place_id));
+            }
+        }
         if (input.cursor_captured() && shot_after == 0) {
             update_movement(input, dt, cam, player, wrld, walk_mode);
-            handle_block_interaction(input, cam, player, walk_mode, wrld);
+            handle_block_interaction(input, cam, player, walk_mode, wrld, place_id);
         }
 
         world::ChunkCoord center{
@@ -1073,6 +1094,7 @@ int main(int argc, char** argv) {
         pf.sections_drawn    = last_stats.sections_drawn;
         pf.sections_occluded = last_stats.sections_occluded;
         pf.occlusion_enabled = occlusion_cull_enabled;
+        pf.place_block_name  = block_name(place_id);
         pf.triangles_drawn = last_stats.triangles_drawn;
         pf.pending_async   = wrld.pending_async();
         pf.initial_load_ms = initial_load_ms;
