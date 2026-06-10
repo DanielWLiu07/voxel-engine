@@ -549,8 +549,14 @@ void World::debug_dump_visibility(const gfx::Frustum& frustum) const {
         const ChunkSlot& s = *kv.second;
         bool vis = frustum.intersects_aabb(s.chunk_aabb);
         if (vis) ++drawn;
-        std::printf("  chunk (%+3d,%+3d)  %s\n",
-                    s.coord.x, s.coord.z, vis ? "VISIBLE" : "culled");
+        int meshed = 0;
+        for (const auto& sec : s.sections) meshed += sec.has_mesh ? 1 : 0;
+        std::printf("  chunk (%+3d,%+3d)  %s  aabb y[%.0f..%.0f] xz[%.0f,%.0f..%.0f,%.0f] sections=%d solids=%d\n",
+                    s.coord.x, s.coord.z, vis ? "VISIBLE" : "culled",
+                    s.chunk_aabb.min.y, s.chunk_aabb.max.y,
+                    s.chunk_aabb.min.x, s.chunk_aabb.min.z,
+                    s.chunk_aabb.max.x, s.chunk_aabb.max.z,
+                    meshed, s.chunk.solid_count());
     }
     std::printf("  total visible: %d / %zu\n", drawn, chunks_.size());
 }
@@ -653,6 +659,56 @@ bool occlusion_bfs(
         }
     }
     return true;
+}
+
+int World::debug_validate_gpu_meshes() const {
+    std::vector<gfx::VertexPNT> verts;
+    std::vector<std::uint32_t> idx;
+    int bad = 0;
+    for (const auto& kv : chunks_) {
+        const ChunkSlot& slot = *kv.second;
+        if (!slot.any_section_has_mesh) continue;
+        slot.chunk_mesh.debug_read_back(verts, idx);
+        for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+            const auto& p0 = verts[idx[t]].position;
+            const auto& p1 = verts[idx[t + 1]].position;
+            const auto& p2 = verts[idx[t + 2]].position;
+            const glm::vec3 n = verts[idx[t]].normal;
+            const int d = (std::abs(n.x) > 0.5f) ? 0 : (std::abs(n.y) > 0.5f ? 1 : 2);
+            const bool coplanar = (p0[d] == p1[d]) && (p1[d] == p2[d]);
+            bool backed = false;
+            if (coplanar) {
+                const int s = static_cast<int>(std::lround(p0[d]));
+                const int u_axis = (d + 1) % 3, v_axis = (d + 2) % 3;
+                const int u0 = static_cast<int>(std::floor(std::min({p0[u_axis], p1[u_axis], p2[u_axis]})));
+                const int u1 = static_cast<int>(std::ceil (std::max({p0[u_axis], p1[u_axis], p2[u_axis]})));
+                const int v0 = static_cast<int>(std::floor(std::min({p0[v_axis], p1[v_axis], p2[v_axis]})));
+                const int v1 = static_cast<int>(std::ceil (std::max({p0[v_axis], p1[v_axis], p2[v_axis]})));
+                for (int u = u0; u < u1 && !backed; ++u) {
+                    for (int v = v0; v < v1 && !backed; ++v) {
+                        int cell[3];
+                        cell[u_axis] = u; cell[v_axis] = v;
+                        cell[d] = (n[d] > 0.0f) ? s - 1 : s;
+                        if (in_chunk_bounds(cell[0], cell[1], cell[2]) &&
+                            is_solid(slot.chunk.get(cell[0], cell[1], cell[2]))) backed = true;
+                    }
+                }
+            }
+            if (!coplanar || !backed) {
+                ++bad;
+                if (bad <= 16) {
+                    std::printf("[validate] chunk(%+d,%+d) tri %zu %s: "
+                                "(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f)(%.1f,%.1f,%.1f) n=(%.0f,%.0f,%.0f) ids=%u,%u,%u\n",
+                                slot.coord.x, slot.coord.z, t / 3,
+                                coplanar ? "unbacked" : "NON-COPLANAR",
+                                p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z,
+                                n.x, n.y, n.z, idx[t], idx[t+1], idx[t+2]);
+                }
+            }
+        }
+    }
+    std::printf("[validate] GPU mesh triangles flagged: %d\n", bad);
+    return bad;
 }
 
 DrawStats World::draw_impl(const gfx::Frustum& frustum,

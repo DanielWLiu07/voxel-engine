@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace gfx {
 
@@ -37,6 +38,11 @@ public:
     void draw_range_bound(std::size_t index_offset, std::size_t index_count) const;
 
     std::size_t index_count() const { return index_count_; }
+
+    // Debug-only: pulls the uploaded VBO/EBO back off the GPU so a validator
+    // can check exactly what gets drawn (not what the CPU thinks it sent).
+    void debug_read_back(std::vector<VertexPNT>& vertices,
+                         std::vector<std::uint32_t>& indices) const;
 
 private:
     void destroy();
