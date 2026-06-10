@@ -33,8 +33,10 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 **Headline (radius 12, gameplay pose, vsync off):**
 5.40 ms avg frame time, **185 fps**, **29 M triangles/sec**, 253 MB peak RSS.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
-workers. Per-frame work: 405 of 5000 loaded sub-chunks drawn (12x cull),
-159k triangles rendered, post-process dominates per-pass cost at 44%.
+workers. Per-frame work: 394 of 5000 loaded sub-chunks drawn (12.7x
+frustum + occlusion cull), 153k triangles rendered, post-process dominates
+per-pass cost at 44%. Inside a cave, occlusion culling alone cuts drawn
+sections **70.8x** (283 -> 4).
 
 Reproduce:
 ```
@@ -55,6 +57,8 @@ POSES="center ground high" scripts/bench_sweep.sh 12
 | Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
 | Frustum cull (sections), 32-block sub-chunks, vs non-empty | 405 / 1250 drawn (~3.1x) |
 | Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
+| Occlusion cull (section-graph BFS), surface pose | 405 -> 394 sections (1.03x on open terrain) |
+| Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4:
@@ -95,8 +99,21 @@ Two denominators because both are useful:
 
 Frustum-only culling at 70° FOV ceilings near 3x because the cone covers
 roughly a third of the surrounding disc. The section pass adds modest
-tightening within visible chunks. Bigger reductions from here need
-occlusion, not finer AABBs.
+tightening within visible chunks. Bigger reductions need occlusion, not
+finer AABBs — which is what the occlusion rows measure.
+
+Occlusion culling is the Minecraft-style cave-culling algorithm: each
+16x32x16 section flood-fills its air cells on the worker thread and records
+which of its 15 face pairs a sightline can pass between (one bit each).
+Per frame, a BFS walks that connectivity graph from the camera's section —
+pruned by the frustum, never reversing a direction already taken — and only
+reached sections draw. On open terrain it trims the handful of sections
+buried just below the surface (405 -> 394). Underground it removes nearly
+everything: from a cave the frustum still admits 283 sections, but only 4
+are actually reachable through air. Toggle with O in-game for the A/B. A
+unit test casts a fan of line-of-sight rays through real terrain and
+asserts every air cell along an unobstructed ray lands in a BFS-reached
+section, so the cull can't eat geometry the camera can legitimately see.
 
 The scaling table comes from `scripts/bench_sweep.sh`, which loops
 over a list of radii (default `8 10 12 14 16`), edits `kStreamRadius`
@@ -195,6 +212,7 @@ Tooling
 | F5 / F6 | Save / load world (`./saves/world1/`) |
 | F12 | Screenshot (`./screenshots/`) |
 | C | Copy perf snapshot to clipboard |
+| O | Toggle occlusion culling |
 | T | Pause / resume time of day |
 | `[` / `]` | Step time of day |
 | V | Toggle vsync |
