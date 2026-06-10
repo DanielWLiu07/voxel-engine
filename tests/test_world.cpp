@@ -175,6 +175,30 @@ void test_greedy_equals_naive_area_on_simple_terrain() {
            "greedy emits strictly fewer quads on non-trivial terrain");
 }
 
+void test_greedy_equals_naive_area_on_perlin_cave_terrain() {
+    // Real generator output (caves on) exercises overhangs and interior
+    // surfaces the synthetic stepped terrain can't. Any area mismatch means
+    // the greedy mesher emitted stray or missing faces — this is the
+    // regression test for the floating-quad artifact.
+    world::TerrainGen terrain(1337);
+    for (int cz = -2; cz <= 2; ++cz) {
+        for (int cx = -2; cx <= 2; ++cx) {
+            world::Chunk c;
+            terrain.fill_chunk(cx, cz, c);
+            const auto naive  = world::build_chunk_mesh_naive(c);
+            const auto greedy = world::build_chunk_mesh_greedy(c);
+            const double a_naive  = total_quad_area(naive);
+            const double a_greedy = total_quad_area(greedy);
+            if (std::abs(a_naive - a_greedy) >= 1e-3) {
+                std::printf("  chunk (%d,%d): naive area %.1f vs greedy %.1f\n",
+                            cx, cz, a_naive, a_greedy);
+            }
+            EXPECT(std::abs(a_naive - a_greedy) < 1e-3,
+                   "greedy area matches naive on Perlin cave terrain");
+        }
+    }
+}
+
 // ----- chunk RLE serialize round-trip --------------------------------------
 
 void test_rle_empty_roundtrip() {
@@ -461,6 +485,7 @@ int main() {
     test_sections_terrain_spanning_boundary();
     test_section_bounds_in_world_space();
     test_greedy_equals_naive_area_on_simple_terrain();
+    test_greedy_equals_naive_area_on_perlin_cave_terrain();
     test_rle_empty_roundtrip();
     test_rle_solid_roundtrip();
     test_rle_decode_garbage_fails_gracefully();
