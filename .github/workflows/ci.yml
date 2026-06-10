@@ -64,8 +64,9 @@ jobs:
           CHUNK_TIGHT=$(echo "$SUMMARY"      | grep -oE 'chunk_tight=[0-9]+\.[0-9]+'      | cut -d= -f2)
           SECTION_NONEMPTY=$(echo "$SUMMARY" | grep -oE 'section_nonempty=[0-9]+\.[0-9]+' | cut -d= -f2)
           SECTION_TOTAL=$(echo "$SUMMARY"    | grep -oE 'section_total=[0-9]+\.[0-9]+'    | cut -d= -f2)
+          OCCL_CAVE=$(echo "$SUMMARY"        | grep -oE 'occl_cave=[0-9]+\.[0-9]+'        | cut -d= -f2)
 
-          echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x"
+          echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x  occl_cave=${OCCL_CAVE}x"
 
           # Thresholds carry ~10% slack below current measurements (M4 18.1 / 2.96 / 3.09 / 12.35).
           # If GH-hosted runners drift further, raise the slack rather than tightening the code.
@@ -78,3 +79,7 @@ jobs:
           gate chunk_tight       "$CHUNK_TIGHT"       2.7
           gate section_nonempty  "$SECTION_NONEMPTY"  2.8
           gate section_total     "$SECTION_TOTAL"    11.0
+          # Measured 70.8x on M4; the drawn count in the cave is tiny (~4
+          # sections) so the ratio is sensitive to mesher/terrain tweaks.
+          # Gate loosely: the claim is "order of magnitude underground".
+          gate occl_cave         "$OCCL_CAVE"        10.0
