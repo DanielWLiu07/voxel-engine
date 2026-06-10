@@ -84,6 +84,12 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
             ImGui::Text("streamed out : %d", f.streamed_out);
         }
 
+        if (f.ai_texture_tiles > 0) {
+            ImGui::Separator();
+            ImGui::TextDisabled("Block textures: AI-generated (SDXL-Turbo)");
+            ImGui::TextDisabled("see TEXTURES.md for per-file provenance");
+        }
+
         ImGui::Separator();
         if (ImGui::Button("Copy snapshot")) copy_perf_to_clipboard(f);
         ImGui::SameLine();
