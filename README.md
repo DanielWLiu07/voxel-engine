@@ -7,11 +7,11 @@ Core. The point of the project was to learn graphics from scratch and ship a
 binary with measurable wins, not to clone Minecraft. Numbers below are from
 my Apple M4.
 
-![Vista: lake, desert, forest and snow biomes, greedy-meshed and AI-textured](docs/media/vista.png)
+![Vista: lake, desert, forest and snow biomes, greedy-meshed and AI-textured](docs/media/vista.jpg)
 
-| ![Ground level](docs/media/ground.png) | ![Inside a cave](docs/media/cave.png) |
+| ![Ground level](docs/media/ground.jpg) | ![Inside a cave](docs/media/cave.jpg) |
 | :---: | :---: |
-| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Same frame from inside a cave: occlusion culling draws **4 sections instead of 391** — pixel-identical to the unculled render |
+| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 439** — byte-identical pixels to the unculled render |
 
 Screenshots are reproducible: `./build/voxel_engine --screenshot-after 60
 --pose center` renders a deterministic pose (locked camera, frozen shader
