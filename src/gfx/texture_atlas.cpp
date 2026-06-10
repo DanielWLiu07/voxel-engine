@@ -4,13 +4,13 @@
 #include <stb_image.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace gfx {
 
@@ -186,9 +186,13 @@ bool try_load_png_tile(int block_id, std::uint8_t* tile_out) {
 }
 
 void paint_tile_procedural(int block_id, std::uint8_t* tile_out) {
+    // The paint patterns are authored on the legacy 16px grid; sampling at
+    // scaled-down coords block-upscales them so their apparent feature size
+    // matches what it was before the array's resolution bump.
+    constexpr int kScale = kAtlasTilePx / kAtlasLegacyTilePx;
     for (int py = 0; py < kAtlasTilePx; ++py) {
         for (int px = 0; px < kAtlasTilePx; ++px) {
-            Rgb c = paint_tile(block_id, px, py);
+            Rgb c = paint_tile(block_id, px / kScale, py / kScale);
             std::uint8_t* dst = tile_out + (py * kAtlasTilePx + px) * 4;
             dst[0] = c.r; dst[1] = c.g; dst[2] = c.b; dst[3] = 255;
         }
@@ -198,44 +202,41 @@ void paint_tile_procedural(int block_id, std::uint8_t* tile_out) {
 }  // namespace
 
 GLuint generate_block_atlas(int* png_tiles_out) {
-    constexpr int kAtlasBytes = kAtlasSizePx * kAtlasSizePx * 4;
-    std::array<std::uint8_t, kAtlasBytes> pixels{};
+    constexpr int kTileBytes = kAtlasTilePx * kAtlasTilePx * 4;
+    std::vector<std::uint8_t> tile_buf(kTileBytes);
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8,
+                 kAtlasTilePx, kAtlasTilePx, kAtlasLayers,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
     int loaded_pngs = 0;
-    for (int tile = 0; tile < kAtlasTilesDim * kAtlasTilesDim; ++tile) {
-        std::array<std::uint8_t, kAtlasTilePx * kAtlasTilePx * 4> tile_buf{};
-
+    for (int tile = 0; tile < kAtlasLayers; ++tile) {
         if (try_load_png_tile(tile, tile_buf.data())) {
             ++loaded_pngs;
         } else {
             paint_tile_procedural(tile, tile_buf.data());
         }
-
-        const int tx = tile % kAtlasTilesDim;
-        const int ty = tile / kAtlasTilesDim;
-        for (int py = 0; py < kAtlasTilePx; ++py) {
-            const int row_dst = (ty * kAtlasTilePx + py) * kAtlasSizePx * 4
-                              + tx * kAtlasTilePx * 4;
-            std::memcpy(pixels.data() + row_dst,
-                        tile_buf.data() + py * kAtlasTilePx * 4,
-                        kAtlasTilePx * 4);
-        }
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, tile,
+                        kAtlasTilePx, kAtlasTilePx, 1,
+                        GL_RGBA, GL_UNSIGNED_BYTE, tile_buf.data());
     }
     if (loaded_pngs > 0) {
-        std::printf("[atlas] loaded %d/%d block textures from textures/\n",
-                    loaded_pngs, kAtlasTilesDim * kAtlasTilesDim - 1);
+        std::printf("[atlas] loaded %d block textures from textures/ (%dpx)\n",
+                    loaded_pngs, kAtlasTilePx);
     }
     if (png_tiles_out) *png_tiles_out = loaded_pngs;
 
-    GLuint tex = 0;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kAtlasSizePx, kAtlasSizePx,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    // NEAREST mag keeps the pixel-art crispness up close; mipmapped min
+    // filter kills the distance shimmer the old un-mipped atlas had.
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER,
+                    GL_NEAREST_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
     return tex;
 }
 

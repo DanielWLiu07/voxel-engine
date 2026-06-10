@@ -620,8 +620,8 @@ int main(int argc, char** argv) {
         std::printf("[credit] Block textures: AI-generated (SDXL-Turbo) - "
                     "see TEXTURES.md\n");
     }
-    std::printf("[atlas] %dx%d procedural block atlas\n",
-                gfx::kAtlasSizePx, gfx::kAtlasSizePx);
+    std::printf("[atlas] %d-layer %dpx block texture array (mipmapped)\n",
+                gfx::kAtlasLayers, gfx::kAtlasTilePx);
     GLuint crosshair_vao = 0;
     glGenVertexArrays(1, &crosshair_vao);
 
@@ -1039,7 +1039,7 @@ int main(int argc, char** argv) {
         pass_end(pass_ms_shadow);
 
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, block_atlas);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, block_atlas);
 
         postfx.begin_scene();
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
