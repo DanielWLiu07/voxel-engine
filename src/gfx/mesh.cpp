@@ -72,6 +72,22 @@ void Mesh::bind() const {
     if (vao_) glBindVertexArray(vao_);
 }
 
+void Mesh::debug_read_back(std::vector<VertexPNT>& vertices,
+                           std::vector<std::uint32_t>& indices) const {
+    vertices.clear();
+    indices.clear();
+    if (!vbo_ || !ebo_) return;
+    GLint vbytes = 0, ibytes = 0;
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vbytes);
+    vertices.resize(static_cast<std::size_t>(vbytes) / sizeof(VertexPNT));
+    glGetBufferSubData(GL_ARRAY_BUFFER, 0, vbytes, vertices.data());
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
+    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &ibytes);
+    indices.resize(static_cast<std::size_t>(ibytes) / sizeof(std::uint32_t));
+    glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, ibytes, indices.data());
+}
+
 void Mesh::draw_range_bound(std::size_t index_offset, std::size_t count) const {
     if (!vao_ || count == 0) return;
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(count), GL_UNSIGNED_INT,

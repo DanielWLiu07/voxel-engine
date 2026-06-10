@@ -205,6 +205,12 @@ public:
 
     void debug_dump_visibility(const gfx::Frustum& frustum) const;
 
+    // Reads every chunk's VBO/EBO back off the GPU and checks each triangle
+    // is an axis-aligned face backed by a solid block in that chunk's data.
+    // Prints offenders; returns their count. Diagnostic for phantom-geometry
+    // bugs — validates what the GPU draws, not what the CPU built.
+    int debug_validate_gpu_meshes() const;
+
     std::size_t chunk_count() const { return chunks_.size(); }
 
     // Cumulative timing counters across all completed chunks. Worker total

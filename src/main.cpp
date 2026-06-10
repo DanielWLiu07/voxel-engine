@@ -440,6 +440,9 @@ int main(int argc, char** argv) {
     int shot_after = 0;
     std::string shot_file;
     bool no_occlusion = false;
+    glm::vec3 pose_at{};
+    float pose_at_yaw = 0.0f, pose_at_pitch = 0.0f;
+    bool have_pose_at = false;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -482,6 +485,22 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--no-occlusion") no_occlusion = true;
+        // Free-position pose for investigating spots found in screenshots:
+        // --pose-at x,y,z,yaw,pitch (overrides --pose).
+        if (arg == "--pose-at" && i + 1 < argc) {
+            float v[5]{};
+            if (std::sscanf(argv[i + 1], "%f,%f,%f,%f,%f",
+                            &v[0], &v[1], &v[2], &v[3], &v[4]) == 5) {
+                pose_at = {v[0], v[1], v[2]};
+                pose_at_yaw = v[3];
+                pose_at_pitch = v[4];
+                have_pose_at = true;
+            } else {
+                std::fprintf(stderr, "--pose-at expects x,y,z,yaw,pitch\n");
+                return EXIT_FAILURE;
+            }
+            ++i;
+        }
     }
 
     glfwSetErrorCallback(glfw_error);
@@ -610,7 +629,11 @@ int main(int argc, char** argv) {
     gfx::FlyCamera cam;
     cam.set_position({0.0f, 80.0f, 80.0f});
     cam.set_yaw_pitch(-90.0f, -35.0f);
-    if (bench_frames > 0 || shot_after > 0) {
+    if (have_pose_at) {
+        bench_pose = "at";
+        cam.set_position(pose_at);
+        cam.set_yaw_pitch(pose_at_yaw, pose_at_pitch);
+    } else if (bench_frames > 0 || shot_after > 0) {
         // Named poses keep the perf table reproducible across vantage
         // points. "center" matches the --bench cull pose for direct
         // comparability with the cull-ratio table; "ground" is an
@@ -618,7 +641,12 @@ int main(int argc, char** argv) {
         // exercises the section-AABB cull's vertical pruning; "cave" is
         // the --bench occlusion pose inside an air pocket (seed 1337).
         if (bench_pose == "ground") {
-            cam.set_position({0.0f, 35.0f, 0.0f});
+            // Stand ON the surface: the old fixed y=35 was below the local
+            // terrain height (~39), which put the camera inside the hill and
+            // produced see-through "floating quad" captures.
+            const float eye_y =
+                static_cast<float>(terrain.height_at(0, 0)) + 2.7f;
+            cam.set_position({0.0f, eye_y, 0.0f});
             cam.set_yaw_pitch(-90.0f, 0.0f);
         } else if (bench_pose == "high") {
             cam.set_position({0.0f, 150.0f, 0.0f});
@@ -837,6 +865,7 @@ int main(int argc, char** argv) {
             initial_load_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - async_t0).count();
             initial_load_logged = true;
+            if (std::getenv("VOXEL_VALIDATE")) wrld.debug_validate_gpu_meshes();
             double cps = initial_load_ms > 0.0
                 ? total_chunks * 1000.0 / initial_load_ms : 0.0;
             std::printf("[world] %d chunks loaded in %.1f ms  (%.0f chunks/sec, %zu workers)\n",
@@ -1023,6 +1052,7 @@ int main(int argc, char** argv) {
         // loading plus shot_after settle frames. Fixed filename makes runs
         // pixel-diffable (occlusion on/off A/B).
         if (shot_after > 0 && initial_load_logged && --shot_after == 0) {
+            if (std::getenv("VOXEL_VALIDATE")) wrld.debug_dump_visibility(view_frustum);
             const std::string path =
                 gfx::save_screenshot(fb_w, fb_h, "./screenshots", shot_file);
             std::printf("[screenshot] %s  (pose=%.*s occlusion=%s sections=%d)\n",
