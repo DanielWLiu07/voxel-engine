@@ -135,10 +135,17 @@ int run_bench() {
     std::vector<gfx::AABB> wide_aabbs;
     std::vector<gfx::AABB> tight_aabbs;
     std::vector<std::array<world::SectionBounds, world::kSectionsPerChunk>> section_bounds;
+    std::vector<world::SectionVisArray> vis_arrays;
     wide_aabbs.reserve(total);
     tight_aabbs.reserve(total);
     section_bounds.reserve(total);
+    vis_arrays.reserve(total);
     int total_sections_nonempty = 0;
+    // Cave pose for the occlusion bench: first 2-tall air pocket with a
+    // solid roof and floor, scanned in fixed order near the origin so the
+    // pose is deterministic for a given seed.
+    bool cave_found = false;
+    glm::vec3 cave_pos{};
     auto gen_t0 = std::chrono::steady_clock::now();
     for (int cz = -kRadius; cz <= kRadius; ++cz) {
         for (int cx = -kRadius; cx <= kRadius; ++cx) {
@@ -154,6 +161,25 @@ int run_bench() {
             auto secs = world::compute_section_bounds({cx, cz}, c);
             for (const auto& s : secs) if (s.has_mesh) ++total_sections_nonempty;
             section_bounds.push_back(std::move(secs));
+            vis_arrays.push_back(world::compute_section_visibility(c));
+
+            if (!cave_found && std::abs(cx) <= 2 && std::abs(cz) <= 2) {
+                for (int y = 10; y <= 40 && !cave_found; ++y) {
+                    for (int z = 0; z < world::kChunkSizeZ && !cave_found; ++z) {
+                        for (int x = 0; x < world::kChunkSizeX; ++x) {
+                            if (world::is_solid(c.get(x, y, z)))     continue;
+                            if (world::is_solid(c.get(x, y + 1, z))) continue;
+                            if (!world::is_solid(c.get_or_air(x, y + 2, z))) continue;
+                            if (!world::is_solid(c.get_or_air(x, y - 1, z))) continue;
+                            cave_pos = {ox + x + 0.5f,
+                                        static_cast<float>(y) + 1.5f,
+                                        oz + z + 0.5f};
+                            cave_found = true;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
     auto gen_t1 = std::chrono::steady_clock::now();
@@ -195,6 +221,76 @@ int run_bench() {
     };
     const int sections_drawn = count_sections_visible(kFarTight);
 
+    // ---- Occlusion cull (section-graph BFS) ---------------------------
+    // Same drawn-section count as above, but only sections the camera can
+    // reach through air survive. Surface pose reuses the frustum camera;
+    // cave pose drops the camera into the air pocket found during gen.
+    auto make_frustum = [&](const glm::vec3& pos, float yaw, float pitch) {
+        gfx::FlyCamera c2;
+        c2.set_position(pos);
+        c2.set_yaw_pitch(yaw, pitch);
+        gfx::Frustum f;
+        f.from_view_proj(c2.proj_matrix(kAspect, kFovDeg, 0.1f, kFarTight)
+                         * c2.view_matrix());
+        return f;
+    };
+    auto chunk_index_of = [&](world::ChunkCoord c) -> int {
+        if (c.x < -kRadius || c.x > kRadius ||
+            c.z < -kRadius || c.z > kRadius) return -1;
+        return (c.z + kRadius) * side + (c.x + kRadius);
+    };
+    auto count_frustum_sections = [&](const gfx::Frustum& f) {
+        int drawn = 0;
+        for (std::size_t i = 0; i < tight_aabbs.size(); ++i) {
+            if (!f.intersects_aabb(tight_aabbs[i])) continue;
+            for (const auto& s : section_bounds[i]) {
+                if (s.has_mesh && f.intersects_aabb(s.aabb)) ++drawn;
+            }
+        }
+        return drawn;
+    };
+    // Returns -1 if the BFS refused to run (camera chunk unloaded — can't
+    // happen for these poses, but keep the contract visible).
+    auto count_occl_sections = [&](const glm::vec3& cam_pos, const gfx::Frustum& f) {
+        world::SectionReachableMap reachable;
+        const bool ok = world::occlusion_bfs(
+            cam_pos, f,
+            [&](world::ChunkCoord c) -> const world::SectionVisArray* {
+                const int idx = chunk_index_of(c);
+                return idx < 0 ? nullptr : &vis_arrays[idx];
+            },
+            reachable);
+        if (!ok) return -1;
+        int drawn = 0;
+        for (int cz = -kRadius; cz <= kRadius; ++cz) {
+            for (int cx = -kRadius; cx <= kRadius; ++cx) {
+                const int idx = (cz + kRadius) * side + (cx + kRadius);
+                if (!f.intersects_aabb(tight_aabbs[idx])) continue;
+                auto it = reachable.find({cx, cz});
+                const std::uint8_t mask =
+                    (it == reachable.end()) ? std::uint8_t(0) : it->second;
+                for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+                    const auto& s = section_bounds[idx][sy];
+                    if (!s.has_mesh || !f.intersects_aabb(s.aabb)) continue;
+                    if (world::section_reachable_in_mask(mask, sy, s.aabb)) ++drawn;
+                }
+            }
+        }
+        return drawn;
+    };
+
+    const glm::vec3  surface_pos{0.0f, 80.0f, 0.0f};
+    const gfx::Frustum surface_f = make_frustum(surface_pos, -90.0f, -15.0f);
+    const int surf_frustum = count_frustum_sections(surface_f);
+    const int surf_occl    = count_occl_sections(surface_pos, surface_f);
+
+    int cave_frustum = -1, cave_occl = -1;
+    if (cave_found) {
+        const gfx::Frustum cave_f = make_frustum(cave_pos, -90.0f, 0.0f);
+        cave_frustum = count_frustum_sections(cave_f);
+        cave_occl    = count_occl_sections(cave_pos, cave_f);
+    }
+
     auto ratio = [&](int drawn, int denom) { return drawn > 0 ? double(denom)/drawn : 0.0; };
 
     std::printf("\n==== frustum cull benchmark (radius %d, %d chunks, pos (0,80,0), yaw -90, pitch -15, fov %.0f) ====\n",
@@ -216,6 +312,18 @@ int run_bench() {
     std::printf("  vs all loaded sections   : %4d / %d  (%.2fx)   <- vs naive 'draw every section'\n",
                 sections_drawn, total * world::kSectionsPerChunk,
                 ratio(sections_drawn, total * world::kSectionsPerChunk));
+    std::printf("occlusion cull (section-graph BFS, frustum+occlusion vs frustum-only):\n");
+    std::printf("  surface pose (0,80,0)    : %4d -> %4d sections  (%.2fx fewer)\n",
+                surf_frustum, surf_occl,
+                surf_occl > 0 ? double(surf_frustum) / surf_occl : 0.0);
+    if (cave_found && cave_occl >= 0) {
+        std::printf("  cave pose (%.0f,%.0f,%.0f)     : %4d -> %4d sections  (%.2fx fewer)\n",
+                    cave_pos.x, cave_pos.y, cave_pos.z,
+                    cave_frustum, cave_occl,
+                    cave_occl > 0 ? double(cave_frustum) / cave_occl : 0.0);
+    } else {
+        std::printf("  cave pose                : n/a (no air pocket found near origin)\n");
+    }
 
     // Stable, machine-readable summary line so CI can gate the cull ratios
     // without fishing through the prose. Whitespace-separated key=value
@@ -223,10 +331,14 @@ int run_bench() {
     std::printf("\nBENCH_SUMMARY"
                 " chunk_tight=%.2f"
                 " section_nonempty=%.2f"
-                " section_total=%.2f\n",
+                " section_total=%.2f"
+                " occl_surface=%.2f"
+                " occl_cave=%.2f\n",
                 ratio(tight_fartight, total),
                 ratio(sections_drawn, total_sections_nonempty),
-                ratio(sections_drawn, total * world::kSectionsPerChunk));
+                ratio(sections_drawn, total * world::kSectionsPerChunk),
+                surf_occl > 0 ? double(surf_frustum) / surf_occl : 0.0,
+                (cave_found && cave_occl > 0) ? double(cave_frustum) / cave_occl : 0.0);
     return EXIT_SUCCESS;
 }
 
@@ -375,6 +487,9 @@ int main(int argc, char** argv) {
     glfwMakeContextCurrent(window);
     bool vsync_enabled = (bench_frames == 0);
     glfwSwapInterval(vsync_enabled ? 1 : 0);
+    // Section-graph occlusion culling (O to toggle). On by default; the
+    // frustum-only path stays one keypress away for A/B comparison.
+    bool occlusion_cull_enabled = true;
 
     int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0) {
@@ -520,6 +635,7 @@ int main(int argc, char** argv) {
     std::printf("[input] LClick = break, RClick = place, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
+    std::printf("[input] O = toggle occlusion culling\n");
     std::printf("[input] F5 = save world, F6 = load world (./saves/world1)\n");
     std::printf("[input] F12 = screenshot (./screenshots)\n");
 
@@ -603,6 +719,11 @@ int main(int argc, char** argv) {
             if (!path.empty()) std::printf("[screenshot] %s\n", path.c_str());
         }
         if (input.key_pressed(GLFW_KEY_T))      time_paused = !time_paused;
+        if (input.key_pressed(GLFW_KEY_O)) {
+            occlusion_cull_enabled = !occlusion_cull_enabled;
+            std::printf("[world] occlusion culling %s\n",
+                        occlusion_cull_enabled ? "on" : "off");
+        }
         if (input.key_pressed(GLFW_KEY_V)) {
             vsync_enabled = !vsync_enabled;
             glfwSwapInterval(vsync_enabled ? 1 : 0);
@@ -841,7 +962,8 @@ int main(int argc, char** argv) {
         pass_end(pass_ms_sky);
         pass_start();
         last_stats = render::draw_terrain(shader, shadow_map, wrld, fv, light,
-                                          kBlockPalette, view_frustum);
+                                          kBlockPalette, view_frustum,
+                                          occlusion_cull_enabled);
         pass_end(pass_ms_terrain);
         pass_start();
         render::draw_water(water_shader, water, fv, light,
@@ -874,6 +996,9 @@ int main(int argc, char** argv) {
         pf.fps             = smoothed_fps;
         pf.chunks_total    = last_stats.chunks_total;
         pf.chunks_drawn    = last_stats.chunks_drawn;
+        pf.sections_drawn    = last_stats.sections_drawn;
+        pf.sections_occluded = last_stats.sections_occluded;
+        pf.occlusion_enabled = occlusion_cull_enabled;
         pf.triangles_drawn = last_stats.triangles_drawn;
         pf.pending_async   = wrld.pending_async();
         pf.initial_load_ms = initial_load_ms;

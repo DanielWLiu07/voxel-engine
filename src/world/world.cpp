@@ -228,10 +228,13 @@ compute_section_bounds(ChunkCoord coord, const Chunk& chunk) {
 
 namespace {
 
-std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk, ChunkMeshData&& mesh_data) {
+std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk,
+                                      ChunkMeshData&& mesh_data,
+                                      const SectionVisArray& visibility) {
     auto slot = std::make_unique<ChunkSlot>();
     slot->coord = coord;
     slot->chunk = std::move(chunk);
+    slot->section_visibility = visibility;
     auto built = bucket_quads_by_section(mesh_data, coord);
     apply_sections(*slot, std::move(built));
     return slot;
@@ -252,8 +255,9 @@ void World::generate_grid(int radius, const ColumnFiller& fill_column) {
                 }
             }
             auto mesh_data = build_chunk_mesh_greedy(chunk);
+            auto vis = compute_section_visibility(chunk);
             ChunkCoord c{cx, cz};
-            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data)));
+            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis));
         }
     }
 }
@@ -275,8 +279,9 @@ World::GenStats World::generate_grid(int radius, const TerrainGen& terrain) {
             auto mesh_data = build_chunk_mesh_greedy(chunk);
             stats.mesh_ms += std::chrono::duration<double, std::milli>(clock::now() - mesh_t0).count();
 
+            auto vis = compute_section_visibility(chunk);
             ChunkCoord c{cx, cz};
-            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data)));
+            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis));
             ++stats.chunks_generated;
         }
     }
@@ -312,6 +317,7 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
                 fc.terrain_ms = std::chrono::duration<double, std::milli>(
                     t_after_terrain - t0).count();
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+                fc.visibility = compute_section_visibility(fc.chunk);
                 fc.worker_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - t0).count();
                 std::lock_guard<std::mutex> lock(finished_mutex_);
@@ -359,6 +365,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 fc.terrain_ms = std::chrono::duration<double, std::milli>(
                     t_after_terrain - t0).count();
                 fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+                fc.visibility = compute_section_visibility(fc.chunk);
                 fc.worker_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - t0).count();
                 std::lock_guard<std::mutex> lock(finished_mutex_);
@@ -393,7 +400,8 @@ int World::drain_finished(int max_per_frame) {
 
         const auto up_t0 = clock::now();
         chunks_.emplace(fc.coord,
-                        build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data)));
+                        build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data),
+                                   fc.visibility));
         total_upload_ms_ += std::chrono::duration<double, std::milli>(
             clock::now() - up_t0).count();
         ++uploaded;
@@ -418,6 +426,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
         fc.mesh_data  = build_chunk_mesh_greedy(fc.chunk);
+        fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms  = std::chrono::duration<double, std::milli>(
             clock::now() - t0).count();
         std::lock_guard<std::mutex> lock(finished_mutex_);
@@ -427,7 +436,8 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
 
 void World::insert_chunk(ChunkCoord c, Chunk chunk) {
     auto mesh_data = build_chunk_mesh_greedy(chunk);
-    chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data));
+    auto vis = compute_section_visibility(chunk);
+    chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data), vis);
     requested_.erase(c);
 }
 
@@ -473,6 +483,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // per edit is fine.
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
     apply_sections(slot, std::move(built));
+    slot.section_visibility = compute_section_visibility(slot.chunk);
     return true;
 }
 
@@ -544,42 +555,109 @@ void World::debug_dump_visibility(const gfx::Frustum& frustum) const {
     std::printf("  total visible: %d / %zu\n", drawn, chunks_.size());
 }
 
-DrawStats World::draw_visible(const gfx::Frustum& frustum,
-                              const gfx::Shader& shader) const {
-    DrawStats stats;
-    stats.chunks_total   = static_cast<int>(chunks_.size());
-    stats.sections_total = stats.chunks_total * kSectionsPerChunk;
-    for (const auto& kv : chunks_) {
-        const ChunkSlot& slot = *kv.second;
-        if (!slot.any_section_has_mesh) continue;
-        if (!frustum.intersects_aabb(slot.chunk_aabb)) continue;
+namespace {
 
-        const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
-        const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
-        bool vao_bound = false;
-        bool drew_any  = false;
-        for (int i = 0; i < kSectionsPerChunk; ++i) {
-            const auto& sec = slot.sections[i];
-            if (!sec.has_mesh) continue;
-            if (!frustum.intersects_aabb(sec.aabb)) continue;
-            if (!vao_bound) {
-                shader.set_mat4("u_model", model);
-                slot.chunk_mesh.bind();
-                vao_bound = true;
-            }
-            slot.chunk_mesh.draw_range_bound(sec.index_offset, sec.index_count);
-            ++stats.sections_drawn;
-            stats.triangles_drawn += sec.index_count / 3;
-            drew_any = true;
-        }
-        if (drew_any) ++stats.chunks_drawn;
+// True if section `i` of a chunk should draw given the chunk's reachable
+// mask. Greedy quads bucket by their bottom Y, so a section's AABB can
+// extend above its own slab — the section must draw if ANY slab its AABB
+// spans is reachable, or a tall cliff face would vanish when only its
+// upper half is in view.
+bool section_reachable(std::uint8_t mask, int i, const gfx::AABB& aabb) {
+    int hi = static_cast<int>(std::floor(aabb.max.y - 0.001f)) / kSectionHeight;
+    hi = std::clamp(hi, i, kSectionsPerChunk - 1);
+    for (int s = i; s <= hi; ++s) {
+        if (mask & (1u << s)) return true;
     }
-    return stats;
+    return false;
 }
 
-DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
-    std::function<void(const glm::mat4& model)> set_model) const {
+bool section_box_in_frustum(const gfx::Frustum& frustum, ChunkCoord c, int sy) {
+    const float ox = static_cast<float>(c.x * kChunkSizeX);
+    const float oz = static_cast<float>(c.z * kChunkSizeZ);
+    const float oy = static_cast<float>(sy * kSectionHeight);
+    return frustum.intersects_aabb({{ox, oy, oz},
+                                    {ox + kChunkSizeX, oy + kSectionHeight,
+                                     oz + kChunkSizeZ}});
+}
+
+}  // namespace
+
+bool section_reachable_in_mask(std::uint8_t mask, int sy, const gfx::AABB& aabb) {
+    return section_reachable(mask, sy, aabb);
+}
+
+bool occlusion_bfs(
+    const glm::vec3& camera_pos,
+    const gfx::Frustum& frustum,
+    const std::function<const SectionVisArray*(ChunkCoord)>& visibility_of,
+    SectionReachableMap& reachable) {
+    const int wx = static_cast<int>(std::floor(camera_pos.x));
+    const int wz = static_cast<int>(std::floor(camera_pos.z));
+    const ChunkCoord start{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+    if (!visibility_of(start)) return false;
+
+    // Clamping Y keeps a camera above the build limit (or below bedrock)
+    // working: it seeds from the nearest section with unconstrained exits,
+    // which is conservative.
+    const int start_sy = std::clamp(
+        static_cast<int>(std::floor(camera_pos.y)) / kSectionHeight,
+        0, kSectionsPerChunk - 1);
+
+    struct Node {
+        ChunkCoord   c;
+        std::int8_t  sy;
+        std::int8_t  entry_face;  // face of THIS section we entered through; -1 at seed
+        std::uint8_t dirs;        // directions taken on the path so far
+    };
+    std::vector<Node> queue;
+    queue.reserve(512);
+
+    // Frustum-test is skipped for the seed: the camera sits inside it.
+    reachable[start] |= static_cast<std::uint8_t>(1u << start_sy);
+    queue.push_back({start, static_cast<std::int8_t>(start_sy), -1, 0});
+
+    std::size_t head = 0;
+    while (head < queue.size()) {
+        const Node n = queue[head++];
+        const SectionVisArray* vis = visibility_of(n.c);  // non-null: checked at enqueue
+
+        for (int d = 0; d < 6; ++d) {
+            // Never step back along an axis direction the path already used
+            // in reverse — stops sightlines that would have to bend around
+            // a corner and come back.
+            if (n.dirs & (1u << opposite_face(d))) continue;
+            if (n.entry_face >= 0 &&
+                !faces_connected((*vis)[n.sy], n.entry_face, d)) continue;
+
+            ChunkCoord nc = n.c;
+            int nsy = n.sy;
+            switch (d) {
+                case kFaceNegX: nc.x -= 1; break;
+                case kFacePosX: nc.x += 1; break;
+                case kFaceNegY: nsy -= 1;  break;
+                case kFacePosY: nsy += 1;  break;
+                case kFaceNegZ: nc.z -= 1; break;
+                case kFacePosZ: nc.z += 1; break;
+            }
+            if (nsy < 0 || nsy >= kSectionsPerChunk) continue;
+            if (!visibility_of(nc)) continue;
+
+            auto& mask = reachable[nc];
+            const auto bit = static_cast<std::uint8_t>(1u << nsy);
+            if (mask & bit) continue;
+            if (!section_box_in_frustum(frustum, nc, nsy)) continue;
+            mask |= bit;
+            queue.push_back({nc, static_cast<std::int8_t>(nsy),
+                             static_cast<std::int8_t>(opposite_face(d)),
+                             static_cast<std::uint8_t>(n.dirs | (1u << d))});
+        }
+    }
+    return true;
+}
+
+DrawStats World::draw_impl(const gfx::Frustum& frustum,
+                           const SectionReachableMap* reachable,
+                           const std::function<void(const glm::mat4&)>& set_model) const {
     DrawStats stats;
     stats.chunks_total   = static_cast<int>(chunks_.size());
     stats.sections_total = stats.chunks_total * kSectionsPerChunk;
@@ -587,6 +665,12 @@ DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
         const ChunkSlot& slot = *kv.second;
         if (!slot.any_section_has_mesh) continue;
         if (!frustum.intersects_aabb(slot.chunk_aabb)) continue;
+
+        std::uint8_t reach_mask = 0xFF;
+        if (reachable) {
+            auto it = reachable->find(kv.first);
+            reach_mask = (it != reachable->end()) ? it->second : 0;
+        }
 
         const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
         const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
@@ -597,6 +681,10 @@ DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
             const auto& sec = slot.sections[i];
             if (!sec.has_mesh) continue;
             if (!frustum.intersects_aabb(sec.aabb)) continue;
+            if (reachable && !section_reachable(reach_mask, i, sec.aabb)) {
+                ++stats.sections_occluded;
+                continue;
+            }
             if (!vao_bound) {
                 set_model(model);
                 slot.chunk_mesh.bind();
@@ -610,6 +698,35 @@ DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
         if (drew_any) ++stats.chunks_drawn;
     }
     return stats;
+}
+
+DrawStats World::draw_visible(const gfx::Frustum& frustum,
+                              const gfx::Shader& shader) const {
+    return draw_impl(frustum, nullptr,
+        [&](const glm::mat4& m) { shader.set_mat4("u_model", m); });
+}
+
+DrawStats World::draw_visible_with(const gfx::Frustum& frustum,
+    std::function<void(const glm::mat4& model)> set_model) const {
+    return draw_impl(frustum, nullptr, set_model);
+}
+
+DrawStats World::draw_visible_occluded(const gfx::Frustum& frustum,
+                                       const glm::vec3& camera_pos,
+                                       const gfx::Shader& shader) const {
+    ZoneScopedN("occlusion_bfs");
+    SectionReachableMap reachable;
+    const bool ok = occlusion_bfs(
+        camera_pos, frustum,
+        [this](ChunkCoord c) -> const SectionVisArray* {
+            auto it = chunks_.find(c);
+            return it == chunks_.end() ? nullptr
+                                       : &it->second->section_visibility;
+        },
+        reachable);
+    if (!ok) return draw_visible(frustum, shader);
+    return draw_impl(frustum, &reachable,
+        [&](const glm::mat4& m) { shader.set_mat4("u_model", m); });
 }
 
 }  // namespace world

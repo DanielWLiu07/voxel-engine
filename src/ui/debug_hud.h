@@ -11,6 +11,9 @@ struct PerfFrame {
     float fps = 0.0f;
     int   chunks_total = 0;
     int   chunks_drawn = 0;
+    int   sections_drawn = 0;
+    int   sections_occluded = 0;   // frustum-visible but skipped by the BFS
+    bool  occlusion_enabled = false;
     std::size_t triangles_drawn = 0;
     int   pending_async = 0;
     double initial_load_ms = 0.0;

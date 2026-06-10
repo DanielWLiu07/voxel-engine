@@ -56,6 +56,13 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
             ImGui::Text("frustum cull : %.1fx (skipped %d chunks)",
                         cull_ratio, f.chunks_total - f.chunks_drawn);
         }
+        if (f.occlusion_enabled) {
+            ImGui::Text("occlusion    : on, %d sections drawn (+%d culled)",
+                        f.sections_drawn, f.sections_occluded);
+        } else {
+            ImGui::Text("occlusion    : off (O to enable), %d sections drawn",
+                        f.sections_drawn);
+        }
         ImGui::Text("triangles    : %zu", f.triangles_drawn);
         ImGui::Text("pending gen  : %d", f.pending_async);
 
@@ -96,6 +103,10 @@ void DebugHud::copy_perf_to_clipboard(const PerfFrame& f) const {
                        f.chunks_drawn, f.chunks_total,
                        static_cast<float>(f.chunks_total) /
                            std::max(1, f.chunks_drawn));
+    n += std::snprintf(buf + n, sizeof(buf) - n,
+                       "- occlusion cull: %s, %d sections drawn, %d occluded\n",
+                       f.occlusion_enabled ? "on" : "off",
+                       f.sections_drawn, f.sections_occluded);
     n += std::snprintf(buf + n, sizeof(buf) - n,
                        "- triangles: %zu\n", f.triangles_drawn);
     if (f.initial_load_ms > 0.0 && f.total_chunks > 0) {

@@ -6,6 +6,7 @@
 #include "gfx/shader.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
+#include "world/section_visibility.h"
 #include "world/terrain_gen.h"
 
 #include <glm/glm.hpp>
@@ -38,14 +39,9 @@ struct ChunkCoordHash {
     }
 };
 
-// Vertical sub-chunks. The mesh is still built chunk-wide (so the greedy
-// merger doesn't get split at section boundaries), then bucketed into
-// kSectionsPerChunk per-section meshes. Each section has its own tight
-// AABB and is culled independently — the chunk AABB is the union.
-inline constexpr int kSectionHeight    = 32;
-inline constexpr int kSectionsPerChunk = kChunkSizeY / kSectionHeight;
-static_assert(kSectionHeight * kSectionsPerChunk == kChunkSizeY,
-              "kChunkSizeY must be a clean multiple of kSectionHeight");
+// Section constants (kSectionHeight, kSectionsPerChunk) live in chunk.h.
+// Each section has its own tight AABB and is culled independently — the
+// chunk AABB is the union.
 
 // One section's slice of its chunk's shared mesh: an index range into the
 // chunk EBO + the section's own world-space AABB for culling. Sharing one
@@ -65,6 +61,9 @@ struct ChunkSlot {
     // One mesh per chunk; sections index into it via (index_offset, index_count).
     gfx::Mesh  chunk_mesh;
     std::array<ChunkSection, kSectionsPerChunk> sections{};
+    // Per-section face-pair connectivity for occlusion culling. Computed on
+    // the worker next to the greedy mesh; consumed by occlusion_bfs.
+    SectionVisArray section_visibility{};
     // Union of section AABBs - the chunk-level fast-path test. If this misses
     // the frustum, we skip all section tests for the chunk.
     gfx::AABB  chunk_aabb{};
@@ -97,8 +96,40 @@ struct DrawStats {
     int chunks_drawn = 0;
     int sections_total = 0;
     int sections_drawn = 0;
+    // Sections that passed the frustum test but were skipped because the
+    // occlusion BFS couldn't reach them through air. 0 on frustum-only paths.
+    int sections_occluded = 0;
     std::size_t triangles_drawn = 0;
 };
+
+// Sections reachable from the camera, one bitmask per chunk (bit sy set =
+// section sy visible). Filled by occlusion_bfs, consumed by the draw path
+// and the --bench cull harness.
+static_assert(kSectionsPerChunk <= 8, "section reach mask is a uint8_t");
+using SectionReachableMap =
+    std::unordered_map<ChunkCoord, std::uint8_t, ChunkCoordHash>;
+
+// Breadth-first traversal of the section visibility graph, seeded at the
+// camera's section. A section is marked reachable when a sightline could
+// get there: each BFS step must (a) stay inside the frustum (full section
+// box test), (b) pass through the source section's air (face-pair
+// connectivity from compute_section_visibility), and (c) never reverse a
+// direction already taken on the path (Minecraft's cave-culling rule, which
+// stops wrap-around false positives). visibility_of returns a chunk's masks
+// or nullptr for unloaded chunks. Returns false without marking anything
+// when the camera's own chunk isn't loaded — callers fall back to
+// frustum-only culling.
+bool occlusion_bfs(
+    const glm::vec3& camera_pos,
+    const gfx::Frustum& frustum,
+    const std::function<const SectionVisArray*(ChunkCoord)>& visibility_of,
+    SectionReachableMap& reachable);
+
+// True if section sy (tight mesh AABB `aabb`) should draw given its chunk's
+// reachable mask. Encodes the upward-spill rule (greedy quads bucket by
+// bottom Y, so a section's AABB can span slabs above it); shared between the
+// renderer and the --bench cull harness so they can't drift apart.
+bool section_reachable_in_mask(std::uint8_t mask, int sy, const gfx::AABB& aabb);
 
 class World {
 public:
@@ -164,6 +195,14 @@ public:
     DrawStats draw_visible_with(const gfx::Frustum& frustum,
         std::function<void(const glm::mat4& model)> set_model) const;
 
+    // draw_visible plus occlusion: only sections the camera can reach
+    // through air (occlusion_bfs) are drawn. Falls back to plain
+    // draw_visible when the camera's chunk isn't loaded. The shadow pass
+    // must NOT use this — its frustum belongs to the light, not the camera.
+    DrawStats draw_visible_occluded(const gfx::Frustum& frustum,
+                                    const glm::vec3& camera_pos,
+                                    const gfx::Shader& shader) const;
+
     void debug_dump_visibility(const gfx::Frustum& frustum) const;
 
     std::size_t chunk_count() const { return chunks_.size(); }
@@ -181,12 +220,21 @@ public:
 
 private:
     struct FinishedChunk {
-        ChunkCoord    coord;
-        Chunk         chunk;
-        ChunkMeshData mesh_data;
-        double        worker_ms  = 0.0;
-        double        terrain_ms = 0.0;
+        ChunkCoord      coord;
+        Chunk           chunk;
+        ChunkMeshData   mesh_data;
+        SectionVisArray visibility{};
+        double          worker_ms  = 0.0;
+        double          terrain_ms = 0.0;
     };
+
+    // Shared draw loop. reachable == nullptr means frustum-only; otherwise
+    // a section draws only if some section its AABB vertically spans is in
+    // the reachable mask (greedy quads bucket by their bottom Y, so a tall
+    // side face can live in a lower section than the camera sees).
+    DrawStats draw_impl(const gfx::Frustum& frustum,
+                        const SectionReachableMap* reachable,
+                        const std::function<void(const glm::mat4&)>& set_model) const;
 
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
     std::unordered_set<ChunkCoord, ChunkCoordHash> requested_;
