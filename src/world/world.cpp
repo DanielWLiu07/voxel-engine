@@ -128,12 +128,14 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
         s.vertices.push_back(v1);
         s.vertices.push_back(v2);
         s.vertices.push_back(v3);
-        s.indices.push_back(base + 0);
-        s.indices.push_back(base + 1);
-        s.indices.push_back(base + 2);
-        s.indices.push_back(base + 0);
-        s.indices.push_back(base + 2);
-        s.indices.push_back(base + 3);
+        // Remap the mesher's own index pattern instead of re-synthesizing
+        // {0,1,2,0,2,3}: the greedy mesher flips the quad diagonal when one
+        // AO pair is more contrasty (ao_flip), and re-synthesizing here was
+        // silently discarding that choice for everything the game renders.
+        for (int k = 0; k < 6; ++k) {
+            const std::uint32_t src_idx = src.indices[6 * q + k];
+            s.indices.push_back(base + (src_idx - static_cast<std::uint32_t>(4 * q)));
+        }
         ++s.quad_count;
 
         const glm::vec3 lo{xmin + ox, ymin, zmin + oz};
