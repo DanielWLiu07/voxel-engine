@@ -40,6 +40,7 @@ private:
     FastNoiseLite temp_;        // hot/cold axis — deserts vs forests
     FastNoiseLite cave_a_;      // 3D field A for cave carving
     FastNoiseLite cave_b_;      // 3D field B; intersection forms tubes
+    FastNoiseLite lakes_;       // low-freq basins carved below sea level
     bool caves_enabled_ = true;
 };
 
