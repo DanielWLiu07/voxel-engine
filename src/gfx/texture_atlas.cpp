@@ -197,7 +197,7 @@ void paint_tile_procedural(int block_id, std::uint8_t* tile_out) {
 
 }  // namespace
 
-GLuint generate_block_atlas() {
+GLuint generate_block_atlas(int* png_tiles_out) {
     constexpr int kAtlasBytes = kAtlasSizePx * kAtlasSizePx * 4;
     std::array<std::uint8_t, kAtlasBytes> pixels{};
 
@@ -225,6 +225,7 @@ GLuint generate_block_atlas() {
         std::printf("[atlas] loaded %d/%d block textures from textures/\n",
                     loaded_pngs, kAtlasTilesDim * kAtlasTilesDim - 1);
     }
+    if (png_tiles_out) *png_tiles_out = loaded_pngs;
 
     GLuint tex = 0;
     glGenTextures(1, &tex);

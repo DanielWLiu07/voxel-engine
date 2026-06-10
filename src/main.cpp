@@ -612,7 +612,14 @@ int main(int argc, char** argv) {
     glGenVertexArrays(1, &sky_vao);
 
     // Procedural texture atlas for blocks. Generated once at boot.
-    GLuint block_atlas = gfx::generate_block_atlas();
+    int ai_texture_tiles = 0;
+    GLuint block_atlas = gfx::generate_block_atlas(&ai_texture_tiles);
+    if (ai_texture_tiles > 0) {
+        // Honesty-by-default: these tiles are AI-generated and we say so,
+        // at boot and in the HUD. Provenance per file: textures/MANIFEST.toml.
+        std::printf("[credit] Block textures: AI-generated (SDXL-Turbo) - "
+                    "see TEXTURES.md\n");
+    }
     std::printf("[atlas] %dx%d procedural block atlas\n",
                 gfx::kAtlasSizePx, gfx::kAtlasSizePx);
     GLuint crosshair_vao = 0;
@@ -1095,6 +1102,7 @@ int main(int argc, char** argv) {
         pf.sections_occluded = last_stats.sections_occluded;
         pf.occlusion_enabled = occlusion_cull_enabled;
         pf.place_block_name  = block_name(place_id);
+        pf.ai_texture_tiles  = ai_texture_tiles;
         pf.triangles_drawn = last_stats.triangles_drawn;
         pf.pending_async   = wrld.pending_async();
         pf.initial_load_ms = initial_load_ms;

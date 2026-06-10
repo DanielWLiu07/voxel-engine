@@ -18,6 +18,11 @@ Screenshots are reproducible: `./build/voxel_engine --screenshot-after 60
 time) and writes a byte-stable PNG, which is also how the occlusion culler
 is pixel-diff verified in development.
 
+Block textures are **AI-generated (SDXL-Turbo) and labeled as such** — the
+game shows the credit at boot and in the HUD, and every tile's model,
+prompt, and seed are committed in [`TEXTURES.md`](TEXTURES.md) +
+`textures/MANIFEST.toml`.
+
 ## Build
 
 ```
