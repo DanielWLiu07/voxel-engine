@@ -161,13 +161,47 @@ TerrainGen::TerrainGen(std::uint32_t seed) {
     cave_b_.SetSeed(static_cast<int>(seed) + 7);
     cave_b_.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
     cave_b_.SetFrequency(0.038f);
+
+    // Lake basins: low-frequency field; where it exceeds a threshold in
+    // lowland terrain the surface is depressed below sea level so the
+    // (previously never-visible) water plane actually has water to show.
+    // +11 (not the next free +8): scanned offsets 8..40 and this one drops a
+    // proper lake basin inside the spawn streaming radius for seed 1337.
+    lakes_.SetSeed(static_cast<int>(seed) + 11);
+    lakes_.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+    lakes_.SetFrequency(0.005f);
 }
 
 int TerrainGen::height_at(int wx, int wz) const {
     float n = sample_height_noise(continents_, hills_, detail_, warp_,
                                   static_cast<float>(wx), static_cast<float>(wz));
-    int height = static_cast<int>(kSeaLevel + n * 28.0f + 14.0f);
-    return std::clamp(height, 1, kChunkSizeY - 1);
+    int height = std::clamp(static_cast<int>(kSeaLevel + n * 28.0f + 14.0f),
+                            1, kChunkSizeY - 1);
+
+    // Lake pass. `basin` ramps 0..1 into the lake interior (smoothstepped so
+    // shores slope instead of cliff), `lowland` fades the effect out as the
+    // base terrain rises so mountains don't get craters punched into them.
+    // Both factors vary continuously, so the carved surface stays continuous.
+    const float lk = lakes_.GetNoise(static_cast<float>(wx),
+                                     static_cast<float>(wz));
+    if (lk > 0.35f) {
+        float basin = std::min((lk - 0.35f) / 0.22f, 1.0f);
+        basin = basin * basin * (3.0f - 2.0f * basin);
+        // Terrain sits ~14 above sea on average, so a strict lowland gate
+        // would leave lakes nowhere to form. Fade in from sea+18 down:
+        // full carve below sea+6, nothing above sea+18. Valley lakes carved
+        // out of ~40-high ground still shore smoothly because `basin` ramps
+        // over the lake's own spatial falloff.
+        const float lowland = std::clamp(
+            (static_cast<float>(kSeaLevel + 18) - static_cast<float>(height)) / 12.0f,
+            0.0f, 1.0f);
+        const float t = basin * lowland;
+        const float floor_h = static_cast<float>(kSeaLevel) - 2.0f - 5.0f * basin;
+        const int carved = static_cast<int>(std::lround(
+            static_cast<float>(height) + (floor_h - static_cast<float>(height)) * t));
+        height = std::clamp(std::min(height, carved), 1, kChunkSizeY - 1);
+    }
+    return height;
 }
 
 void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
@@ -182,10 +216,10 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
         for (int x = 0; x < kChunkSizeX; ++x) {
             int wx = origin_x + x;
             int wz = origin_z + z;
-            float n = sample_height_noise(continents_, hills_, detail_, warp_,
-                                          static_cast<float>(wx), static_cast<float>(wz));
-            int height = std::clamp(static_cast<int>(kSeaLevel + n * 28.0f + 14.0f),
-                                    1, kChunkSizeY - 1);
+            // Single source of truth for surface height (incl. lake carve);
+            // a divergent inline copy here would desync physics raycasts,
+            // the bench grid, and the chunk contents.
+            int height = height_at(wx, wz);
             surface[z][x] = height;
             biome_val[z][x] = biome_.GetNoise(static_cast<float>(wx),
                                               static_cast<float>(wz));
