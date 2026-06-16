@@ -47,11 +47,11 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
 **Headline (radius 12, gameplay pose, vsync off):**
-5.40 ms avg frame time, **185 fps**, **29 M triangles/sec**, 253 MB peak RSS.
+5.7 ms avg frame time, **175 fps**, **29 M triangles/sec**, 253 MB peak RSS.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
-workers. Per-frame work: 394 of 5000 loaded sub-chunks drawn (12.7x
-frustum + occlusion cull), 153k triangles rendered, post-process dominates
-per-pass cost at 44%. Inside a cave, occlusion culling alone cuts drawn
+workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
+frustum + occlusion cull), 167k triangles rendered, post-process dominates
+per-pass cost at ~35%. Inside a cave, occlusion culling alone cuts drawn
 sections **70.8x** (283 -> 4).
 
 Reproduce:
@@ -71,9 +71,9 @@ POSES="center ground high" scripts/bench_sweep.sh 12
 | Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
 | Frustum cull (chunks), wide AABB (pre-tightening) | 228 / 625 drawn (~2.7x) |
 | Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
-| Frustum cull (sections), 32-block sub-chunks, vs non-empty | 405 / 1250 drawn (~3.1x) |
-| Frustum cull (sections), vs all loaded sections (radius 12) | 405 / 5000 drawn (~12.3x) |
-| Occlusion cull (section-graph BFS), surface pose | 405 -> 394 sections (1.03x on open terrain) |
+| Frustum cull (sections), 32-block sub-chunks, vs non-empty | 407 / 1225 drawn (~3.0x) |
+| Frustum cull (sections), vs all loaded sections (radius 12) | 407 / 5000 drawn (~12.3x) |
+| Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
@@ -108,7 +108,7 @@ AABB, and count survivors.
 
 Two denominators because both are useful:
 
-- vs non-empty: ~1250 sections actually contain geometry; the other 3750
+- vs non-empty: ~1225 sections actually contain geometry; the rest
   are air the renderer never had to draw.
 - vs all loaded sections: the naive "draw every loaded section" baseline.
   Bigger number, weaker comparison.
@@ -124,7 +124,7 @@ which of its 15 face pairs a sightline can pass between (one bit each).
 Per frame, a BFS walks that connectivity graph from the camera's section —
 pruned by the frustum, never reversing a direction already taken — and only
 reached sections draw. On open terrain it trims the handful of sections
-buried just below the surface (405 -> 394). Underground it removes nearly
+buried just below the surface (407 -> 396). Underground it removes nearly
 everything: from a cave the frustum still admits 283 sections, but only 4
 are actually reachable through air. Toggle with O in-game for the A/B. A
 unit test casts a fan of line-of-sight rays through real terrain and
@@ -162,7 +162,8 @@ scales together with the work the GPU does.
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real wall time at the
 cost of inflating frame-level avg_ms; that mode is a diagnostic, not
-the perf number):
+the perf number). Snapshot from before the lake-water and texture-array
+work landed; at current HEAD post-process measures ~35% of pass time:
 
 | Pass | ms | Share |
 | --- | ---: | ---: |
