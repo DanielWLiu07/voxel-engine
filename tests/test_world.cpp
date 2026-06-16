@@ -199,6 +199,85 @@ void test_greedy_equals_naive_area_on_perlin_cave_terrain() {
     }
 }
 
+void test_greedy_checkerboard_degrades_to_naive() {
+    // Adversarial worst case for the merge sweep: isolated blocks in a
+    // checkerboard at one y level. No two faces are contiguous, so zero
+    // merges are legal — greedy must emit exactly the naive mesh rather
+    // than over-merge across the air gaps (a rectangle spanning a gap
+    // would invent surface area over cells that have no face).
+    world::Chunk c;
+    int blocks = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            if ((x + z) % 2 == 0) {
+                c.set(x, 10, z, world::BlockId::Stone);
+                ++blocks;
+            }
+        }
+    }
+    const auto naive  = world::build_chunk_mesh_naive(c);
+    const auto greedy = world::build_chunk_mesh_greedy(c);
+
+    EXPECT(naive.quad_count == blocks * 6,
+           "naive emits 6 faces per isolated block");
+    EXPECT(greedy.quad_count == naive.quad_count,
+           "greedy quad count equals naive when nothing can merge");
+    EXPECT(std::abs(total_quad_area(naive) - total_quad_area(greedy)) < 1e-3,
+           "checkerboard area matches between meshers");
+}
+
+void test_greedy_never_merges_across_block_types() {
+    // Flat slab, west half Stone, east half Sand. The material seam is
+    // invisible to a geometry-only merge, so this guards the rule that
+    // quads split on block id — one merged top quad would smear a single
+    // texture layer across both halves.
+    world::Chunk c;
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            c.set(x, 10, z, x < 8 ? world::BlockId::Stone
+                                  : world::BlockId::Sand);
+        }
+    }
+    const auto naive  = world::build_chunk_mesh_naive(c);
+    const auto greedy = world::build_chunk_mesh_greedy(c);
+
+    bool uniform = true;
+    for (std::size_t q = 0; q < greedy.vertices.size() / 4; ++q) {
+        const float id = greedy.vertices[4 * q].block_id;
+        for (int k = 1; k < 4; ++k) {
+            if (greedy.vertices[4 * q + k].block_id != id) uniform = false;
+        }
+    }
+    EXPECT(uniform, "every greedy quad carries a single block id");
+
+    // Same diagonal trick as total_quad_area, bucketed per material: the
+    // per-block-id surface area must survive merging untouched.
+    auto area_of = [](const world::ChunkMeshData& m, world::BlockId b) {
+        const float want = static_cast<float>(b);
+        double area = 0.0;
+        for (std::size_t q = 0; q < m.vertices.size() / 4; ++q) {
+            const auto& v0 = m.vertices[4 * q + 0];
+            const auto& v2 = m.vertices[4 * q + 2];
+            if (v0.block_id != want) continue;
+            const double dx = std::abs(v2.position.x - v0.position.x);
+            const double dy = std::abs(v2.position.y - v0.position.y);
+            const double dz = std::abs(v2.position.z - v0.position.z);
+            if      (dx == 0.0) area += dy * dz;
+            else if (dy == 0.0) area += dx * dz;
+            else                area += dx * dy;
+        }
+        return area;
+    };
+    EXPECT(std::abs(area_of(naive, world::BlockId::Stone) -
+                    area_of(greedy, world::BlockId::Stone)) < 1e-3,
+           "stone surface area survives the merge");
+    EXPECT(std::abs(area_of(naive, world::BlockId::Sand) -
+                    area_of(greedy, world::BlockId::Sand)) < 1e-3,
+           "sand surface area survives the merge");
+    EXPECT(greedy.quad_count < naive.quad_count,
+           "slab still merges within each material");
+}
+
 // ----- chunk RLE serialize round-trip --------------------------------------
 
 void test_rle_empty_roundtrip() {
@@ -486,6 +565,8 @@ int main() {
     test_section_bounds_in_world_space();
     test_greedy_equals_naive_area_on_simple_terrain();
     test_greedy_equals_naive_area_on_perlin_cave_terrain();
+    test_greedy_checkerboard_degrades_to_naive();
+    test_greedy_never_merges_across_block_types();
     test_rle_empty_roundtrip();
     test_rle_solid_roundtrip();
     test_rle_decode_garbage_fails_gracefully();
