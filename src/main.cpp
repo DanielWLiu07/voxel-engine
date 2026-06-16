@@ -43,7 +43,7 @@ namespace {
 constexpr float kFlySpeed       = 16.0f;
 constexpr float kFlySprintSpeed = 60.0f;
 constexpr int   kStreamRadius   = 12;
-[[maybe_unused]] constexpr const char* kSaveDir = "./saves/world1";
+constexpr const char* kSaveDir = "./saves/world1";
 constexpr float kWaterSize      = 480.0f;
 constexpr int   kWaterSubdiv    = 200;
 constexpr int   kShadowMapSize  = 2048;
@@ -747,8 +747,9 @@ int main(int argc, char** argv) {
     // per frame after initial_load_logged becomes true. glFinish bracketing
     // forces the GPU to drain before timing, so these reflect actual
     // dispatch+execution wall time rather than CPU command-submission only;
-    // the trade-off is that the frame-level avg_ms in this mode is slightly
-    // inflated by the synchronization itself.
+    // the trade-off is that the per-frame sync stalls inflate the frame-level
+    // avg_ms heavily (~2.7x measured at radius 12) — never quote avg_ms from
+    // this mode as frame time; use plain --bench-frame for that.
     std::vector<double> pass_ms_shadow, pass_ms_sky, pass_ms_terrain,
                         pass_ms_water,  pass_ms_postfx;
     if (bench_pass_breakdown) {
