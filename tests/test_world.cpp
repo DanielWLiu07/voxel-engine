@@ -16,9 +16,12 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <random>
 #include <vector>
 
 namespace {
@@ -333,6 +336,131 @@ void test_rle_decode_garbage_fails_gracefully() {
            "decode of garbage either returns false or yields a degenerate chunk");
 }
 
+// Fill a chunk with one of several random distributions chosen by `style`,
+// each stressing the RLE codec differently: per-cell noise (worst case, many
+// short runs), layered terrain (long runs), sparse blocks in air, and wide
+// solid bands. Deterministic given `rng`.
+void fuzz_fill_chunk(world::Chunk& c, std::mt19937& rng, int style) {
+    auto rand_block = [&](bool allow_air) {
+        const int lo = allow_air ? 0 : 1;
+        std::uniform_int_distribution<int> d(lo, 7);
+        return static_cast<world::BlockId>(d(rng));
+    };
+    switch (style % 4) {
+        case 0:  // per-cell noise: defeats RLE, exercises many tiny runs
+            for (int i = 0; i < world::kChunkVolume; ++i) {
+                int y = i / (world::kChunkSizeZ * world::kChunkSizeX);
+                int rem = i % (world::kChunkSizeZ * world::kChunkSizeX);
+                int z = rem / world::kChunkSizeX, x = rem % world::kChunkSizeX;
+                c.set(x, y, z, rand_block(true));
+            }
+            break;
+        case 1: {  // layered terrain: long vertical runs
+            for (int z = 0; z < world::kChunkSizeZ; ++z)
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    std::uniform_int_distribution<int> hd(1, 200);
+                    int h = hd(rng);
+                    fill_solid_column(c, x, z, 0, h, rand_block(false));
+                }
+            break;
+        }
+        case 2: {  // sparse: mostly air with scattered solids
+            std::uniform_int_distribution<int> nd(0, 300);
+            int n = nd(rng);
+            std::uniform_int_distribution<int> xd(0, world::kChunkSizeX - 1);
+            std::uniform_int_distribution<int> yd(0, world::kChunkSizeY - 1);
+            std::uniform_int_distribution<int> zd(0, world::kChunkSizeZ - 1);
+            for (int k = 0; k < n; ++k)
+                c.set(xd(rng), yd(rng), zd(rng), rand_block(false));
+            break;
+        }
+        case 3: {  // wide solid bands: very long single-block runs
+            std::uniform_int_distribution<int> bd(1, 40);
+            int bands = bd(rng);
+            for (int b = 0; b < bands; ++b) {
+                std::uniform_int_distribution<int> yd(0, world::kChunkSizeY - 1);
+                int y0 = yd(rng), y1 = std::min(world::kChunkSizeY - 1, y0 + 6);
+                world::BlockId blk = rand_block(false);
+                for (int y = y0; y <= y1; ++y)
+                    for (int z = 0; z < world::kChunkSizeZ; ++z)
+                        for (int x = 0; x < world::kChunkSizeX; ++x)
+                            c.set(x, y, z, blk);
+            }
+            break;
+        }
+    }
+}
+
+bool chunks_identical(const world::Chunk& a, const world::Chunk& b) {
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                if (a.get(x, y, z) != b.get(x, y, z)) return false;
+    return true;
+}
+
+void test_rle_fuzz_roundtrip() {
+    // Many randomized chunks across all distribution styles must survive
+    // encode -> decode byte-for-byte. Seeded per trial so any failure is
+    // reproducible from the trial index.
+    bool all_ok = true;
+    for (int trial = 0; trial < 240 && all_ok; ++trial) {
+        std::mt19937 rng(static_cast<std::uint32_t>(trial * 2654435761u));
+        world::Chunk a;
+        fuzz_fill_chunk(a, rng, trial);
+
+        auto bytes = world::encode_chunk_rle(a);
+        world::Chunk b;
+        if (!world::decode_chunk_rle(bytes, b)) { all_ok = false; break; }
+        if (a.solid_count() != b.solid_count()) { all_ok = false; break; }
+        if (!chunks_identical(a, b)) { all_ok = false; break; }
+    }
+    EXPECT(all_ok, "RLE round-trip is identity for 240 randomized chunks");
+}
+
+void test_rle_full_chunk_boundary() {
+    // kChunkVolume (65,536) exceeds the u16 max run length (65,535) by one, so
+    // an all-solid chunk must split into two runs. Pin that boundary.
+    world::Chunk a;
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                a.set(x, y, z, world::BlockId::Stone);
+    EXPECT(a.solid_count() == world::kChunkVolume, "chunk fully solid");
+
+    auto bytes = world::encode_chunk_rle(a);
+    world::Chunk b;
+    EXPECT(world::decode_chunk_rle(bytes, b), "decode full-solid chunk succeeds");
+    EXPECT(b.solid_count() == world::kChunkVolume,
+           "round-trip preserves a fully solid chunk across the run-split");
+    EXPECT(chunks_identical(a, b), "every block identical after full-chunk round-trip");
+}
+
+void test_rle_decoder_fuzz_no_crash() {
+    // The decoder runs on untrusted save files. Feed it thousands of random
+    // byte buffers (random lengths, including valid-looking headers) and
+    // assert it never crashes and never reports a chunk outside [0, volume].
+    std::mt19937 rng(0xC0FFEEu);
+    std::uniform_int_distribution<int> len_d(0, 256);
+    std::uniform_int_distribution<int> byte_d(0, 255);
+    bool safe = true;
+    for (int trial = 0; trial < 5000 && safe; ++trial) {
+        std::vector<std::uint8_t> buf(static_cast<std::size_t>(len_d(rng)));
+        for (auto& byte : buf) byte = static_cast<std::uint8_t>(byte_d(rng));
+        // Half the time, prefix a valid magic+version so we exercise the
+        // run-parsing path rather than the header rejection path.
+        if ((trial & 1) && buf.size() >= world::kChunkFormatHeaderBytes) {
+            buf[0] = 'V'; buf[1] = 'C'; buf[2] = 'H'; buf[3] = 'K';
+            buf[4] = world::kChunkFormatVersion;
+        }
+        world::Chunk out;
+        bool ok = world::decode_chunk_rle(buf, out);
+        if (ok && (out.solid_count() < 0 || out.solid_count() > world::kChunkVolume))
+            safe = false;
+    }
+    EXPECT(safe, "decoder survives 5000 random buffers with no crash / bad state");
+}
+
 // ----- section visibility (occlusion culling) ------------------------------
 
 void test_face_pair_bits_unique() {
@@ -570,6 +698,9 @@ int main() {
     test_rle_empty_roundtrip();
     test_rle_solid_roundtrip();
     test_rle_decode_garbage_fails_gracefully();
+    test_rle_fuzz_roundtrip();
+    test_rle_full_chunk_boundary();
+    test_rle_decoder_fuzz_no_crash();
     test_face_pair_bits_unique();
     test_visibility_empty_and_solid();
     test_visibility_slab_blocks_vertical_only();
