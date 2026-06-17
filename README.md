@@ -60,6 +60,8 @@ Reproduce:
 ./build/voxel_engine --bench-frame 300     # 300-frame timing bench, center pose
 scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
+scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
+./build/queue_bench                        # lock-free vs mutex queue sweep
 ```
 
 | Metric | Value |
@@ -209,6 +211,10 @@ World
 - RLE-compressed binary chunk save/load with magic + version header.
 
 Tooling
+- Worker-pool chunk streaming with main-thread-only GPU upload. Ships a
+  tested lock-free MPMC queue (`core/mpmc_queue.h`) benchmarked against the
+  mutex pool; the live path stays mutex-based because the queue is never the
+  bottleneck at chunk-job granularity (see [`DESIGN.md`](DESIGN.md)).
 - Day/night cycle with sun arc and palette ramp.
 - ImGui debug HUD: frame time, FPS, drawn chunks, triangles, pending async
   chunks, copy-perf-to-clipboard.
