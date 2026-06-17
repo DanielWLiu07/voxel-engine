@@ -2,8 +2,19 @@
 
 #include <glad/gl.h>
 
+// stb is vendored third-party; its implementation trips -Wextra/-Wpedantic
+// (missing-field-initializers, deprecated sprintf). Silence here so those
+// warnings don't bury real ones from our own code.
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <stb_image_write.h>
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include <chrono>
 #include <cstdio>
