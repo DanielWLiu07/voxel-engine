@@ -63,7 +63,10 @@ target_include_directories(imgui PUBLIC
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui PUBLIC glfw)
+# PRIVATE, not PUBLIC: imgui's backend TUs need glfw to compile, but consumers
+# (voxel_engine) link glfw directly, so re-propagating it here only put glfw on
+# the link line twice (Apple ld "ignoring duplicate libraries" warning).
+target_link_libraries(imgui PRIVATE glfw)
 
 # --- GLAD (vendored generated loader for GL 4.1 core, glad2 layout) ----------
 add_library(glad STATIC third_party/glad/src/gl.c)

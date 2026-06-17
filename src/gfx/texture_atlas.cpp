@@ -1,7 +1,17 @@
 #include "gfx/texture_atlas.h"
 
+// stb is vendored third-party; silence its -Wextra/-Wpedantic noise so it
+// can't bury real warnings from our own code (see also gfx/screenshot.cpp).
 #define STB_IMAGE_IMPLEMENTATION
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <stb_image.h>
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include <algorithm>
 #include <cmath>
