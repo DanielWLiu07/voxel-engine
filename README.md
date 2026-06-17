@@ -246,6 +246,9 @@ passes from `gfx/` and `world/`. `game/` is the only layer that coordinates
 player input with world state. `ui/` is the debug HUD. Chunk generation and
 meshing run on a worker pool; every OpenGL call stays on the main thread.
 
+[`DESIGN.md`](DESIGN.md) covers the threading model, the lock-free-vs-mutex
+queue decision, and the measurement methodology in more detail.
+
 ```
 src/
   core/    window, input, thread pool
