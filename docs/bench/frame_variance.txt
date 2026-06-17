@@ -1,0 +1,17 @@
+bench_variance: 10 runs x 300 frames, pose=center
+run     avg_ms   avg_fps
+  1       7.07     141.4
+  2       6.10     163.9
+  3       6.20     161.3
+  4       6.20     161.2
+  5       6.28     159.2
+  6       6.20     161.3
+  7       6.35     157.6
+  8       6.92     144.5
+  9       6.39     156.6
+ 10       6.49     154.1
+
+avg_ms  distribution:
+  mean=6.420  stddev=0.325  min=6.100  max=7.070  cv=5.1%
+avg_fps distribution:
+  mean=156.110  stddev=7.511  min=141.400  max=163.900  cv=4.8%

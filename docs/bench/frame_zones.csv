@@ -1,0 +1,10 @@
+name,src_file,src_line,total_ns,total_perc,counts,mean_ns,min_ns,max_ns,std_ns
+terrain_pass,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/render/passes.cpp,72,411485178,7.651879,669,615075,40292,3223708,376570.072035
+chunk_worker_job,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/world/world.cpp,312,1975212288,36.730568,625,3160339,991541,21986750,2297114.072994
+sky_pass,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/render/passes.cpp,39,29436079,0.547386,669,44000,8000,335750,49560.938552
+drain_finished,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/world/world.cpp,382,189218654,3.518664,669,282838,417,13707958,1374155.777592
+occlusion_bfs,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/world/world.cpp,775,406750011,7.563825,669,607997,36000,3204208,373107.484948
+water_pass,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/render/passes.cpp,111,10513303,0.195503,669,15714,3000,197458,17884.256171
+postfx_resolve,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/gfx/post_process.cpp,140,469059416,8.722515,669,701135,155750,46393458,1953297.028252
+mesh_greedy,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/world/chunk_mesh.cpp,125,1021359072,18.992945,625,1634174,541291,21036166,1686439.445510
+shadow_pass,/Users/danielwliu/Dev/projects/2026/opengl-game-test/src/render/passes.cpp,18,699315301,13.004298,669,1045314,45584,5481333,765322.163673
