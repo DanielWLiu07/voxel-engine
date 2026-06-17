@@ -70,10 +70,29 @@ Rules:
 
 ## Resume bullets (the artifact we're optimizing for)
 
-Two locked-in bullets, numbers will be measured & filled in Week 3:
+Reconciled to measured, reproducible numbers (Apple M4, radius 12). Every
+figure maps to a command in the README / `docs/bench/`; none are aspirational.
 
-1. Voxel engine, ~10M voxels at 144 FPS, greedy meshing 30× triangle reduction.
-2. Lock-free chunk streaming (worker pool + main-thread VBO upload), ~50 chunks/sec, frustum culling 8× draw-call reduction.
+1. Built a C++20 / OpenGL 4.1 voxel engine that streams a **40M-voxel world**
+   (625 chunks resident) at **175 FPS** (5.7 ms/frame, 29M triangles/sec,
+   253 MB RSS); a greedy meshing pass merges coplanar faces for **18× fewer
+   triangles** than naive culling, guarded by a CI regression gate.
+2. Engineered off-thread chunk streaming — a worker pool generates terrain +
+   meshes while the main thread owns all GPU uploads — sustaining **2,200
+   chunks/sec at 8.4× parallel efficiency** on 9 workers; hierarchical frustum
+   + occlusion culling cuts drawn sections up to **70× underground**.
+3. (Systems-role optional) Implemented and benchmarked a **lock-free MPMC
+   queue** (2–5× faster than a mutex queue under contention) but kept the
+   simpler mutex pool after measuring the queue is never the bottleneck at the
+   engine's ~1 ms job granularity — a Tracy-profiled, benchmark-backed call.
+
+Why the old draft changed: it claimed "lock-free streaming" (the live path is a
+mutex pool — see bullet 3 for the honest version), "30×" greedy (CI-gated number
+is 18.1×; 27.7× was a cherry-picked single-biome case), "~50 chunks/sec"
+(measured 2,226), "144 FPS" (measured 175), and "8× cull" (matches no measured
+ratio; real figures are ~3× frustum / 12× section / up to 70× occlusion). An
+interviewer who probes a number that collapses is the failure mode we optimize
+against — every bullet above survives "show me."
 
 Every PR should ask: does this make these bullets more defensible, or is it scope creep?
 
