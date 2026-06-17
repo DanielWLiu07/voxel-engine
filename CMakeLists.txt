@@ -186,4 +186,28 @@ if(VOXEL_BUILD_TESTS)
     )
   endif()
   add_test(NAME world_unit COMMAND voxel_tests)
+
+  # Lock-free MPMC queue correctness (concurrency stress, no GL, no voxel deps).
+  add_executable(mpmc_tests tests/test_mpmc_queue.cpp)
+  target_include_directories(mpmc_tests PRIVATE src)
+  find_package(Threads REQUIRED)
+  target_link_libraries(mpmc_tests PRIVATE Threads::Threads)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(mpmc_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME mpmc_queue COMMAND mpmc_tests)
+endif()
+
+# --- Benchmarks --------------------------------------------------------------
+# queue_bench: lock-free MPMC vs mutex+std::queue throughput/latency sweep.
+# Standalone, header-only queue, no GL. Built in Release for honest numbers.
+option(VOXEL_BUILD_BENCH "Build standalone microbenchmarks" ON)
+if(VOXEL_BUILD_BENCH)
+  add_executable(queue_bench bench/queue_bench.cpp)
+  target_include_directories(queue_bench PRIVATE src)
+  find_package(Threads REQUIRED)
+  target_link_libraries(queue_bench PRIVATE Threads::Threads)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(queue_bench PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
 endif()
