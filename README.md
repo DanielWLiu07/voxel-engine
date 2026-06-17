@@ -70,24 +70,26 @@ POSES="center ground high" scripts/bench_sweep.sh 12
 | Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
 | Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
 | Frustum cull (chunks), wide AABB (pre-tightening) | 228 / 625 drawn (~2.7x) |
-| Frustum cull (chunks), tight per-chunk Y AABB | 211 / 625 drawn (~3.0x) |
+| Frustum cull (chunks), tight per-chunk Y AABB | 213 / 625 drawn (~2.9x) |
 | Frustum cull (sections), 32-block sub-chunks, vs non-empty | 407 / 1225 drawn (~3.0x) |
 | Frustum cull (sections), vs all loaded sections (radius 12) | 407 / 5000 drawn (~12.3x) |
 | Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
 
-Frame time scaling, vsync off, `center` pose, 30-frame settle, M4:
+Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
+(section/triangle counts are exact at current HEAD; the ms columns are
+the idle-machine measure and reproduce when the box is quiet):
 
 | Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |   289 | 184 |  71,920 | 5.01 | 4.96 | 6.33 | 199.5 | 14.3M | 168 MB |
-| 10 |   441 | 285 | 111,194 | 5.20 | 5.15 | 6.49 | 192.3 | 21.4M | 204 MB |
-| 12 |   625 | 405 | 159,080 | 5.40 | 5.27 | 7.17 | 185.2 | 29.5M | 253 MB |
-| 14 |   841 | 542 | 217,430 | 6.09 | 5.94 | 8.67 | 164.2 | 35.7M | 296 MB |
-| 16 | 1,089 | 699 | 278,890 | 6.04 | 6.20 | 9.15 | 165.5 | 46.2M | 329 MB |
+|  8 |   289 | 180 |  78,224 | 5.01 | 4.96 | 6.33 | 199.5 | 15.6M | 168 MB |
+| 10 |   441 | 280 | 117,626 | 5.20 | 5.15 | 6.49 | 192.3 | 22.6M | 204 MB |
+| 12 |   625 | 396 | 167,200 | 5.40 | 5.27 | 7.17 | 185.2 | 31.0M | 253 MB |
+| 14 |   841 | 531 | 230,560 | 6.09 | 5.94 | 8.67 | 164.2 | 37.9M | 296 MB |
+| 16 | 1,089 | 687 | 299,170 | 6.04 | 6.20 | 9.15 | 165.5 | 49.5M | 329 MB |
 
-Triangle count grows 3.9x from radius 8 to 16; avg frame time grows
+Triangle count grows 3.8x from radius 8 to 16; avg frame time grows
 21%. Section-AABB culling holds drawn-section count close to a
 constant fraction (~30% of loaded sections) while the loaded world
 quadruples. Peak RSS scales sub-linearly with chunk count because the
@@ -147,16 +149,16 @@ radius 12, M4:
 
 | Pose | Camera | Tris drawn | Sections | Avg ms | p50 | p99 | Avg fps | Tris/sec |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| center | (0, 80, 0) yaw -90 pitch -15 | 159,080 | 405 | 5.59 | 5.48 | 11.24 | 179.0 | 28.5M |
-| ground | (0, 35, 0) yaw -90 pitch 0   | 152,156 | 390 | 5.53 | 5.63 |  9.13 | 180.7 | 27.5M |
-| high   | (0,150, 0) yaw -90 pitch -45 | 185,876 | 474 | 5.46 | 5.45 | 10.42 | 183.0 | 34.0M |
+| center | (0, 80, 0) yaw -90 pitch -15 | 167,200 | 396 | 5.59 | 5.48 | 11.24 | 179.0 | 29.9M |
+| ground | (0, 35, 0) yaw -90 pitch 0   | 165,042 | 390 | 5.53 | 5.63 |  9.13 | 180.7 | 29.8M |
+| high   | (0,150, 0) yaw -90 pitch -45 | 195,906 | 462 | 5.46 | 5.45 | 10.42 | 183.0 | 35.9M |
 
 `ground` is eye-level walking; `high` is a top-down vantage where the
 section-AABB cull's vertical pruning works hardest; `center` is the
 pose the scaling table and `--bench` cull bench use. All three land
 within ~2% of each other, so the headline frame time isn't an artifact
-of a flattering vantage. `high` ships 22% more triangles than `ground`
-(185k vs 152k) but renders in the same time: the per-section cull cost
+of a flattering vantage. `high` ships 19% more triangles than `ground`
+(196k vs 165k) but renders in the same time: the per-section cull cost
 scales together with the work the GPU does.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
