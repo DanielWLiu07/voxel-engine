@@ -51,7 +51,7 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
 workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
 frustum + occlusion cull), 167k triangles rendered, post-process dominates
-per-pass cost at ~35%. Inside a cave, occlusion culling alone cuts drawn
+per-pass cost at ~37%. Inside a cave, occlusion culling alone cuts drawn
 sections **70.8x** (283 -> 4).
 
 Reproduce:
@@ -164,19 +164,18 @@ of a flattering vantage. `high` ships 19% more triangles than `ground`
 scales together with the work the GPU does.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
-(glFinish bracketing makes the per-pass numbers real wall time at the
-cost of inflating frame-level avg_ms; that mode is a diagnostic, not
-the perf number). Snapshot from before the lake-water and texture-array
-work landed; at current HEAD post-process measures ~35% of pass time:
+(glFinish bracketing makes the per-pass numbers real GPU wall time at the
+cost of inflating frame-level avg_ms; that mode is a diagnostic, not the
+perf number). Measured at current HEAD, mean of 3 runs:
 
 | Pass | ms | Share |
 | --- | ---: | ---: |
-| post-process (HDR -> bloom chain -> ACES tonemap) | 5.02 | 44% |
-| terrain (visible sections, atlas + CSM sample) | 2.04 | 18% |
-| shadow pass (3 cascades, staggered) | 2.01 | 17% |
-| water (sine-animated plane + Fresnel + depth fog) | 1.35 | 12% |
-| sky (gradient + sun glow) | 1.11 | 10% |
-| sum of measured passes | 11.53 | |
+| post-process (HDR -> bloom chain -> ACES tonemap) | 3.73 | 37% |
+| terrain (visible sections, atlas + CSM sample) | 2.19 | 22% |
+| shadow pass (3 cascades, staggered) | 2.14 | 21% |
+| water (sine-animated plane + Fresnel + depth fog) | 1.07 | 11% |
+| sky (gradient + sun glow) | 0.90 | 9% |
+| sum of measured passes | 10.03 | |
 
 Post-process dominates; the next clear lever for frame-time savings is
 halving bloom iterations or dropping the bloom mip chain a level.
