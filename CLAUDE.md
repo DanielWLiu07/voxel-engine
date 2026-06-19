@@ -81,10 +81,11 @@ figure maps to a command in the README / `docs/bench/`; none are aspirational.
    meshes while the main thread owns all GPU uploads — sustaining **2,200
    chunks/sec at 8.4× parallel efficiency** on 9 workers; hierarchical frustum
    + occlusion culling cuts drawn sections up to **70× underground**.
-3. (Systems-role optional) Implemented and benchmarked a **lock-free MPMC
-   queue** (2–5× faster than a mutex queue under contention) but kept the
+3. (Systems-role optional) Implemented a **ThreadSanitizer-clean lock-free
+   MPMC queue** (2–5× faster than a mutex queue under contention) and kept the
    simpler mutex pool after measuring the queue is never the bottleneck at the
-   engine's ~1 ms job granularity — a Tracy-profiled, benchmark-backed call.
+   engine's ~1 ms job granularity — concurrency validated under TSan + ASan/
+   UBSan in CI, the decision Tracy-profiled and benchmark-backed.
 
 Why the old draft changed: it claimed "lock-free streaming" (the live path is a
 mutex pool — see bullet 3 for the honest version), "30×" greedy (CI-gated number
