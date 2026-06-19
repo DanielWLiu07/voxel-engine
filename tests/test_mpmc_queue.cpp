@@ -1,12 +1,16 @@
-// Correctness tests for the lock-free bounded MPMC queue (core/mpmc_queue.h).
-// Single-threaded FIFO + full/empty semantics, then a multi-producer /
+// Concurrency tests for the streaming primitives: the lock-free bounded MPMC
+// queue (core/mpmc_queue.h) and the worker pool (core/thread_pool.h).
+// Single-threaded FIFO + full/empty semantics, a multi-producer /
 // multi-consumer stress run that asserts every produced item is consumed
-// exactly once (no loss, no duplication). Run via ctest after a build.
+// exactly once (no loss, no duplication), and a worker-pool stress run that
+// fans out many jobs from many threads and checks every one ran exactly once.
+// Run via ctest; also built under ThreadSanitizer / ASan+UBSan in CI.
 //
 // Minimal harness, same shape as tests/test_world.cpp: one EXPECT macro,
 // a failure counter, a main that reports pass/fail.
 
 #include "core/mpmc_queue.h"
+#include "core/thread_pool.h"
 
 #include <atomic>
 #include <cstdio>
@@ -115,14 +119,53 @@ void test_mpmc_no_loss_no_dup() {
     EXPECT(all_once, "every value consumed exactly once (no loss, no dup)");
 }
 
+// Worker-pool stress: many threads submit jobs concurrently; each job marks a
+// distinct slot and bumps an atomic. We wait on the atomic (not the pool
+// destructor, which drops pending jobs by design) and assert every job ran
+// exactly once. Under TSan this validates the submit->execute happens-before
+// and the pool's internal queue synchronization.
+void test_thread_pool_runs_every_job_once() {
+    constexpr int kSubmitters = 6;
+    constexpr int kPerSubmitter = 20000;
+    constexpr int kTotal = kSubmitters * kPerSubmitter;
+
+    core::ThreadPool pool(std::thread::hardware_concurrency());
+    std::vector<std::atomic<int>> ran(kTotal);
+    for (auto& r : ran) r.store(0, std::memory_order_relaxed);
+    std::atomic<int> done{0};
+
+    std::vector<std::thread> submitters;
+    for (int s = 0; s < kSubmitters; ++s) {
+        submitters.emplace_back([&, s] {
+            const int base = s * kPerSubmitter;
+            for (int i = 0; i < kPerSubmitter; ++i) {
+                const int id = base + i;
+                pool.submit([&, id] {
+                    ran[id].fetch_add(1, std::memory_order_relaxed);
+                    done.fetch_add(1, std::memory_order_release);
+                });
+            }
+        });
+    }
+    for (auto& t : submitters) t.join();
+    while (done.load(std::memory_order_acquire) < kTotal) std::this_thread::yield();
+
+    bool each_once = true;
+    for (int i = 0; i < kTotal; ++i) {
+        if (ran[i].load(std::memory_order_relaxed) != 1) { each_once = false; break; }
+    }
+    EXPECT(each_once, "thread pool ran every submitted job exactly once");
+}
+
 }  // namespace
 
 int main() {
-    std::printf("mpmc_queue_tests: running...\n\n");
+    std::printf("concurrency_tests: running...\n\n");
     test_single_thread_fifo();
     test_move_only_payload();
     test_mpmc_no_loss_no_dup();
+    test_thread_pool_runs_every_job_once();
 
-    std::printf("\nmpmc_queue_tests: %d checks, %d failures\n", g_checks, g_failures);
+    std::printf("\nconcurrency_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

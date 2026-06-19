@@ -83,3 +83,27 @@ jobs:
           # sections) so the ratio is sensitive to mesher/terrain tweaks.
           # Gate loosely: the claim is "order of magnitude underground".
           gate occl_cave         "$OCCL_CAVE"        10.0
+
+  sanitizers:
+    name: sanitizers (TSan + ASan/UBSan)
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build clang \
+            libgl1-mesa-dev libglu1-mesa-dev xorg-dev \
+            libwayland-dev libxkbcommon-dev
+
+      # ThreadSanitizer over the lock-free queue + worker pool, then ASan+UBSan
+      # over the full logic suite. Any race / memory error / UB (outside the
+      # documented FastNoiseLite hash-overflow suppression) fails the job.
+      - name: Run sanitizer suite
+        run: scripts/run_sanitizers.sh
