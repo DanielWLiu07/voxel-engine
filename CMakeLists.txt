@@ -187,8 +187,9 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME world_unit COMMAND voxel_tests)
 
-  # Lock-free MPMC queue correctness (concurrency stress, no GL, no voxel deps).
-  add_executable(mpmc_tests tests/test_mpmc_queue.cpp)
+  # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
+  # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
+  add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)
   target_include_directories(mpmc_tests PRIVATE src)
   find_package(Threads REQUIRED)
   target_link_libraries(mpmc_tests PRIVATE Threads::Threads)
