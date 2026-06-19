@@ -9,28 +9,17 @@
 
 namespace core {
 
-// Bounded, lock-free multi-producer / multi-consumer queue.
+// Bounded lock-free MPMC queue (Vyukov). Each ring cell has a sequence
+// counter; producers/consumers claim a slot with one CAS and publish by
+// storing the next sequence. try_push/try_pop never block: a full queue fails
+// the push, an empty queue fails the pop.
 //
-// This is Dmitry Vyukov's bounded MPMC algorithm. Every cell in the ring
-// carries a sequence counter; producers and consumers advance shared
-// enqueue/dequeue positions with a single compare_exchange and publish their
-// write/read by storing the next expected sequence. No mutex, no blocking:
-// try_push/try_pop are wait-free for the contending CAS and never put a thread
-// to sleep. A full queue fails the push; an empty queue fails the pop. That is
-// the whole point for a render loop — the main thread drains what is ready and
-// moves on instead of ever waiting on a worker.
+// Capacity must be a power of two. T must be default-constructible and
+// move-assignable; cells store T by value, so memory is fixed at construction.
 //
-// Capacity must be a power of two (the mask turns the modulo into an AND).
-// T must be default-constructible and nothrow-move-assignable; the ring stores
-// elements by value, so the queue's footprint is fixed at construction
-// (capacity * sizeof(Cell)) — bounded memory, which is what we want under
-// infinite chunk streaming.
-//
-// Memory ordering follows the canonical proof: acquire on the cell sequence
-// load pairs with the release store from the other side, so the data write in
-// a producer happens-before the data read in the consumer that observes the
-// published sequence. The position CAS itself only needs relaxed ordering —
-// correctness rides on the per-cell sequence, not the position counter.
+// The acquire load on cell.seq pairs with the release store on the other side,
+// so the data write happens-before the matching read. The position CAS is
+// relaxed; correctness comes from the per-cell sequence.
 template <typename T>
 class MpmcQueue {
 public:
@@ -101,9 +90,8 @@ public:
     }
 
 private:
-    // Apple silicon uses 128-byte cache lines; pad to that so the producer and
-    // consumer position counters never share a line (false sharing would erase
-    // the lock-free win under contention).
+    // 128-byte cache line (Apple silicon) so the two position counters don't
+    // false-share.
     static constexpr std::size_t kCacheLine = 128;
 
     struct Cell {

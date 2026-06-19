@@ -2,7 +2,7 @@
 
 The engine generates a procedural texture atlas at boot. To override any
 block with a higher-quality (AI-generated or hand-drawn) image, drop a
-PNG into `./textures/` with the right filename — the loader picks it up
+PNG into `./textures/` with the right filename - the loader picks it up
 automatically and falls back to the procedural version for any missing
 files.
 
@@ -105,6 +105,6 @@ boot.
 ## Why this is the right abstraction
 
 The procedural fallback means the engine has zero hard texture
-dependencies — anyone can clone the repo and run it without needing
+dependencies - anyone can clone the repo and run it without needing
 the textures. The PNG override path means an artist (or AI) can ship
 better-looking content without touching any C++ code.

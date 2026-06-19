@@ -36,7 +36,7 @@ constexpr bool faces_connected(SectionVisMask m, int a, int b) {
 }
 
 // Flood-fills the air cells of each 16x32x16 section and records which face
-// pairs each connected component bridges. CPU-only, no GL — runs on the
+// pairs each connected component bridges. CPU-only, no GL - runs on the
 // worker thread next to the greedy mesher (~8k cells/section).
 SectionVisArray compute_section_visibility(const Chunk& chunk);
 

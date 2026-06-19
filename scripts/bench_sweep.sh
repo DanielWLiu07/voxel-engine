@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
 #
-# Sweeps --bench-frame across kStreamRadius values and optionally a list of
-# camera poses per radius. Prints one BENCH_FRAME row per (radius, pose)
-# combination. Each radius rebuilds once; poses share the build because
-# they only change the camera at runtime. On any exit path, kStreamRadius
-# is restored to the original value (and the binary rebuilt with it) so
-# the CI cull-bench gates keep measuring the same world.
+# Sweep --bench-frame across kStreamRadius values (rebuilds once per radius)
+# and restore the original radius on exit so the CI gates keep their world.
 #
 # Usage:
-#   scripts/bench_sweep.sh                          # 8 10 12 14 16, 300 frames, pose=center
+#   scripts/bench_sweep.sh                          # 8 10 12 14 16, 300 frames, center
 #   scripts/bench_sweep.sh 6 8 10                   # custom radii
 #   POSES="center ground high" scripts/bench_sweep.sh   # multi-pose per radius
 #   SAMPLES=600 scripts/bench_sweep.sh              # override frame count
-#
-# Run from the repo root. Requires a prior cmake configure (cmake -B build).
 
 set -euo pipefail
 

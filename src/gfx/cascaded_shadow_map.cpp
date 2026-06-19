@@ -132,7 +132,7 @@ CascadedShadowMap::fit_cascades(const glm::mat4& camera_view,
         for (auto& c2 : corners_ws) center += c2;
         center /= 8.0f;
 
-        // Sphere radius around center — gives a rotation-invariant size and
+        // Sphere radius around center - gives a rotation-invariant size and
         // avoids cascade size shimmering as the camera rotates.
         float radius = 0.0f;
         for (auto& c2 : corners_ws) {
@@ -142,7 +142,7 @@ CascadedShadowMap::fit_cascades(const glm::mat4& camera_view,
 
         const glm::vec3 up_ref = (std::abs(L.y) > 0.95f) ? glm::vec3(0, 0, 1)
                                                           : glm::vec3(0, 1, 0);
-        // World-fixed light-space axes — derived only from L and up_ref, so
+        // World-fixed light-space axes - derived only from L and up_ref, so
         // their orientation doesn't depend on center. This is what makes the
         // texel snap meaningful: we quantize center's projection onto a
         // basis that doesn't slide when center moves a fraction of a texel.

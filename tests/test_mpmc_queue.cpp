@@ -1,13 +1,5 @@
-// Concurrency tests for the streaming primitives: the lock-free bounded MPMC
-// queue (core/mpmc_queue.h) and the worker pool (core/thread_pool.h).
-// Single-threaded FIFO + full/empty semantics, a multi-producer /
-// multi-consumer stress run that asserts every produced item is consumed
-// exactly once (no loss, no duplication), and a worker-pool stress run that
-// fans out many jobs from many threads and checks every one ran exactly once.
-// Run via ctest; also built under ThreadSanitizer / ASan+UBSan in CI.
-//
-// Minimal harness, same shape as tests/test_world.cpp: one EXPECT macro,
-// a failure counter, a main that reports pass/fail.
+// MPMC queue and thread pool concurrency tests. Same EXPECT harness as
+// test_world.cpp. Also built under TSan / ASan+UBSan in CI.
 
 #include "core/mpmc_queue.h"
 #include "core/thread_pool.h"
@@ -52,8 +44,7 @@ void test_single_thread_fifo() {
 }
 
 void test_move_only_payload() {
-    // The live result queue carries move-only-ish heavy values; make sure the
-    // queue moves rather than copies.
+    // Heavy payloads must move, not copy.
     core::MpmcQueue<std::vector<int>> q(2);
     std::vector<int> in{1, 2, 3};
     EXPECT(q.try_push(std::move(in)), "push vector");
@@ -62,9 +53,8 @@ void test_move_only_payload() {
     EXPECT(q.try_pop(out) && out.size() == 3, "popped vector intact");
 }
 
-// Multi-producer / multi-consumer stress: P producers each push a disjoint
-// range of integers, C consumers drain until the expected count is reached.
-// Every integer must come out exactly once.
+// P producers push disjoint integer ranges, C consumers drain. Every value
+// must come out exactly once.
 void test_mpmc_no_loss_no_dup() {
     constexpr int kProducers      = 4;
     constexpr int kConsumers      = 4;
@@ -84,9 +74,7 @@ void test_mpmc_no_loss_no_dup() {
             const int base = p * kPerProducer;
             for (int i = 0; i < kPerProducer; ++i) {
                 int v = base + i;
-                while (!q.try_push(std::move(v))) {
-                    std::this_thread::yield();  // queue full: spin until space
-                }
+                while (!q.try_push(std::move(v))) std::this_thread::yield();
             }
         });
     }
@@ -119,11 +107,8 @@ void test_mpmc_no_loss_no_dup() {
     EXPECT(all_once, "every value consumed exactly once (no loss, no dup)");
 }
 
-// Worker-pool stress: many threads submit jobs concurrently; each job marks a
-// distinct slot and bumps an atomic. We wait on the atomic (not the pool
-// destructor, which drops pending jobs by design) and assert every job ran
-// exactly once. Under TSan this validates the submit->execute happens-before
-// and the pool's internal queue synchronization.
+// Concurrent submits from many threads; every job must run exactly once. Wait
+// on the counter, not the destructor (which drops pending jobs).
 void test_thread_pool_runs_every_job_once() {
     constexpr int kSubmitters = 6;
     constexpr int kPerSubmitter = 20000;

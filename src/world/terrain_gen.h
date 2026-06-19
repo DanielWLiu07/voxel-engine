@@ -10,7 +10,7 @@ namespace world {
 
 inline constexpr int kSeaLevel  = 24;
 inline constexpr int kSandBand  = 2;
-// Stone band at 28 left only a 4-block grass strip above sea level —
+// Stone band at 28 left only a 4-block grass strip above sea level -
 // virtually all mid-altitude terrain (heights ~30-40) rendered bare stone
 // or snow and the world read as monochrome white-grey. 36 gives grassland
 // and forest at mid-altitudes, a rock band at 36-39, snow caps above 40.
@@ -37,7 +37,7 @@ private:
     FastNoiseLite detail_;      // high-freq surface detail
     FastNoiseLite warp_;        // domain warping for organic ridges
     FastNoiseLite biome_;       // selects tree density / variant
-    FastNoiseLite temp_;        // hot/cold axis — deserts vs forests
+    FastNoiseLite temp_;        // hot/cold axis - deserts vs forests
     FastNoiseLite cave_a_;      // 3D field A for cave carving
     FastNoiseLite cave_b_;      // 3D field B; intersection forms tubes
     FastNoiseLite lakes_;       // low-freq basins carved below sea level

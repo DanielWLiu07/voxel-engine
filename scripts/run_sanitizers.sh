@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
 #
-# Builds and runs the test suites under sanitizers:
-#   - ThreadSanitizer over the concurrency primitives (lock-free MPMC queue +
-#     worker pool) — validates the atomic memory ordering and that the pool has
-#     no data races.
-#   - AddressSanitizer + UndefinedBehaviorSanitizer over the full logic suite
-#     (mesher, RLE codec incl. its fuzz cases, world bookkeeping).
-#
-# Any sanitizer hit fails the script (halt_on_error). The only allowed UBSan
-# suppression is the vendored FastNoiseLite hash's intentional integer
-# wraparound (tools/sanitizer/ubsan_suppressions.txt) — our own code must be
-# clean. This is what the CI "sanitizers" job runs.
-#
-# Usage: scripts/run_sanitizers.sh   (run from anywhere; cds to repo root)
+# TSan over the concurrency tests, then ASan+UBSan over the full suite.
+# Any sanitizer hit fails the script. UBSan suppresses only FastNoiseLite's
+# intentional hash overflow (tools/sanitizer/ubsan_suppressions.txt).
 
 set -euo pipefail
 

@@ -40,7 +40,7 @@ struct ChunkCoordHash {
 };
 
 // Section constants (kSectionHeight, kSectionsPerChunk) live in chunk.h.
-// Each section has its own tight AABB and is culled independently — the
+// Each section has its own tight AABB and is culled independently - the
 // chunk AABB is the union.
 
 // One section's slice of its chunk's shared mesh: an index range into the
@@ -86,7 +86,7 @@ struct SectionBounds {
 };
 
 // Runs the greedy mesher + the same per-section bucketing the renderer uses
-// and returns just the section AABBs. CPU-only, no GL needed — meant for
+// and returns just the section AABBs. CPU-only, no GL needed - meant for
 // --bench, not the hot path.
 std::array<SectionBounds, kSectionsPerChunk>
 compute_section_bounds(ChunkCoord coord, const Chunk& chunk);
@@ -117,7 +117,7 @@ using SectionReachableMap =
 // direction already taken on the path (Minecraft's cave-culling rule, which
 // stops wrap-around false positives). visibility_of returns a chunk's masks
 // or nullptr for unloaded chunks. Returns false without marking anything
-// when the camera's own chunk isn't loaded — callers fall back to
+// when the camera's own chunk isn't loaded - callers fall back to
 // frustum-only culling.
 bool occlusion_bfs(
     const glm::vec3& camera_pos,
@@ -198,7 +198,7 @@ public:
     // draw_visible plus occlusion: only sections the camera can reach
     // through air (occlusion_bfs) are drawn. Falls back to plain
     // draw_visible when the camera's chunk isn't loaded. The shadow pass
-    // must NOT use this — its frustum belongs to the light, not the camera.
+    // must NOT use this - its frustum belongs to the light, not the camera.
     DrawStats draw_visible_occluded(const gfx::Frustum& frustum,
                                     const glm::vec3& camera_pos,
                                     const gfx::Shader& shader) const;
@@ -208,7 +208,7 @@ public:
     // Reads every chunk's VBO/EBO back off the GPU and checks each triangle
     // is an axis-aligned face backed by a solid block in that chunk's data.
     // Prints offenders; returns their count. Diagnostic for phantom-geometry
-    // bugs — validates what the GPU draws, not what the CPU built.
+    // bugs - validates what the GPU draws, not what the CPU built.
     int debug_validate_gpu_meshes() const;
 
     std::size_t chunk_count() const { return chunks_.size(); }
