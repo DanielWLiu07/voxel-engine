@@ -104,3 +104,9 @@ data says it matters.
   so a capture attributes time to the subsystem that spent it.
 - **Reproducibility.** Every headline number on the README is reproducible from
   one of the commands above on an idle machine.
+- **Sanitizers.** `scripts/run_sanitizers.sh` (CI "sanitizers" job) runs the
+  lock-free queue + worker pool under ThreadSanitizer and the full logic suite
+  (mesher, RLE codec + fuzz cases) under AddressSanitizer + UndefinedBehavior
+  Sanitizer. The concurrency code is TSan-clean — the atomic memory ordering in
+  the queue is validated, not just asserted. The only allowed UBSan suppression
+  is FastNoiseLite's intentional hash wraparound; our own code is clean.

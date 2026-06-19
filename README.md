@@ -62,6 +62,7 @@ scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
+scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
 ```
 
 | Metric | Value |
@@ -211,9 +212,10 @@ World
 
 Tooling
 - Worker-pool chunk streaming with main-thread-only GPU upload. Ships a
-  tested lock-free MPMC queue (`core/mpmc_queue.h`) benchmarked against the
-  mutex pool; the live path stays mutex-based because the queue is never the
-  bottleneck at chunk-job granularity (see [`DESIGN.md`](DESIGN.md)).
+  ThreadSanitizer-clean lock-free MPMC queue (`core/mpmc_queue.h`) benchmarked
+  against the mutex pool; the live path stays mutex-based because the queue is
+  never the bottleneck at chunk-job granularity (see [`DESIGN.md`](DESIGN.md)).
+  Concurrency + logic are checked under TSan / ASan / UBSan in CI.
 - Day/night cycle with sun arc and palette ramp.
 - ImGui debug HUD: frame time, FPS, drawn chunks, triangles, pending async
   chunks, copy-perf-to-clipboard.
