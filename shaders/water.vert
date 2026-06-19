@@ -8,7 +8,7 @@
 // The model matrix translates the plane to the player's xz each frame
 // (lets a finite plane follow an infinite streaming world). The wave
 // function reads the post-translation world coords so the ripples stay
-// anchored to the world — they don't surf along with the camera.
+// anchored to the world - they don't surf along with the camera.
 layout(location = 0) in vec3 a_position;
 
 uniform mat4  u_model;

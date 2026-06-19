@@ -1,33 +1,31 @@
 # Benchmark & profiling artifacts
 
 Committed measurements, each reproducible from the repo. Deterministic counts
-(triangles, drawn sections, cull ratios) are machine-independent and CI-gated;
-wall-clock figures depend on machine load, so they ship with their variance.
+(triangles, drawn sections, cull ratios) are machine-independent and CI-gated.
+Wall-clock figures depend on machine load and are quoted with their variance.
 
-## `queue_bench.txt` — lock-free vs mutex queue
+## `queue_bench.txt` - lock-free vs mutex queue
 
 Throughput/latency sweep of `core/mpmc_queue.h` against a `std::mutex +
-std::queue` pool across contention and per-item granularity. Shows the
-lock-free queue winning 2–5× under contention but converging with the mutex
-pool as per-item work approaches the engine's ~1 ms chunk-job size — the basis
-for keeping the live streaming pool mutex-based.
+std::queue` pool across contention and per-item granularity. The lock-free
+queue wins 2-5x under contention but converges with the mutex pool as per-item
+work approaches the ~1 ms chunk-job size, which is why the live pool is mutex.
 
 ```
 cmake --build build --target queue_bench
 ./build/queue_bench > docs/bench/queue_bench.txt
 ```
 
-## `frame_variance.txt` — frame-time run-to-run distribution
+## `frame_variance.txt` - frame-time run-to-run distribution
 
 10 repeats of the 300-frame bench, reporting mean / stddev / min / max /
-coefficient of variation. Quantifies measurement noise so a quoted frame time
-can be defended rather than cherry-picked.
+coefficient of variation, so the frame-time numbers come with their noise.
 
 ```
 scripts/bench_variance.sh 10 300 center > docs/bench/frame_variance.txt
 ```
 
-## `frame_capture.tracy` + `frame_zones.csv` — profiler capture
+## `frame_capture.tracy` + `frame_zones.csv` - profiler capture
 
 A real Tracy trace of a 600-frame center-pose run (671 frames, ~5.9 k zones),
 plus a CSV export of per-zone time. Open the `.tracy` in the Tracy GUI for the

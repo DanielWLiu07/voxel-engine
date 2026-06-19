@@ -151,7 +151,7 @@ TerrainGen::TerrainGen(std::uint32_t seed) {
     temp_.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
     temp_.SetFrequency(0.006f);
 
-    // Two orthogonal 3D fields — the intersection of their iso-surfaces
+    // Two orthogonal 3D fields - the intersection of their iso-surfaces
     // (|n_a| and |n_b| both small) carves tube-like caves instead of the
     // blobby Swiss-cheese single-threshold pattern.
     cave_a_.SetSeed(static_cast<int>(seed) + 6);
@@ -274,7 +274,7 @@ void TerrainGen::fill_chunk(int chunk_x, int chunk_z, Chunk& out) const {
     }
 
     // Tree pass: variant depends on biome noise + altitude. Deserts get no
-    // trees — sand surface alone is enough to read as a different biome.
+    // trees - sand surface alone is enough to read as a different biome.
     constexpr int kMargin = 2;
     for (int z = kMargin; z < kChunkSizeZ - kMargin; ++z) {
         for (int x = kMargin; x < kChunkSizeX - kMargin; ++x) {

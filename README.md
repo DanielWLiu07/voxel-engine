@@ -3,22 +3,21 @@
 [![CI](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml)
 
 A desktop voxel engine I built solo over three weeks in C++20 and OpenGL 4.1
-Core. The point of the project was to learn graphics from scratch and ship a
-binary with measurable wins, not to clone Minecraft. Numbers below are from
-my Apple M4.
+Core, to learn graphics from scratch and get some measurable performance wins
+out of it. Numbers below are from my Apple M4.
 
 ![Vista: lake, desert, forest and snow biomes, greedy-meshed and AI-textured](docs/media/vista.jpg)
 
 | ![Ground level](docs/media/ground.jpg) | ![Inside a cave](docs/media/cave.jpg) |
 | :---: | :---: |
-| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 439** — byte-identical pixels to the unculled render |
+| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 439** - byte-identical pixels to the unculled render |
 
 Screenshots are reproducible: `./build/voxel_engine --screenshot-after 60
 --pose center` renders a deterministic pose (locked camera, frozen shader
 time) and writes a byte-stable PNG, which is also how the occlusion culler
 is pixel-diff verified in development.
 
-Block textures are **AI-generated (SDXL-Turbo) and labeled as such** — the
+Block textures are **AI-generated (SDXL-Turbo) and labeled as such** - the
 game shows the credit at boot and in the HUD, and every tile's model,
 prompt, and seed are committed in [`TEXTURES.md`](TEXTURES.md) +
 `textures/MANIFEST.toml`.
@@ -106,7 +105,7 @@ so the same algorithm produces fewer quads but a lower ratio. Both numbers
 come out of `./build/voxel_engine --bench`.
 
 The frustum cull rows come from `--bench`'s deterministic pose (camera at
-(0, 80, 0), yaw -90, pitch -15, 70° FOV, 16:9). The chunk row counts
+(0, 80, 0), yaw -90, pitch -15, 70 deg FOV, 16:9). The chunk row counts
 loaded chunks that survive the per-chunk tight AABB test. The section rows
 split each chunk into eight 32-block vertical sections, each with its own
 AABB, and count survivors.
@@ -118,16 +117,16 @@ Two denominators because both are useful:
 - vs all loaded sections: the naive "draw every loaded section" baseline.
   Bigger number, weaker comparison.
 
-Frustum-only culling at 70° FOV ceilings near 3x because the cone covers
+Frustum-only culling at 70 deg FOV ceilings near 3x because the cone covers
 roughly a third of the surrounding disc. The section pass adds modest
 tightening within visible chunks. Bigger reductions need occlusion, not
-finer AABBs — which is what the occlusion rows measure.
+finer AABBs - which is what the occlusion rows measure.
 
 Occlusion culling is the Minecraft-style cave-culling algorithm: each
 16x32x16 section flood-fills its air cells on the worker thread and records
 which of its 15 face pairs a sightline can pass between (one bit each).
-Per frame, a BFS walks that connectivity graph from the camera's section —
-pruned by the frustum, never reversing a direction already taken — and only
+Per frame, a BFS walks that connectivity graph from the camera's section -
+pruned by the frustum, never reversing a direction already taken - and only
 reached sections draw. On open terrain it trims the handful of sections
 buried just below the surface (407 -> 396). Underground it removes nearly
 everything: from a cave the frustum still admits 283 sections, but only 4
@@ -233,7 +232,7 @@ Tooling
 | F | Toggle walk / fly |
 | Left click | Break block |
 | Right click | Place block |
-| 1–7 | Pick block to place (Stone, Dirt, Grass, Sand, Wood, Leaves, Snow) |
+| 1-7 | Pick block to place (Stone, Dirt, Grass, Sand, Wood, Leaves, Snow) |
 | Tab | Toggle mouse capture |
 | F2 | Toggle HUD |
 | F5 / F6 | Save / load world (`./saves/world1/`) |

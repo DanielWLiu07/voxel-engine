@@ -1,5 +1,5 @@
 # FastNoiseLite's hash mixes integers with intentional wraparound, which is
 # signed-integer-overflow (UB in C++) by design. It is vendored third-party
 # noise code, not ours; suppress it here so UBSan still flags overflow in our
-# own code. This is the only suppression — everything else must be clean.
+# own code. This is the only suppression; everything else must be clean.
 signed-integer-overflow:FastNoiseLite.h

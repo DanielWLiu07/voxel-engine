@@ -181,7 +181,7 @@ void test_greedy_equals_naive_area_on_simple_terrain() {
 void test_greedy_equals_naive_area_on_perlin_cave_terrain() {
     // Real generator output (caves on) exercises overhangs and interior
     // surfaces the synthetic stepped terrain can't. Any area mismatch means
-    // the greedy mesher emitted stray or missing faces — this is the
+    // the greedy mesher emitted stray or missing faces - this is the
     // regression test for the floating-quad artifact.
     world::TerrainGen terrain(1337);
     for (int cz = -2; cz <= 2; ++cz) {
@@ -205,7 +205,7 @@ void test_greedy_equals_naive_area_on_perlin_cave_terrain() {
 void test_greedy_checkerboard_degrades_to_naive() {
     // Adversarial worst case for the merge sweep: isolated blocks in a
     // checkerboard at one y level. No two faces are contiguous, so zero
-    // merges are legal — greedy must emit exactly the naive mesh rather
+    // merges are legal - greedy must emit exactly the naive mesh rather
     // than over-merge across the air gaps (a rectangle spanning a gap
     // would invent surface area over cells that have no face).
     world::Chunk c;
@@ -232,7 +232,7 @@ void test_greedy_checkerboard_degrades_to_naive() {
 void test_greedy_never_merges_across_block_types() {
     // Flat slab, west half Stone, east half Sand. The material seam is
     // invisible to a geometry-only merge, so this guards the rule that
-    // quads split on block id — one merged top quad would smear a single
+    // quads split on block id - one merged top quad would smear a single
     // texture layer across both halves.
     world::Chunk c;
     for (int z = 0; z < world::kChunkSizeZ; ++z) {
@@ -336,10 +336,8 @@ void test_rle_decode_garbage_fails_gracefully() {
            "decode of garbage either returns false or yields a degenerate chunk");
 }
 
-// Fill a chunk with one of several random distributions chosen by `style`,
-// each stressing the RLE codec differently: per-cell noise (worst case, many
-// short runs), layered terrain (long runs), sparse blocks in air, and wide
-// solid bands. Deterministic given `rng`.
+// Fill a chunk with one of four random distributions (chosen by style) that
+// stress the RLE codec differently. Deterministic given rng.
 void fuzz_fill_chunk(world::Chunk& c, std::mt19937& rng, int style) {
     auto rand_block = [&](bool allow_air) {
         const int lo = allow_air ? 0 : 1;

@@ -1,20 +1,7 @@
-// Head-to-head benchmark: lock-free bounded MPMC queue (core/mpmc_queue.h)
-// vs a conventional std::mutex + std::queue work queue (the design the chunk
-// thread pool currently uses).
-//
-// The point is not "lock-free is always faster" — it is to find WHERE the two
-// diverge. Queue-op cost only matters relative to the work done per item. So
-// we sweep:
-//   - contention: producer/consumer thread counts
-//   - granularity: simulated work per item (busy spin), from 0 up past the
-//     ~1 microsecond mark and toward the engine's real ~1 ms chunk job
-//
-// and report aggregate throughput (items/sec) plus per-pop latency p50/p99.
-// A real chunk job (terrain + greedy mesh + visibility) is ~1 ms; the table
-// shows that at that granularity the queue is irrelevant, which is the honest
-// basis for how the streaming bullet is worded.
-//
-// Build: produced as the `queue_bench` target. Run: ./build/queue_bench
+// Throughput/latency of the lock-free MPMC queue vs a mutex+std::queue pool,
+// swept over thread counts and per-item work. Queue cost only matters relative
+// to work per item, so the busy-work knob runs from 0 up toward the engine's
+// ~1 ms chunk job, where the two converge.
 
 #include "core/mpmc_queue.h"
 
@@ -32,9 +19,8 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-// Baseline: an unbounded std::mutex + std::queue, the same primitive the live
-// ThreadPool uses, with non-blocking try_pop so the harness matches the
-// lock-free path exactly (spin-on-empty rather than condvar sleep).
+// Baseline: mutex + std::queue with non-blocking try_pop, matching the
+// lock-free harness (spin on empty rather than condvar sleep).
 template <typename T>
 class MutexQueue {
 public:
@@ -56,8 +42,7 @@ private:
     std::queue<T>         q_;
 };
 
-// Burn approximately `units` of busy work. Calibrated to be a few ns per unit;
-// we only need a monotonic knob, not a wall-clock-accurate one.
+// ~a few ns per unit; just a monotonic knob, not wall-clock accurate.
 inline void busy_work(int units, volatile std::uint64_t& sink) {
     std::uint64_t acc = sink;
     for (int i = 0; i < units; ++i) acc = acc * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -167,9 +152,7 @@ int main() {
     sweep(static_cast<int>(hw) / 2, static_cast<int>(hw) / 2);  // balanced MPMC
 
     std::printf(
-        "\nReading: at work/item=0 the table is raw queue throughput; the\n"
-        "lock-free queue's edge appears under contention there. A real chunk\n"
-        "job is ~1,000,000 ns of work, far right of this table, where both\n"
-        "queues are identical -- the queue is never the streaming bottleneck.\n");
+        "\nwork/item=0 is raw queue throughput (lock-free leads under\n"
+        "contention). A chunk job is ~1,000,000 ns; past that the queues match.\n");
     return 0;
 }

@@ -19,7 +19,7 @@ inline constexpr int kAtlasLegacyTilePx = 16;
 // GL_RGBA8 with GL_NEAREST filtering and clamp-to-edge so the voxel
 // aesthetic stays crisp at any zoom. Tiles default to procedural paint;
 // textures/<block>.png overrides a tile when present (the AI-generated
-// set — see TEXTURES.md). png_tiles_out, if non-null, receives how many
+// set - see TEXTURES.md). png_tiles_out, if non-null, receives how many
 // tiles came from PNGs so the caller can show the AI-art credit.
 GLuint generate_block_atlas(int* png_tiles_out = nullptr);
 

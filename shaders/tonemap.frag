@@ -9,7 +9,7 @@ uniform float     u_exposure;
 uniform float     u_bloom_intensity;
 
 // Narkowicz 2015 ACES approximation. Compresses highlights cleanly but
-// desaturates — we lift saturation back up after the curve.
+// desaturates - we lift saturation back up after the curve.
 vec3 aces(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
@@ -21,7 +21,7 @@ vec3 saturate_boost(vec3 c, float amount) {
     return mix(vec3(luma), c, 1.0 + amount);
 }
 
-// Subtle vignette darkens the corners — helps the eye focus center-frame.
+// Subtle vignette darkens the corners - helps the eye focus center-frame.
 float vignette(vec2 uv) {
     vec2 q = uv - 0.5;
     float r = dot(q, q);

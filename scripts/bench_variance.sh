@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
 #
-# Runs the frame benchmark R times and reports the run-to-run distribution
-# (mean, stddev, min, max, coefficient of variation) for avg frame time and
-# fps. Frame time is machine-load dependent, so a single number is misleading;
-# this quantifies the noise so a quoted figure can be defended ("5.7 ms,
-# CV 4%" rather than a lone "5.7 ms"). The deterministic counts (sections,
-# triangles) do not vary run to run and are gated separately by `--bench`.
+# Run the frame benchmark R times, report mean/stddev/min/max/cv for frame
+# time and fps (frame time varies with machine load; the counts don't).
 #
-# Usage:
-#   scripts/bench_variance.sh                 # 10 runs, 300 frames, center pose
-#   scripts/bench_variance.sh 20 600 ground   # runs / frames-per-run / pose
-#
-# Run from the repo root after a Release build (cmake --build build).
+# Usage: scripts/bench_variance.sh [runs] [frames] [pose]   (default 10 300 center)
 
 set -euo pipefail
 

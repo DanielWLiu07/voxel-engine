@@ -112,7 +112,7 @@ int run_bench() {
 
     std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0) ====\n", kRuns);
     // Caves-off measures the greedy algorithm against contiguous terrain
-    // — this is what the CI gate checks. Caves-on is the realistic
+    // - this is what the CI gate checks. Caves-on is the realistic
     // gameplay path; lower ratio is expected because caves break up
     // mergeable face runs.
     bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
@@ -249,7 +249,7 @@ int run_bench() {
         }
         return drawn;
     };
-    // Returns -1 if the BFS refused to run (camera chunk unloaded — can't
+    // Returns -1 if the BFS refused to run (camera chunk unloaded - can't
     // happen for these poses, but keep the contract visible).
     auto count_occl_sections = [&](const glm::vec3& cam_pos, const gfx::Frustum& f) {
         world::SectionReachableMap reachable;
@@ -748,7 +748,7 @@ int main(int argc, char** argv) {
     // forces the GPU to drain before timing, so these reflect actual
     // dispatch+execution wall time rather than CPU command-submission only;
     // the trade-off is that the per-frame sync stalls inflate the frame-level
-    // avg_ms heavily (~2.7x measured at radius 12) — never quote avg_ms from
+    // avg_ms heavily (~2.7x measured at radius 12) - never quote avg_ms from
     // this mode as frame time; use plain --bench-frame for that.
     std::vector<double> pass_ms_shadow, pass_ms_sky, pass_ms_terrain,
                         pass_ms_water,  pass_ms_postfx;
@@ -1000,7 +1000,7 @@ int main(int argc, char** argv) {
         // cascade is hundreds of meters wide and barely changes frame to
         // frame, so paying 3x shadow cost to refresh near-stale data is
         // wasted work. c1 and c2 are phased so they never coincide with
-        // each other — peak passes/frame stays at 2 instead of 3, keeping
+        // each other - peak passes/frame stays at 2 instead of 3, keeping
         // the frame-time envelope flat:
         //   c0 every frame  c1 on (f & 1) == 0  c2 on (f & 3) == 1
         // Avg = 1 + 0.5 + 0.25 = 1.75 passes/frame.
@@ -1011,7 +1011,7 @@ int main(int argc, char** argv) {
         if (frame_index == 0ull) shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
         // When shadows just transitioned 0 -> active (sunrise), the cached
         // depth textures and matrices are stale from before the night
-        // skip-pass — force-refresh all cascades to resync.
+        // skip-pass - force-refresh all cascades to resync.
         const bool shadow_active_now = (light.shadow_strength > 0.0f);
         if (shadow_active_now && !prev_shadow_active) {
             shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;

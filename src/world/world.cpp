@@ -35,7 +35,7 @@ namespace world {
 namespace {
 
 // Min/max Y of any solid block in the chunk. Returned as a closed range
-// (max_y is inclusive). Empty chunks return {0,0} — slot has no mesh so
+// (max_y is inclusive). Empty chunks return {0,0} - slot has no mesh so
 // the AABB is never tested anyway.
 std::pair<int,int> tight_y_range(const Chunk& chunk) {
     int min_y = -1, max_y = -1;
@@ -59,7 +59,7 @@ std::pair<int,int> tight_y_range(const Chunk& chunk) {
 
 // Tight per-chunk AABB derived from the chunk's solid extents. With wide
 // (0..256) Y, a horizontally-forward frustum intersects almost every column
-// it overlaps in XZ — vertical pruning collapses to nothing. Tight Y means
+// it overlaps in XZ - vertical pruning collapses to nothing. Tight Y means
 // chunks whose terrain sits well above or below the camera get culled.
 gfx::AABB make_chunk_aabb(ChunkCoord c, const Chunk& chunk) {
     const float ox = static_cast<float>(c.x * kChunkSizeX);
@@ -87,10 +87,10 @@ struct SectionBuild {
 // assigned to the section that contains its bottom Y; the section's AABB
 // extends to the quad's actual extent, so a side face that spans two
 // sections still draws correctly when the higher section is in-frustum
-// (the AABB pulls the lower section in too — conservative, correct).
+// (the AABB pulls the lower section in too - conservative, correct).
 //
 // Bucketing instead of meshing-per-section keeps the greedy merger
-// chunk-wide, so we don't lose face runs at section boundaries — bullet
+// chunk-wide, so we don't lose face runs at section boundaries - bullet
 // #1 (greedy ratio) doesn't regress.
 std::array<SectionBuild, kSectionsPerChunk>
 bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
@@ -567,7 +567,7 @@ namespace {
 
 // True if section `i` of a chunk should draw given the chunk's reachable
 // mask. Greedy quads bucket by their bottom Y, so a section's AABB can
-// extend above its own slab — the section must draw if ANY slab its AABB
+// extend above its own slab - the section must draw if ANY slab its AABB
 // spans is reachable, or a tall cliff face would vanish when only its
 // upper half is in view.
 bool section_reachable(std::uint8_t mask, int i, const gfx::AABB& aabb) {
@@ -631,7 +631,7 @@ bool occlusion_bfs(
 
         for (int d = 0; d < 6; ++d) {
             // Never step back along an axis direction the path already used
-            // in reverse — stops sightlines that would have to bend around
+            // in reverse - stops sightlines that would have to bend around
             // a corner and come back.
             if (n.dirs & (1u << opposite_face(d))) continue;
             if (n.entry_face >= 0 &&
