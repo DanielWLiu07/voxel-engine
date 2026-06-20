@@ -985,7 +985,7 @@ int main(int argc, char** argv) {
         fv.window_w   = fb_w;
         fv.window_h   = fb_h;
         fv.fog_end    = static_cast<float>(kStreamRadius * world::kChunkSizeX) * 0.95f;
-        fv.fog_start  = fv.fog_end * 0.78f;  // less aggressive midrange wash-out
+        fv.fog_start  = fv.fog_end * 0.85f;  // keep midrange crisp; haze only far out
         // Camera far plane sits just past the fog plane: anything further is
         // fully fogged out and contributes nothing. Tightening it from the
         // 500 m default also gives the frustum a real far-plane cull instead
