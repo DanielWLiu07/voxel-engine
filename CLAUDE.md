@@ -73,19 +73,21 @@ Rules:
 Reconciled to measured, reproducible numbers (Apple M4, radius 12). Every
 figure maps to a command in the README / `docs/bench/`; none are aspirational.
 
-1. Built a C++20 / OpenGL 4.1 voxel engine that streams a **40M-voxel world**
-   (625 chunks resident) at **175 FPS** (5.7 ms/frame, 29M triangles/sec,
-   253 MB RSS); a greedy meshing pass merges coplanar faces for **18x fewer
-   triangles** than naive culling, guarded by a CI regression gate.
-2. Engineered off-thread chunk streaming - a worker pool generates terrain +
-   meshes while the main thread owns all GPU uploads - sustaining **2,200
-   chunks/sec at 8.4x parallel efficiency** on 9 workers; hierarchical frustum
-   + occlusion culling cuts drawn sections up to **70x underground**.
-3. (Systems-role optional) Implemented a **ThreadSanitizer-clean lock-free
-   MPMC queue** (2-5x faster than a mutex queue under contention) and kept the
-   simpler mutex pool after measuring the queue is never the bottleneck at the
-   engine's ~1 ms job granularity. Concurrency runs under TSan + ASan/UBSan
-   in CI.
+1. Built a C++20 / OpenGL 4.1 voxel engine that streams a **40-million-voxel
+   world** (625 resident chunks) at **175 FPS** - 5.7 ms/frame, 29M
+   triangles/sec, 253 MB RSS. A greedy meshing pass merges coplanar voxel
+   faces into **18x fewer triangles** than naive culling, a win pinned at
+   >=15x by an automated **CI performance-regression gate** on every commit.
+2. Engineered off-thread chunk streaming: a **9-worker thread pool** generates
+   Perlin terrain and greedy meshes while the main thread retains exclusive
+   ownership of all GPU uploads, sustaining **2,200 chunks/sec at 8.4x
+   parallel efficiency**. A hierarchical frustum + section-occlusion culler
+   (flood-fill visibility graph) cuts drawn geometry **up to 70x underground**.
+3. Implemented a **ThreadSanitizer-clean, cache-line-padded lock-free MPMC
+   queue** (2-5x faster than a mutex queue under contention), then
+   deliberately shipped the simpler mutex pool after profiling proved the
+   queue never bottlenecks at the engine's ~1 ms job granularity -
+   concurrency continuously validated under **TSan + ASan/UBSan in CI**.
 
 These replace an earlier draft that overstated: it said "lock-free streaming"
 (live path is a mutex pool), "30x" greedy (CI-gated is 18.1x), "~50 chunks/sec"
