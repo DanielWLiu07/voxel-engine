@@ -26,3 +26,6 @@ captures/
 saves/
 screenshots/
 textures/preview/
+
+# Local AI-assistant context, not for the public repo
+CLAUDE.md
