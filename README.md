@@ -10,7 +10,7 @@ out of it. Numbers below are from my Apple M4.
 
 | ![Ground level](docs/media/ground.jpg) | ![Inside a cave](docs/media/cave.jpg) |
 | :---: | :---: |
-| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 436**, byte-identical to the unculled render |
+| Eye level: raking CSM shadows across a cobble terrace, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 436**, byte-identical to the unculled render |
 
 Screenshots are reproducible: `./build/voxel_engine --screenshot-after 60
 --pose center` renders a deterministic pose (locked camera, frozen shader
