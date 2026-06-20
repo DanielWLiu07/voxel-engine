@@ -97,11 +97,18 @@ These replace an earlier draft that overstated: it said "lock-free streaming"
 
 Every PR should ask: does this make these bullets more defensible, or is it scope creep?
 
-## Build (will be filled in by task #3)
+## Build
 
 ```
-# vcpkg bootstrap + cmake configure/build commands go here once task #3 lands
+cmake -B build -G Ninja
+cmake --build build -j
+./build/voxel_engine
 ```
+
+Deps are pulled by CMake FetchContent (GLFW, GLM, Dear ImGui); GLAD, stb,
+and FastNoiseLite are vendored under `third_party/`. First configure takes
+a couple of minutes for the clones. `--bench` runs the mesher/cull bench
+headless; `scripts/run_sanitizers.sh` runs the TSan + ASan/UBSan suite.
 
 ## Useful pointers for future Claude sessions
 
