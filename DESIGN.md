@@ -79,7 +79,7 @@ component rather than a claim the engine leans on.
 ## Measurement methodology
 
 - **Load-independent vs wall-clock.** Drawn-section counts, triangle counts, and
-  cull ratios are deterministic - same binary, same camera pose, same numbers on
+  cull ratios are deterministic: same binary, same camera pose, same numbers on
   any machine. Frame time is not; it depends on machine load. The README labels
   which is which, and the CI gates only assert the deterministic ratios so they
   never flake on a busy runner.
@@ -91,7 +91,7 @@ component rather than a claim the engine leans on.
   `--bench-frame N` collects N vsync-off frame samples at a pose;
   `scripts/bench_sweep.sh` sweeps `kStreamRadius` and restores it on exit.
   `--pass-breakdown` glFinish-brackets each render pass for real per-pass wall
-  time - at the cost of inflating frame-level avg by ~2.7x, so that mode is a
+  time, at the cost of inflating frame-level avg by ~2.7x, so that mode is a
   diagnostic and its avg is never quoted as the frame time.
 - **Profiling.** Tracy instrumentation is compiled in behind
   `-DVOXEL_USE_TRACY=ON`; the worker job, mesh build, and frame drain are zoned

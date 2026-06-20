@@ -10,16 +10,16 @@ out of it. Numbers below are from my Apple M4.
 
 | ![Ground level](docs/media/ground.jpg) | ![Inside a cave](docs/media/cave.jpg) |
 | :---: | :---: |
-| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 439** - byte-identical pixels to the unculled render |
+| Ground level: CSM shadows, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 439**, byte-identical to the unculled render |
 
 Screenshots are reproducible: `./build/voxel_engine --screenshot-after 60
 --pose center` renders a deterministic pose (locked camera, frozen shader
 time) and writes a byte-stable PNG, which is also how the occlusion culler
 is pixel-diff verified in development.
 
-Block textures are **AI-generated (SDXL-Turbo) and labeled as such** - the
+Block textures are **AI-generated (SDXL-Turbo) and labeled as such.** The
 game shows the credit at boot and in the HUD, and every tile's model,
-prompt, and seed are committed in [`TEXTURES.md`](TEXTURES.md) +
+prompt, and seed are committed in [`TEXTURES.md`](TEXTURES.md) and
 `textures/MANIFEST.toml`.
 
 ## Build
@@ -120,13 +120,13 @@ Two denominators because both are useful:
 Frustum-only culling at 70 deg FOV ceilings near 3x because the cone covers
 roughly a third of the surrounding disc. The section pass adds modest
 tightening within visible chunks. Bigger reductions need occlusion, not
-finer AABBs - which is what the occlusion rows measure.
+finer AABBs, which is what the occlusion rows measure.
 
 Occlusion culling is the Minecraft-style cave-culling algorithm: each
 16x32x16 section flood-fills its air cells on the worker thread and records
 which of its 15 face pairs a sightline can pass between (one bit each).
-Per frame, a BFS walks that connectivity graph from the camera's section -
-pruned by the frustum, never reversing a direction already taken - and only
+Per frame, a BFS walks that connectivity graph out from the camera's section,
+pruned by the frustum and never reversing a direction already taken, and only
 reached sections draw. On open terrain it trims the handful of sections
 buried just below the surface (407 -> 396). Underground it removes nearly
 everything: from a cave the frustum still admits 283 sections, but only 4
@@ -166,26 +166,33 @@ scales together with the work the GPU does.
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real GPU wall time at the
 cost of inflating frame-level avg_ms; that mode is a diagnostic, not the
-perf number). Measured at current HEAD, mean of 3 runs:
+perf number). This profile is what pointed me at post-process as the pass
+worth optimizing:
 
 | Pass | ms | Share |
 | --- | ---: | ---: |
-| post-process (HDR -> bloom chain -> ACES tonemap) | 3.73 | 37% |
+| post-process (HDR -> bloom -> ACES tonemap) | 3.73 | 37% |
 | terrain (visible sections, atlas + CSM sample) | 2.19 | 22% |
 | shadow pass (3 cascades, staggered) | 2.14 | 21% |
 | water (sine-animated plane + Fresnel + depth fog) | 1.07 | 11% |
 | sky (gradient + sun glow) | 0.90 | 9% |
 | sum of measured passes | 10.03 | |
 
-Post-process dominates; the next clear lever for frame-time savings is
-halving bloom iterations or dropping the bloom mip chain a level.
+Most of that post-process cost was the bloom blur: one half-res buffer run
+through eight fixed-resolution Gaussian passes, so a wider glow cost
+linearly more. I rebuilt it as a dual-filter (Kawase) downsample/upsample
+pyramid, where the blur work shrinks geometrically down a seven-level mip
+chain. A/B runs that hold machine load constant (using the untouched
+terrain pass as a control) put the post-process pass about 20% cheaper for
+an equal-or-wider glow. The frame-time tables above were captured before
+that change, so they slightly understate where the engine sits now.
 
 ## What's in here
 
 Rendering
 - Greedy mesher that merges co-planar identical faces per chunk. Area-correct
   against the naive face-culling output. Foliage runs through the same pass,
-  so dense tree canopies merge into slab-like planes - an intentional
+  so dense tree canopies merge into slab-like planes, an intentional
   consequence of optimizing for triangle count over leaf silhouette.
 - View-frustum culling against per-chunk AABBs.
 - 3-cascade parallel-split shadow mapping (PSSM) with a sphere-fit cascade
