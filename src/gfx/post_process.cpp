@@ -42,10 +42,12 @@ void PostProcess::destroy() {
     if (scene_depth_ms_) { glDeleteRenderbuffers(1, &scene_depth_ms_); scene_depth_ms_ = 0; }
     if (resolve_fbo_)    { glDeleteFramebuffers(1, &resolve_fbo_);    resolve_fbo_ = 0; }
     if (resolve_color_)  { glDeleteTextures(1, &resolve_color_);      resolve_color_ = 0; }
-    for (int i = 0; i < 2; ++i) {
-        if (bloom_fbo_[i])   { glDeleteFramebuffers(1, &bloom_fbo_[i]);   bloom_fbo_[i] = 0; }
-        if (bloom_color_[i]) { glDeleteTextures(1, &bloom_color_[i]);     bloom_color_[i] = 0; }
+    for (int i = 0; i < kMaxBloomMips; ++i) {
+        if (bloom_mips_[i].fbo) { glDeleteFramebuffers(1, &bloom_mips_[i].fbo); }
+        if (bloom_mips_[i].tex) { glDeleteTextures(1, &bloom_mips_[i].tex); }
+        bloom_mips_[i] = BloomMip{};
     }
+    bloom_mip_count_ = 0;
     if (fs_vao_) { glDeleteVertexArrays(1, &fs_vao_); fs_vao_ = 0; }
     w_ = h_ = 0;
     samples_ = 1;
@@ -102,21 +104,31 @@ bool PostProcess::init(int w, int h, int samples) {
         return false;
     }
 
-    // Half-res ping-pong bloom buffers.
-    const int bw = std::max(1, w / 2);
-    const int bh = std::max(1, h / 2);
-    for (int i = 0; i < 2; ++i) {
-        bloom_color_[i] = make_color_texture(bw, bh, GL_RGBA16F);
-        glGenFramebuffers(1, &bloom_fbo_[i]);
-        glBindFramebuffer(GL_FRAMEBUFFER, bloom_fbo_[i]);
+    // Bloom mip chain. Level 0 is half-res; each level halves again until the
+    // smaller side drops to ~8 px or we hit the cap. More, smaller levels =
+    // wider blur, but the geometric shrink keeps total pixel work tiny.
+    int mw = std::max(1, w / 2);
+    int mh = std::max(1, h / 2);
+    bloom_mip_count_ = 0;
+    for (int i = 0; i < kMaxBloomMips; ++i) {
+        BloomMip& mip = bloom_mips_[i];
+        mip.w = mw;
+        mip.h = mh;
+        mip.tex = make_color_texture(mw, mh, GL_RGBA16F);
+        glGenFramebuffers(1, &mip.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, mip.fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, bloom_color_[i], 0);
+                               GL_TEXTURE_2D, mip.tex, 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            std::fprintf(stderr, "[postfx] bloom FBO %d incomplete\n", i);
+            std::fprintf(stderr, "[postfx] bloom mip %d incomplete\n", i);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             destroy();
             return false;
         }
+        ++bloom_mip_count_;
+        if (mw <= 16 || mh <= 16) break;
+        mw = std::max(1, mw / 2);
+        mh = std::max(1, mh / 2);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -130,10 +142,10 @@ void PostProcess::begin_scene() {
 }
 
 void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
-                                        const Shader& blur,
+                                        const Shader& bloom_down,
+                                        const Shader& bloom_up,
                                         const Shader& tonemap,
                                         int backbuffer_w, int backbuffer_h,
-                                        int blur_iterations,
                                         float bloom_threshold,
                                         float bloom_intensity,
                                         float exposure) {
@@ -149,33 +161,40 @@ void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
 
-    const int bw = std::max(1, w_ / 2);
-    const int bh = std::max(1, h_ / 2);
-
-    // Bright extract: resolve -> bloom[0].
-    glBindFramebuffer(GL_FRAMEBUFFER, bloom_fbo_[0]);
-    glViewport(0, 0, bw, bh);
+    // Bright extract with soft-knee threshold: resolve -> mip 0 (half res).
     bright_extract.use();
     bright_extract.set_int("u_scene", 0);
     bright_extract.set_float("u_threshold", bloom_threshold);
     glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, bloom_mips_[0].fbo);
+    glViewport(0, 0, bloom_mips_[0].w, bloom_mips_[0].h);
     glBindTexture(GL_TEXTURE_2D, resolve_color_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    // Separable Gaussian, alternating H/V across the ping-pong pair.
-    blur.use();
-    blur.set_int("u_source", 0);
-    int src = 0;
-    for (int i = 0; i < blur_iterations * 2; ++i) {
-        int dst = 1 - src;
-        glBindFramebuffer(GL_FRAMEBUFFER, bloom_fbo_[dst]);
-        glViewport(0, 0, bw, bh);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, bloom_color_[src]);
-        blur.set_int("u_horizontal", (i % 2 == 0) ? 1 : 0);
+    // Downsample walk: mip[i-1] -> mip[i], halving each step.
+    bloom_down.use();
+    bloom_down.set_int("u_source", 0);
+    for (int i = 1; i < bloom_mip_count_; ++i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, bloom_mips_[i].fbo);
+        glViewport(0, 0, bloom_mips_[i].w, bloom_mips_[i].h);
+        glBindTexture(GL_TEXTURE_2D, bloom_mips_[i - 1].tex);
         glDrawArrays(GL_TRIANGLES, 0, 3);
-        src = dst;
     }
+
+    // Upsample walk: mip[i] -> mip[i-1], composited additively so each level
+    // adds a successively wider halo. Result accumulates into mip 0.
+    bloom_up.use();
+    bloom_up.set_int("u_source", 0);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glBlendEquation(GL_FUNC_ADD);
+    for (int i = bloom_mip_count_ - 1; i > 0; --i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, bloom_mips_[i - 1].fbo);
+        glViewport(0, 0, bloom_mips_[i - 1].w, bloom_mips_[i - 1].h);
+        glBindTexture(GL_TEXTURE_2D, bloom_mips_[i].tex);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    glDisable(GL_BLEND);
 
     // Tonemap composite -> default framebuffer.
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -188,7 +207,7 @@ void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, resolve_color_);
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, bloom_color_[src]);
+    glBindTexture(GL_TEXTURE_2D, bloom_mips_[0].tex);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glBindVertexArray(0);

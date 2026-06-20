@@ -569,14 +569,15 @@ int main(int argc, char** argv) {
     std::printf("[boot] asset root = %s\n", root.string().c_str());
 
     gfx::Shader shader, sky_shader, shadow_shader, water_shader;
-    gfx::Shader bright_shader, blur_shader, tonemap_shader;
+    gfx::Shader bright_shader, bloom_down_shader, bloom_up_shader, tonemap_shader;
     gfx::Shader wireframe_shader, crosshair_shader;
     if (!load_shader(shader,           root, "basic.vert",        "basic.frag",         "terrain")   ||
         !load_shader(sky_shader,       root, "sky.vert",          "sky.frag",           "sky")       ||
         !load_shader(shadow_shader,    root, "shadow_depth.vert", "shadow_depth.frag",  "shadow")    ||
         !load_shader(water_shader,     root, "water.vert",        "water.frag",         "water")     ||
         !load_shader(bright_shader,    root, "fullscreen.vert",   "bright_extract.frag","bright")    ||
-        !load_shader(blur_shader,      root, "fullscreen.vert",   "blur_separable.frag","blur")      ||
+        !load_shader(bloom_down_shader,root, "fullscreen.vert",   "bloom_down.frag",    "bloom_down")||
+        !load_shader(bloom_up_shader,  root, "fullscreen.vert",   "bloom_up.frag",      "bloom_up")  ||
         !load_shader(tonemap_shader,   root, "fullscreen.vert",   "tonemap.frag",       "tonemap")   ||
         !load_shader(wireframe_shader, root, "wireframe.vert",    "wireframe.frag",     "wireframe") ||
         !load_shader(crosshair_shader, root, "crosshair.vert",    "crosshair.frag",     "crosshair")) {
@@ -591,7 +592,8 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     int postfx_w = fb_w, postfx_h = fb_h;
-    std::printf("[postfx] HDR %dx%d + half-res bloom chain allocated\n", fb_w, fb_h);
+    std::printf("[postfx] HDR %dx%d + %d-level bloom pyramid allocated\n",
+                fb_w, fb_h, postfx.bloom_mip_count());
 
     gfx::CascadedShadowMap shadow_map;
     if (!shadow_map.init(kShadowMapSize)) {
@@ -1069,9 +1071,9 @@ int main(int argc, char** argv) {
 
         // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
         pass_start();
-        postfx.resolve_to_backbuffer(bright_shader, blur_shader, tonemap_shader,
+        postfx.resolve_to_backbuffer(bright_shader, bloom_down_shader,
+                                     bloom_up_shader, tonemap_shader,
                                      fb_w, fb_h,
-                                     /*blur_iter*/ 4,
                                      /*threshold*/ 1.0f,
                                      /*intensity*/ 0.7f,
                                      /*exposure*/  1.0f);
