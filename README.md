@@ -49,9 +49,9 @@ Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 5.7 ms avg frame time, **175 fps**, **29 M triangles/sec**, 253 MB peak RSS.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
 workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
-frustum + occlusion cull), 167k triangles rendered, post-process dominates
-per-pass cost at ~37%. Inside a cave, occlusion culling alone cuts drawn
-sections **70.8x** (283 -> 4).
+frustum + occlusion cull), 167k triangles rendered, post-process the largest
+single pass. Inside a cave, occlusion culling alone cuts drawn sections
+**70.8x** (283 -> 4).
 
 Reproduce:
 ```
@@ -184,7 +184,9 @@ halving bloom iterations or dropping the bloom mip chain a level.
 
 Rendering
 - Greedy mesher that merges co-planar identical faces per chunk. Area-correct
-  against the naive face-culling output.
+  against the naive face-culling output. Foliage runs through the same pass,
+  so dense tree canopies merge into slab-like planes - an intentional
+  consequence of optimizing for triangle count over leaf silhouette.
 - View-frustum culling against per-chunk AABBs.
 - 3-cascade parallel-split shadow mapping (PSSM) with a sphere-fit cascade
   volume, hardware PCF, texel-snapped stable cascades, and a caster pull-back
@@ -192,8 +194,9 @@ Rendering
 - Staggered cascade updates: c0 refreshes every frame, c1 every second, c2
   every fourth, phase-offset so the per-frame shadow cost never spikes above
   two cascades.
-- HDR pipeline (multisampled scene FBO, blit resolve, half-res bloom chain,
-  ACES tonemap, saturation/contrast/vignette grading).
+- HDR pipeline (multisampled scene FBO, blit resolve, dual-filter (Kawase)
+  downsample/upsample bloom pyramid, ACES tonemap, saturation/contrast/vignette
+  grading).
 - Fresnel-blended water plane with sine-animated normals and depth fog.
 - Sky gradient + sun glow, distance fog matched to the horizon.
 - Per-face texture atlas with PNG override; grass and wood have distinct top
