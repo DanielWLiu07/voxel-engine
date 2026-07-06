@@ -7,7 +7,6 @@ out/
 *.swo
 *~
 
-.claude/
 .vscode/
 .idea/
 *.xcodeproj/
@@ -28,4 +27,3 @@ screenshots/
 textures/preview/
 
 # Local AI-assistant context, not for the public repo
-CLAUDE.md
