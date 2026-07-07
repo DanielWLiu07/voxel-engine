@@ -25,6 +25,7 @@
 #include "world/world_io.h"
 
 #include <algorithm>
+#include <numbers>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -453,6 +454,13 @@ int main(int argc, char** argv) {
     // pixel A/B of the occlusion culler.
     int shot_after = 0;
     std::string shot_file;
+    // --capture-orbit N: after the world loads and settles, fly one full
+    // fixed-step circle around the scene over N frames, saving each frame
+    // to ./capture/frame_NNNN.png, then exit. scripts/capture_orbit.sh
+    // assembles the frames into the README clip. Fixed per-frame stepping
+    // (not dt) keeps the output smooth regardless of render hitches, and
+    // a full circle makes the assembled loop seamless.
+    int orbit_frames = 0;
     bool no_occlusion = false;
     glm::vec3 pose_at{};
     float pose_at_yaw = 0.0f, pose_at_pitch = 0.0f;
@@ -473,6 +481,8 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
                 "  voxel_engine --screenshot-after N     load world, settle N frames, save PNG, exit\n"
                 "  voxel_engine --shot-file NAME         filename for --screenshot-after (in ./screenshots)\n"
+                "  voxel_engine --capture-orbit N        orbit the scene over N frames, save each\n"
+                "                                        to ./capture, exit (README clip source)\n"
                 "  voxel_engine --no-occlusion           start with occlusion culling disabled\n"
                 "  voxel_engine --help                   this text\n"
                 "\n"
@@ -496,6 +506,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--shot-file" && i + 1 < argc) {
             shot_file = argv[i + 1];
+            ++i;
+        }
+        if (arg == "--capture-orbit" && i + 1 < argc) {
+            orbit_frames = std::atoi(argv[i + 1]);
             ++i;
         }
         if (arg == "--no-occlusion") no_occlusion = true;
@@ -705,8 +719,13 @@ int main(int argc, char** argv) {
     const float day_speed = 1.0f / 240.0f;
     // Bench/shot modes pause time-of-day so a sunrise/sunset transition
     // mid-run can't fire the shadow-resync force-refresh path (bench: timing
-    // spike) or change the lighting between A/B captures.
-    bool  time_paused = (bench_frames > 0 || shot_after > 0);
+    // spike) or change the lighting between A/B captures. The orbit capture
+    // pauses it too: constant light is what lets the last frame meet the
+    // first for a seamless loop.
+    bool  time_paused = (bench_frames > 0 || shot_after > 0 ||
+                         orbit_frames > 0);
+    int   orbit_frame = 0;
+    int   orbit_settle = 0;
 
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
     std::printf("[input] LClick = break, RClick = place, 1-7 = pick block, Shift = sprint\n");
@@ -876,9 +895,30 @@ int main(int argc, char** argv) {
                 std::printf("[place] %s\n", block_name(place_id));
             }
         }
-        if (input.cursor_captured() && shot_after == 0) {
+        if (input.cursor_captured() && shot_after == 0 && orbit_frames == 0) {
             update_movement(input, dt, cam, player, wrld, walk_mode);
             handle_block_interaction(input, cam, player, walk_mode, wrld, place_id);
+        }
+
+        // Orbit capture drives the camera itself: a fixed-step circle at
+        // constant height, always looking at the scene center. The angle
+        // comes from the frame index, not dt, so a slow frame cannot put a
+        // hitch into the assembled clip.
+        if (orbit_frames > 0 && initial_load_logged) {
+            constexpr glm::vec3 kOrbitCenter{-10.0f, 45.0f, -10.0f};
+            constexpr float kOrbitRadius = 65.0f;
+            constexpr float kOrbitHeight = 62.0f;
+            const float angle = 2.0f * std::numbers::pi_v<float> *
+                                static_cast<float>(orbit_frame) /
+                                static_cast<float>(orbit_frames);
+            const glm::vec3 pos{
+                kOrbitCenter.x + kOrbitRadius * std::cos(angle),
+                kOrbitHeight,
+                kOrbitCenter.z + kOrbitRadius * std::sin(angle)};
+            const glm::vec3 dir = glm::normalize(kOrbitCenter - pos);
+            cam.set_position(pos);
+            cam.set_yaw_pitch(glm::degrees(std::atan2(dir.z, dir.x)),
+                              glm::degrees(std::asin(dir.y)));
         }
 
         world::ChunkCoord center{
@@ -994,7 +1034,11 @@ int main(int argc, char** argv) {
         fv.proj       = cam.proj_matrix(aspect, 70.0f, 0.1f, kCameraFar);
         // Scripted captures freeze shader time (water waves) so identical
         // scenes produce byte-identical PNGs.
-        fv.time_seconds = (shot_after > 0) ? 100.0f : static_cast<float>(now);
+        // Scripted captures freeze the water phase: shots stay diffable and
+        // the orbit's last frame meets its first.
+        fv.time_seconds = (shot_after > 0 || orbit_frames > 0)
+                              ? 100.0f
+                              : static_cast<float>(now);
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
 
@@ -1082,6 +1126,30 @@ int main(int argc, char** argv) {
         // Scripted capture: scene only (pre-HUD), after the world finished
         // loading plus shot_after settle frames. Fixed filename makes runs
         // pixel-diffable (occlusion on/off A/B).
+        // Orbit capture: save the frame just rendered (pre-HUD), one PNG per
+        // orbit step after a settle period for streaming and shadows.
+        if (orbit_frames > 0 && initial_load_logged) {
+            constexpr int kOrbitSettleFrames = 90;
+            if (orbit_settle < kOrbitSettleFrames) {
+                ++orbit_settle;
+            } else {
+                char frame_name[32];
+                std::snprintf(frame_name, sizeof(frame_name),
+                              "frame_%04d.png", orbit_frame);
+                if (gfx::save_screenshot(fb_w, fb_h, "./capture",
+                                         frame_name).empty()) {
+                    std::fprintf(stderr, "[capture] write failed at %s\n",
+                                 frame_name);
+                    glfwSetWindowShouldClose(window, GLFW_TRUE);
+                }
+                if (++orbit_frame == orbit_frames) {
+                    std::printf("[capture] %d frames -> ./capture\n",
+                                orbit_frames);
+                    glfwSetWindowShouldClose(window, GLFW_TRUE);
+                }
+            }
+        }
+
         if (shot_after > 0 && initial_load_logged && --shot_after == 0) {
             if (std::getenv("VOXEL_VALIDATE")) wrld.debug_dump_visibility(view_frustum);
             const std::string path =

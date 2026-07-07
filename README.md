@@ -6,16 +6,21 @@ A desktop voxel engine I built solo over three weeks in C++20 and OpenGL 4.1
 Core, to learn graphics from scratch and get some measurable performance wins
 out of it. Numbers below are from my Apple M4.
 
-![Vista: lake, desert, forest and snow biomes, greedy-meshed and AI-textured](docs/media/vista.jpg)
+![Orbit over the biome triple point: desert, forest valley, snow ridge](docs/media/orbit.gif)
+
+A full camera orbit over the streamed world, captured from a live run
+(`./scripts/capture_orbit.sh` regenerates it: the engine flies a
+deterministic fixed-step circle and saves every frame, ffmpeg assembles
+the seamless loop).
 
 | ![Ground level](docs/media/ground.jpg) | ![Inside a cave](docs/media/cave.jpg) |
 | :---: | :---: |
 | Eye level: raking CSM shadows across a cobble terrace, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 436**, byte-identical to the unculled render |
 
-Screenshots are reproducible: `./build/voxel_engine --screenshot-after 60
---pose center` renders a deterministic pose (locked camera, frozen shader
-time) and writes a byte-stable PNG, which is also how the occlusion culler
-is pixel-diff verified in development.
+Stills are reproducible the same way: `./build/voxel_engine
+--screenshot-after 60 --pose center` renders a deterministic pose (locked
+camera, frozen shader time) and writes a byte-stable PNG, which is also
+how the occlusion culler is pixel-diff verified in development.
 
 Block textures are **AI-generated (SDXL-Turbo) and labeled as such.** The
 game shows the credit at boot and in the HUD, and every tile's model,
