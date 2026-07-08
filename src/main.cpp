@@ -540,6 +540,21 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The two capture modes are mutually exclusive and need a positive
+    // frame count. Rejecting here keeps the render loop's guards simple
+    // and avoids the soft-lock a negative atoi would otherwise cause: the
+    // input-enable and capture-enable checks would disagree, freezing the
+    // camera with no capture and no way out.
+    if (orbit_frames != 0 && cycle_frames != 0) {
+        std::fprintf(stderr,
+                     "--capture-orbit and --capture-cycle are exclusive\n");
+        return EXIT_FAILURE;
+    }
+    if (orbit_frames < 0 || cycle_frames < 0) {
+        std::fprintf(stderr, "capture frame count must be positive\n");
+        return EXIT_FAILURE;
+    }
+
     glfwSetErrorCallback(glfw_error);
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
