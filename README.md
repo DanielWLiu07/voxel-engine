@@ -9,7 +9,7 @@ out of it. Numbers below are from my Apple M4.
 ![Orbit over the biome triple point: desert, forest valley, snow ridge](docs/media/orbit.gif)
 
 A full camera orbit over the streamed world, captured from a live run
-(`./scripts/capture_orbit.sh` regenerates it: the engine flies a
+(`./scripts/capture_clip.sh orbit` regenerates it: the engine flies a
 deterministic fixed-step circle and saves every frame, ffmpeg assembles
 the seamless loop).
 
@@ -230,7 +230,12 @@ Tooling
   against the mutex pool; the live path stays mutex-based because the queue is
   never the bottleneck at chunk-job granularity (see [`DESIGN.md`](DESIGN.md)).
   Concurrency + logic are checked under TSan / ASan / UBSan in CI.
-- Day/night cycle with sun arc and palette ramp.
+- Day/night cycle with sun arc and palette ramp:
+
+  ![One full day/night cycle: sun arc, sweeping shadows, moonlit night](docs/media/daycycle.gif)
+
+  (`./scripts/capture_clip.sh cycle` regenerates it: fixed camera, one
+  full day of time-of-day stepped per frame, seamless loop.)
 - ImGui debug HUD: frame time, FPS, drawn chunks, triangles, pending async
   chunks, copy-perf-to-clipboard.
 - Tracy profiler instrumentation behind `-DVOXEL_USE_TRACY=ON`.
