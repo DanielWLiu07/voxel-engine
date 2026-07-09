@@ -62,6 +62,7 @@ Reproduce:
 ```
 ./build/voxel_engine --bench               # mesher + cull bench, CI-gated
 ./build/voxel_engine --bench-frame 300     # 300-frame timing bench, center pose
+./build/voxel_engine --bench-frame 720 --orbit  # timing over a moving camera path
 scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
@@ -167,6 +168,16 @@ within ~2% of each other, so the headline frame time isn't an artifact
 of a flattering vantage. `high` ships 19% more triangles than `ground`
 (196k vs 165k) but renders in the same time: the per-section cull cost
 scales together with the work the GPU does.
+
+For a number that doesn't depend on picking a pose at all,
+`--bench-frame N --orbit` sweeps the camera one full revolution around
+the scene while sampling, so the percentiles cover a continuously moving
+view and, unlike any static pose, the chunk streaming that motion
+triggers (GPU uploads on the main thread). Measured on a quiet machine
+its percentiles sit close to the static poses above, which says the
+streaming path does not stall the frame; it is the honest benchmark to
+quote when someone asks whether the static numbers hide a hitch under
+motion.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real GPU wall time at the

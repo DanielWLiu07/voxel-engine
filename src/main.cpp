@@ -437,6 +437,29 @@ void update_movement(core::Input& input, float dt,
                    dt);
 }
 
+// One point on the scripted camera orbit: a fixed-radius circle at constant
+// height, always looking at the scene center. Shared by the clip capture
+// and the orbit frame benchmark so both trace the identical path; `frame`
+// runs 0..total-1 for one full revolution.
+struct OrbitPose {
+    glm::vec3 pos;
+    float yaw;
+    float pitch;
+};
+OrbitPose orbit_pose_at(int frame, int total) {
+    constexpr glm::vec3 center{-10.0f, 45.0f, -10.0f};
+    constexpr float radius = 65.0f;
+    constexpr float height = 62.0f;
+    const float angle = 2.0f * std::numbers::pi_v<float> *
+                        static_cast<float>(frame) /
+                        static_cast<float>(total > 0 ? total : 1);
+    const glm::vec3 pos{center.x + radius * std::cos(angle), height,
+                        center.z + radius * std::sin(angle)};
+    const glm::vec3 dir = glm::normalize(center - pos);
+    return {pos, glm::degrees(std::atan2(dir.z, dir.x)),
+            glm::degrees(std::asin(dir.y))};
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -447,6 +470,11 @@ int main(int argc, char** argv) {
     int bench_frames = 0;
     bool bench_pass_breakdown = false;
     bool bench_io = false;
+    // --bench-frame N --orbit sweeps the camera around the full orbit path
+    // while sampling, so the frame-time percentiles cover a moving camera
+    // (and the chunk streaming its motion triggers) instead of one static
+    // pose. A more representative number than any single vantage point.
+    bool bench_orbit = false;
     std::string_view bench_pose = "center";
     // --screenshot-after N: render until the world is loaded plus N settle
     // frames, save the scene (pre-HUD) to a fixed filename, exit. Drives
@@ -479,6 +507,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench                  CPU mesher + cull bench (no GL window)\n"
                 "  voxel_engine --bench-frame N          run N vsync-off frames, print BENCH_FRAME\n"
                 "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high)\n"
+                "  voxel_engine --bench-frame N --orbit  bench over a moving camera orbit, not a pose\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -500,6 +529,7 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--pass-breakdown") bench_pass_breakdown = true;
+        if (arg == "--orbit") bench_orbit = true;
         if (arg == "--bench-io") bench_io = true;
         if (arg == "--pose" && i + 1 < argc) {
             bench_pose = argv[i + 1];
@@ -554,6 +584,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "capture frame count must be positive\n");
         return EXIT_FAILURE;
     }
+    // --orbit only means anything for the frame bench; label the run so its
+    // BENCH_FRAME line is not mistaken for a static pose.
+    if (bench_orbit && bench_frames > 0) bench_pose = "orbit";
 
     glfwSetErrorCallback(glfw_error);
     if (!glfwInit()) {
@@ -715,6 +748,12 @@ int main(int argc, char** argv) {
         } else if (bench_pose == "cave") {
             cam.set_position({-30.5f, 15.5f, -31.5f});
             cam.set_yaw_pitch(-90.0f, 0.0f);
+        } else if (bench_pose == "orbit") {
+            // The orbit bench drives the camera per frame; start it at the
+            // path's first point so the settle happens where sampling begins.
+            const OrbitPose op = orbit_pose_at(0, bench_frames);
+            cam.set_position(op.pos);
+            cam.set_yaw_pitch(op.yaw, op.pitch);
         } else {
             // default: "center"
             bench_pose = "center";
@@ -932,29 +971,32 @@ int main(int argc, char** argv) {
         // the orbit's start pose and spends the frames on one full day of
         // time-of-day instead.
         if ((orbit_frames > 0 || cycle_frames > 0) && initial_load_logged) {
-            constexpr glm::vec3 kOrbitCenter{-10.0f, 45.0f, -10.0f};
-            constexpr float kOrbitRadius = 65.0f;
-            constexpr float kOrbitHeight = 62.0f;
-            const float angle =
-                (orbit_frames > 0)
-                    ? 2.0f * std::numbers::pi_v<float> *
-                          static_cast<float>(capture_frame) /
-                          static_cast<float>(orbit_frames)
-                    : 0.0f;
-            const glm::vec3 pos{
-                kOrbitCenter.x + kOrbitRadius * std::cos(angle),
-                kOrbitHeight,
-                kOrbitCenter.z + kOrbitRadius * std::sin(angle)};
-            const glm::vec3 dir = glm::normalize(kOrbitCenter - pos);
-            cam.set_position(pos);
-            cam.set_yaw_pitch(glm::degrees(std::atan2(dir.z, dir.x)),
-                              glm::degrees(std::asin(dir.y)));
+            // Cycle parks at the orbit start (frame 0) and spends its
+            // frames on time-of-day; orbit sweeps the full circle.
+            const OrbitPose op = (orbit_frames > 0)
+                ? orbit_pose_at(capture_frame, orbit_frames)
+                : orbit_pose_at(0, 1);
+            cam.set_position(op.pos);
+            cam.set_yaw_pitch(op.yaw, op.pitch);
             if (cycle_frames > 0) {
                 time_of_day = std::fmod(
                     0.35f + static_cast<float>(capture_frame) /
                                 static_cast<float>(cycle_frames),
                     1.0f);
             }
+        }
+
+        // Orbit frame benchmark: sweep one revolution across the sampled
+        // frames. The sample count is the phase, so during the settle
+        // period (no samples yet) the camera holds at the start pose, then
+        // moves one step per sampled frame. Camera motion drives chunk
+        // streaming, so this bench includes the upload cost a static pose
+        // never pays.
+        if (bench_frames > 0 && bench_orbit && initial_load_logged) {
+            const OrbitPose op = orbit_pose_at(
+                static_cast<int>(bench_samples.size()), bench_frames);
+            cam.set_position(op.pos);
+            cam.set_yaw_pitch(op.yaw, op.pitch);
         }
 
         world::ChunkCoord center{
