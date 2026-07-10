@@ -84,6 +84,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
 | RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
+| RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
 (section/triangle counts are exact at current HEAD; the ms columns are

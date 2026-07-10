@@ -1042,6 +1042,32 @@ int main(int argc, char** argv) {
                 fsi::remove_all(io_dir);
                 fsi::create_directories(io_dir);
 
+                // Order-independent checksum over every resident block, so a
+                // save then load can be proven lossless, not just error-free.
+                // Each chunk folds its coord and blocks with FNV-1a; the
+                // per-chunk hashes are XORed, which does not depend on the
+                // unordered map's iteration order.
+                auto world_checksum = [&]() {
+                    std::uint64_t combined = 0;
+                    wrld.for_each_chunk(
+                        [&](world::ChunkCoord c, const world::Chunk& ch) {
+                            std::uint64_t h = 1469598103934665603ull;
+                            const auto mix = [&h](std::uint64_t v) {
+                                h = (h ^ v) * 1099511628211ull;
+                            };
+                            mix(static_cast<std::uint32_t>(c.x));
+                            mix(static_cast<std::uint32_t>(c.z));
+                            for (int y = 0; y < world::kChunkSizeY; ++y)
+                                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                                        mix(static_cast<std::uint64_t>(
+                                            ch.get(x, y, z)));
+                            combined ^= h;
+                        });
+                    return combined;
+                };
+                const std::uint64_t checksum_before = world_checksum();
+
                 using clock = std::chrono::steady_clock;
                 const auto save_t0 = clock::now();
                 auto s = world::save_world(wrld, io_dir.string());
@@ -1054,6 +1080,9 @@ int main(int argc, char** argv) {
                 auto l = world::load_world(wrld, io_dir.string(), terrain, pool);
                 const double load_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - load_t0).count();
+
+                const std::uint64_t checksum_after = world_checksum();
+                const bool roundtrip_ok = checksum_before == checksum_after;
 
                 fsi::remove_all(io_dir);
 
@@ -1075,7 +1104,7 @@ int main(int argc, char** argv) {
                             " disk_mb=%.2f raw_mb=%.2f ratio=%.1fx"
                             " save_disk_mbps=%.0f save_raw_mbps=%.0f"
                             " load_disk_mbps=%.0f load_raw_mbps=%.0f"
-                            " save_ok=%d load_ok=%d\n",
+                            " save_ok=%d load_ok=%d roundtrip_ok=%d\n",
                             kStreamRadius, s.chunks_written,
                             save_ms, load_ms,
                             s.bytes_written / (1024.0 * 1024.0),
@@ -1083,7 +1112,7 @@ int main(int argc, char** argv) {
                             ratio,
                             save_disk_mbps, save_raw_mbps,
                             load_disk_mbps, load_raw_mbps,
-                            s.ok ? 1 : 0, l.ok ? 1 : 0);
+                            s.ok ? 1 : 0, l.ok ? 1 : 0, roundtrip_ok ? 1 : 0);
                 std::fflush(stdout);
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
