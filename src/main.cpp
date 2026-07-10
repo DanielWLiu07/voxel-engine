@@ -1317,6 +1317,16 @@ int main(int argc, char** argv) {
                                             static_cast<std::size_t>(n * 0.99))];
                 const double mn  = sorted.front();
                 const double mx  = sorted.back();
+                // Frame-time spread: a low average with a high standard
+                // deviation still stutters, so this is the consistency
+                // signal the percentiles only hint at. Sample stddev (n-1).
+                double var_sum = 0.0;
+                for (double v : sorted) {
+                    const double d = v - avg;
+                    var_sum += d * d;
+                }
+                const double stddev = n > 1
+                    ? std::sqrt(var_sum / static_cast<double>(n - 1)) : 0.0;
                 // Peak RSS. ru_maxrss is bytes on macOS, kilobytes on Linux.
                 struct rusage ru{};
                 getrusage(RUSAGE_SELF, &ru);
@@ -1332,13 +1342,13 @@ int main(int argc, char** argv) {
                 std::printf("\nBENCH_FRAME"
                             " radius=%d pose=%.*s chunks=%d frames=%zu"
                             " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
-                            " min_ms=%.2f max_ms=%.2f avg_fps=%.1f"
+                            " min_ms=%.2f max_ms=%.2f stddev_ms=%.2f avg_fps=%.1f"
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
                             " tris_per_sec=%.0f peak_rss_mb=%.1f\n",
                             kStreamRadius,
                             static_cast<int>(bench_pose.size()), bench_pose.data(),
                             total_chunks, n,
-                            avg, p50, p99, mn, mx,
+                            avg, p50, p99, mn, mx, stddev,
                             (avg > 0.0 ? 1000.0 / avg : 0.0),
                             last_stats.chunks_drawn,
                             last_stats.sections_drawn,

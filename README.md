@@ -170,6 +170,11 @@ of a flattering vantage. `high` ships 19% more triangles than `ground`
 (196k vs 165k) but renders in the same time: the per-section cull cost
 scales together with the work the GPU does.
 
+Every `BENCH_FRAME` line also carries `stddev_ms`, the frame-time
+standard deviation: a low average with a high deviation still stutters,
+so it is the consistency signal the average and percentiles only hint
+at.
+
 For a number that doesn't depend on picking a pose at all,
 `--bench-frame N --orbit` sweeps the camera one full revolution around
 the scene while sampling, so the percentiles cover a continuously moving
