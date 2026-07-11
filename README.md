@@ -83,7 +83,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | Frustum cull (sections), vs all loaded sections (radius 12) | 407 / 5000 drawn (~12.3x) |
 | Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
-| RLE chunk save compression | 39.06 MB raw -> 0.27 MB on disk (~144x) |
+| RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
