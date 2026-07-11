@@ -476,6 +476,11 @@ int main(int argc, char** argv) {
     // pose. A more representative number than any single vantage point.
     bool bench_orbit = false;
     std::string_view bench_pose = "center";
+    // --seed N picks the terrain seed for the interactive, capture, and
+    // frame-bench world, so the greedy and cull numbers can be checked
+    // against different maps and clips vary. The CPU --bench keeps its own
+    // fixed seed so the CI-gated ratios stay reproducible.
+    std::uint32_t terrain_seed = 1337;
     // --screenshot-after N: render until the world is loaded plus N settle
     // frames, save the scene (pre-HUD) to a fixed filename, exit. Drives
     // visual regression checks from scripts; pairs with --no-occlusion for
@@ -508,6 +513,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench-frame N          run N vsync-off frames, print BENCH_FRAME\n"
                 "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high)\n"
                 "  voxel_engine --bench-frame N --orbit  bench over a moving camera orbit, not a pose\n"
+                "  voxel_engine --seed N                 terrain seed for play/capture/frame bench\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -530,6 +536,11 @@ int main(int argc, char** argv) {
         }
         if (arg == "--pass-breakdown") bench_pass_breakdown = true;
         if (arg == "--orbit") bench_orbit = true;
+        if (arg == "--seed" && i + 1 < argc) {
+            terrain_seed = static_cast<std::uint32_t>(
+                std::strtoul(argv[i + 1], nullptr, 10));
+            ++i;
+        }
         if (arg == "--bench-io") bench_io = true;
         if (arg == "--pose" && i + 1 < argc) {
             bench_pose = argv[i + 1];
@@ -703,7 +714,7 @@ int main(int argc, char** argv) {
 
     const std::size_t worker_count = std::max<std::size_t>(2,
         std::thread::hardware_concurrency() - 1);
-    world::TerrainGen terrain(1337);
+    world::TerrainGen terrain(terrain_seed);
     world::World wrld;
     core::ThreadPool pool(worker_count);
 
