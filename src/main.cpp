@@ -595,6 +595,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "capture frame count must be positive\n");
         return EXIT_FAILURE;
     }
+    // Bound the frame counts so an absurd value cannot make the sample
+    // reserve throw bad_alloc and abort. 10 million frames is already far
+    // past any real bench or capture (days of frames).
+    constexpr int kMaxFrames = 10'000'000;
+    if (bench_frames > kMaxFrames || orbit_frames > kMaxFrames ||
+        cycle_frames > kMaxFrames) {
+        std::fprintf(stderr, "frame count too large (max %d)\n", kMaxFrames);
+        return EXIT_FAILURE;
+    }
     // --orbit only means anything for the frame bench; label the run so its
     // BENCH_FRAME line is not mistaken for a static pose.
     if (bench_orbit && bench_frames > 0) bench_pose = "orbit";
