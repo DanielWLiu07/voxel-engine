@@ -232,6 +232,7 @@ private:
         SectionVisArray visibility{};
         double          worker_ms  = 0.0;
         double          terrain_ms = 0.0;
+        std::uint64_t   generation = 0;  // job's world generation at submit
     };
 
     // Shared draw loop. reachable == nullptr means frustum-only; otherwise
@@ -248,6 +249,11 @@ private:
     mutable std::mutex                 finished_mutex_;
     std::queue<FinishedChunk>          finished_;
     std::atomic<int>                   jobs_in_flight_{0};
+    // Bumped whenever the resident set is wiped (clear_all, enqueue_grid_async);
+    // a finished job whose stamp no longer matches is discarded, so a load
+    // cannot pick up regenerated terrain from a job the wipe outran. Only
+    // touched on the main thread (submit, drain, wipe), so not atomic.
+    std::uint64_t                      generation_ = 0;
     double                             total_worker_ms_  = 0.0;
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;
