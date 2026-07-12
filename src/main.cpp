@@ -481,6 +481,11 @@ int main(int argc, char** argv) {
     // against different maps and clips vary. The CPU --bench keeps its own
     // fixed seed so the CI-gated ratios stay reproducible.
     std::uint32_t terrain_seed = 1337;
+    // --radius N sets the stream/draw radius in chunks for the interactive,
+    // capture, and frame-bench world, so draw distance and the scaling
+    // table are runtime choices rather than a recompile. The CPU --bench
+    // keeps its own fixed radius so the CI-gated cull ratios do not move.
+    int stream_radius = kStreamRadius;
     // --screenshot-after N: render until the world is loaded plus N settle
     // frames, save the scene (pre-HUD) to a fixed filename, exit. Drives
     // visual regression checks from scripts; pairs with --no-occlusion for
@@ -514,6 +519,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high)\n"
                 "  voxel_engine --bench-frame N --orbit  bench over a moving camera orbit, not a pose\n"
                 "  voxel_engine --seed N                 terrain seed for play/capture/frame bench\n"
+                "  voxel_engine --radius N               stream/draw radius in chunks (default 12)\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -539,6 +545,10 @@ int main(int argc, char** argv) {
         if (arg == "--seed" && i + 1 < argc) {
             terrain_seed = static_cast<std::uint32_t>(
                 std::strtoul(argv[i + 1], nullptr, 10));
+            ++i;
+        }
+        if (arg == "--radius" && i + 1 < argc) {
+            stream_radius = std::atoi(argv[i + 1]);
             ++i;
         }
         if (arg == "--bench-io") bench_io = true;
@@ -607,6 +617,13 @@ int main(int argc, char** argv) {
     // --orbit only means anything for the frame bench; label the run so its
     // BENCH_FRAME line is not mistaken for a static pose.
     if (bench_orbit && bench_frames > 0) bench_pose = "orbit";
+    // Bound the radius: below 1 there is no world, and a huge value would
+    // allocate an enormous chunk grid. 40 chunks each way is 81x81 = 6561
+    // chunks, already well past a comfortable draw distance.
+    if (stream_radius < 1 || stream_radius > 40) {
+        std::fprintf(stderr, "--radius must be between 1 and 40\n");
+        return EXIT_FAILURE;
+    }
 
     glfwSetErrorCallback(glfw_error);
     if (!glfwInit()) {
@@ -727,12 +744,12 @@ int main(int argc, char** argv) {
     world::World wrld;
     core::ThreadPool pool(worker_count);
 
-    const int total_chunks = (2 * kStreamRadius + 1) * (2 * kStreamRadius + 1);
+    const int total_chunks = (2 * stream_radius + 1) * (2 * stream_radius + 1);
     std::printf("[world] streaming %d chunks (radius=%d) onto %zu workers\n",
-                total_chunks, kStreamRadius, worker_count);
+                total_chunks, stream_radius, worker_count);
 
     auto async_t0 = std::chrono::steady_clock::now();
-    wrld.enqueue_grid_async(kStreamRadius, terrain, pool);
+    wrld.enqueue_grid_async(stream_radius, terrain, pool);
 
     bool   initial_load_logged = false;
     double initial_load_ms     = 0.0;
@@ -1024,7 +1041,7 @@ int main(int argc, char** argv) {
             static_cast<std::int32_t>(std::floor(cam.position().z / world::kChunkSizeZ))
         };
         if (initial_load_logged && !(center == last_center)) {
-            auto sstats = wrld.update_streaming(center, kStreamRadius, terrain, pool);
+            auto sstats = wrld.update_streaming(center, stream_radius, terrain, pool);
             streamed_in_total  += sstats.requested;
             streamed_out_total += sstats.evicted;
             last_center = center;
@@ -1125,7 +1142,7 @@ int main(int argc, char** argv) {
                             " save_disk_mbps=%.0f save_raw_mbps=%.0f"
                             " load_disk_mbps=%.0f load_raw_mbps=%.0f"
                             " save_ok=%d load_ok=%d roundtrip_ok=%d\n",
-                            kStreamRadius, s.chunks_written,
+                            stream_radius, s.chunks_written,
                             save_ms, load_ms,
                             s.bytes_written / (1024.0 * 1024.0),
                             s.bytes_raw     / (1024.0 * 1024.0),
@@ -1151,7 +1168,7 @@ int main(int argc, char** argv) {
         fv.camera_pos = cam.position();
         fv.window_w   = fb_w;
         fv.window_h   = fb_h;
-        fv.fog_end    = static_cast<float>(kStreamRadius * world::kChunkSizeX) * 0.95f;
+        fv.fog_end    = static_cast<float>(stream_radius * world::kChunkSizeX) * 0.95f;
         fv.fog_start  = fv.fog_end * 0.85f;  // keep midrange crisp; haze only far out
         // Camera far plane sits just past the fog plane: anything further is
         // fully fogged out and contributes nothing. Tightening it from the
@@ -1365,7 +1382,7 @@ int main(int argc, char** argv) {
                             " min_ms=%.2f max_ms=%.2f stddev_ms=%.2f avg_fps=%.1f"
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
                             " tris_per_sec=%.0f peak_rss_mb=%.1f\n",
-                            kStreamRadius,
+                            stream_radius,
                             static_cast<int>(bench_pose.size()), bench_pose.data(),
                             total_chunks, n,
                             avg, p50, p99, mn, mx, stddev,

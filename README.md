@@ -143,10 +143,10 @@ asserts every air cell along an unobstructed ray lands in a BFS-reached
 section, so the cull can't eat geometry the camera can legitimately see.
 
 The scaling table comes from `scripts/bench_sweep.sh`, which loops
-over a list of radii (default `8 10 12 14 16`), edits `kStreamRadius`
-in `src/main.cpp` in place, rebuilds, runs `--bench-frame 300`, and
-restores the original radius on exit so the CI cull-bench gates keep
-measuring the same world. The bench itself opens a hidden window,
+over a list of radii (default `8 10 12 14 16`) and runs `--bench-frame
+300 --radius R` at each; the runtime `--radius` flag means no recompile
+or source edit, and the CPU cull bench keeps its own fixed radius so the
+CI-gated ratios never move. The bench itself opens a hidden window,
 locks the camera to the same pose as the cull bench, waits for the
 chunk stream to settle, then collects 300 vsync-off samples and
 prints one stable summary line. p99 reflects occasional heavy frames
