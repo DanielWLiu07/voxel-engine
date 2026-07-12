@@ -302,18 +302,21 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
         finished_.swap(empty);
     }
     jobs_in_flight_.store(0);
+    ++generation_;  // any job from a previous grid is now stale
+    const std::uint64_t gen = generation_;
 
     for (int cz = -radius; cz <= radius; ++cz) {
         for (int cx = -radius; cx <= radius; ++cx) {
             ChunkCoord c{cx, cz};
             requested_.insert(c);
             jobs_in_flight_.fetch_add(1);
-            pool.submit([this, &terrain, c]() {
+            pool.submit([this, &terrain, c, gen]() {
                 ZoneScopedN("chunk_worker_job");
                 using clock = std::chrono::steady_clock;
                 const auto t0 = clock::now();
                 FinishedChunk fc;
                 fc.coord = c;
+                fc.generation = gen;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
                 const auto t_after_terrain = clock::now();
                 fc.terrain_ms = std::chrono::duration<double, std::milli>(
@@ -349,6 +352,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
         else ++it;
     }
 
+    const std::uint64_t gen = generation_;
     for (int dz = -radius; dz <= radius; ++dz) {
         for (int dx = -radius; dx <= radius; ++dx) {
             ChunkCoord c{center.x + dx, center.z + dz};
@@ -356,12 +360,13 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             requested_.insert(c);
             jobs_in_flight_.fetch_add(1);
             ++stats.requested;
-            pool.submit([this, &terrain, c]() {
+            pool.submit([this, &terrain, c, gen]() {
                 ZoneScopedN("chunk_worker_job");
                 using clock = std::chrono::steady_clock;
                 const auto t0 = clock::now();
                 FinishedChunk fc;
                 fc.coord = c;
+                fc.generation = gen;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
                 const auto t_after_terrain = clock::now();
                 fc.terrain_ms = std::chrono::duration<double, std::milli>(
@@ -396,6 +401,10 @@ int World::drain_finished(int max_per_frame) {
         total_terrain_ms_ += fc.terrain_ms;
         total_mesh_ms_    += fc.mesh_data.build_ms;
 
+        // A result from before the last wipe would drop regenerated terrain
+        // over a freshly loaded world; discard it (its slot in requested_ is
+        // gone or belongs to the current generation's job).
+        if (fc.generation != generation_) continue;
         auto req_it = requested_.find(fc.coord);
         if (req_it == requested_.end()) continue;  // evicted mid-flight
         requested_.erase(req_it);
@@ -417,12 +426,14 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
                                   core::ThreadPool& pool) {
     requested_.insert(c);
     jobs_in_flight_.fetch_add(1);
-    pool.submit([this, c, chunk = std::move(chunk)]() mutable {
+    const std::uint64_t gen = generation_;
+    pool.submit([this, c, gen, chunk = std::move(chunk)]() mutable {
         ZoneScopedN("chunk_loaded_worker_job");
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
         FinishedChunk fc;
         fc.coord = c;
+        fc.generation = gen;
         fc.chunk = std::move(chunk);
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
@@ -446,7 +457,12 @@ void World::insert_chunk(ChunkCoord c, Chunk chunk) {
 void World::clear_all() {
     chunks_.clear();
     requested_.clear();
+    ++generation_;  // in-flight jobs are now stale; drain_finished drops them
     std::lock_guard<std::mutex> lock(finished_mutex_);
+    // Results already queued but not yet drained are dropped here, so their
+    // in-flight count would leak; account for them. Jobs still running will
+    // decrement themselves when they drain (and then be discarded by gen).
+    jobs_in_flight_.fetch_sub(static_cast<int>(finished_.size()));
     std::queue<FinishedChunk> empty;
     finished_.swap(empty);
 }
