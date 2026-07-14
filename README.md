@@ -72,8 +72,8 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 
 | Metric | Value |
 | --- | --- |
-| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build) |
-| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build) |
+| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 577.5 KB -> 32.0 KB |
+| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build), 642.6 KB -> 81.9 KB |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
 | Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
