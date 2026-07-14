@@ -560,7 +560,12 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--radius" && i + 1 < argc) {
-            stream_radius = std::atoi(argv[i + 1]);
+            // Parse as long and range-check before narrowing, so a value
+            // past int range is rejected rather than silently truncated
+            // into the valid band (atoi would wrap 2^32+12 to 12). The
+            // out-of-band sentinel 0 is caught by the bound check below.
+            const long r = std::strtol(argv[i + 1], nullptr, 10);
+            stream_radius = (r >= 1 && r <= 40) ? static_cast<int>(r) : 0;
             ++i;
         }
         if (arg == "--bench-io") bench_io = true;
