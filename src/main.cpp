@@ -104,10 +104,22 @@ int run_bench() {
                     last_naive.quad_count, naive_tris, naive_total / kRuns);
         std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
                     last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
+        // GPU buffer footprint: the merged mesh uploads fewer vertices and
+        // indices, so the triangle win is a memory win too.
+        auto vram_kb = [](const world::ChunkMeshData& m) {
+            return (m.vertices.size() * sizeof(gfx::VertexPNT) +
+                    m.indices.size() * sizeof(std::uint32_t)) / 1024.0;
+        };
+        const double naive_kb = vram_kb(last_naive);
+        const double greedy_kb = vram_kb(last_greedy);
+        std::printf("vram  : naive=%6.1f KB  greedy=%6.1f KB\n",
+                    naive_kb, greedy_kb);
         if (last_greedy.quad_count > 0 && greedy_tris > 0) {
-            std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris\n",
+            std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris"
+                        "  |  %.1fx less vram\n",
                         static_cast<double>(last_naive.quad_count)  / last_greedy.quad_count,
-                        static_cast<double>(naive_tris)             / greedy_tris);
+                        static_cast<double>(naive_tris)             / greedy_tris,
+                        greedy_kb > 0.0 ? naive_kb / greedy_kb : 0.0);
         }
     };
 
