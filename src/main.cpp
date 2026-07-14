@@ -872,6 +872,11 @@ int main(int argc, char** argv) {
     // rendering rather than the streaming ramp or first-frame GL state
     // transitions.
     std::vector<double> bench_samples;
+    // Triangles summed over the same sampled frames. A moving camera (orbit
+    // bench) draws a different count each frame, so throughput has to divide
+    // total triangles by total time, not multiply the average frame time by
+    // one arbitrary frame's count.
+    double bench_tris_sum = 0.0;
     if (bench_frames > 0) bench_samples.reserve(static_cast<std::size_t>(bench_frames));
     // 30 settle frames after initial_load_logged is generous (~200 ms at
     // typical bench frame times) but cleanly clears post-load shader
@@ -1358,7 +1363,10 @@ int main(int argc, char** argv) {
 
         if (bench_frames > 0 && initial_load_logged) {
             if (bench_settle_remaining > 0) { --bench_settle_remaining; }
-            else bench_samples.push_back(static_cast<double>(dt) * 1000.0);
+            else {
+                bench_samples.push_back(static_cast<double>(dt) * 1000.0);
+                bench_tris_sum += static_cast<double>(last_stats.triangles_drawn);
+            }
             if (static_cast<int>(bench_samples.size()) >= bench_frames) {
                 std::vector<double> sorted = bench_samples;
                 std::sort(sorted.begin(), sorted.end());
@@ -1389,8 +1397,13 @@ int main(int argc, char** argv) {
 #else
                 const double peak_mb = static_cast<double>(ru.ru_maxrss) / 1024.0;
 #endif
+                // Mean triangles per sampled frame, and throughput from the
+                // whole window (mean tris / mean frame time). For a static
+                // pose avg_tris equals the per-frame count; for the orbit it
+                // is the honest average the last frame alone cannot give.
+                const double avg_tris = bench_tris_sum / static_cast<double>(n);
                 const double tris_per_sec = (avg > 0.0)
-                    ? static_cast<double>(last_stats.triangles_drawn) * 1000.0 / avg
+                    ? avg_tris * 1000.0 / avg
                     : 0.0;
 
                 std::printf("\nBENCH_FRAME"
@@ -1398,7 +1411,7 @@ int main(int argc, char** argv) {
                             " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
                             " min_ms=%.2f max_ms=%.2f stddev_ms=%.2f avg_fps=%.1f"
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
-                            " tris_per_sec=%.0f peak_rss_mb=%.1f\n",
+                            " avg_tris=%.0f tris_per_sec=%.0f peak_rss_mb=%.1f\n",
                             stream_radius,
                             static_cast<int>(bench_pose.size()), bench_pose.data(),
                             total_chunks, n,
@@ -1407,7 +1420,7 @@ int main(int argc, char** argv) {
                             last_stats.chunks_drawn,
                             last_stats.sections_drawn,
                             last_stats.triangles_drawn,
-                            tris_per_sec, peak_mb);
+                            avg_tris, tris_per_sec, peak_mb);
                 if (bench_pass_breakdown && !pass_ms_shadow.empty()) {
                     auto mean = [](const std::vector<double>& v) {
                         double s = 0.0; for (double x : v) s += x;

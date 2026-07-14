@@ -183,7 +183,10 @@ triggers (GPU uploads on the main thread). Measured on a quiet machine
 its percentiles sit close to the static poses above, which says the
 streaming path does not stall the frame; it is the honest benchmark to
 quote when someone asks whether the static numbers hide a hitch under
-motion.
+motion. Because the orbit draws a different triangle count every frame,
+`tris_per_sec` divides the window's mean triangle count (`avg_tris`) by
+its mean frame time rather than scaling one arbitrary frame's count; for
+a static pose the two are identical.
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real GPU wall time at the
