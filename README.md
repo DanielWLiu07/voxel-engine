@@ -103,7 +103,11 @@ Triangle count grows 3.8x from radius 8 to 16; avg frame time grows
 constant fraction (~30% of loaded sections) while the loaded world
 quadruples. Peak RSS scales sub-linearly with chunk count because the
 worker pool, FBOs, and post-process chain are constant cost on top of
-the per-chunk mesh and block data.
+the per-chunk mesh and block data. `BENCH_FRAME` also reports
+`gpu_buffers_mb`, the resident vertex + index buffer bytes: at radius 12
+the 625 chunks hold ~48 MB of GPU mesh buffers under the ~253 MB RSS,
+the number the greedy mesher's face merging shrinks. It also shows live in
+the HUD's perf panel.
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
 mesher's algorithmic gain on continuous terrain, which is what the CI gate
