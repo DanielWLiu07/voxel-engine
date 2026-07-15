@@ -205,6 +205,8 @@ void apply_sections(ChunkSlot& slot,
     if (slot.any_section_has_mesh) {
         slot.chunk_mesh.upload(all_vertices, all_indices);
     }
+    slot.gpu_bytes = all_vertices.size() * sizeof(gfx::VertexPNT) +
+                     all_indices.size() * sizeof(std::uint32_t);
     if (!union_init) {
         // Fully empty chunk - fall back to the block-extent AABB (returns a
         // zero-extent box; nothing will pass the cull test).

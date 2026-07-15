@@ -69,6 +69,10 @@ struct ChunkSlot {
     gfx::AABB  chunk_aabb{};
     int        quad_count_total = 0;  // sum of section quad counts
     bool       any_section_has_mesh = false;
+    // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
+    // and index data uploaded for it. Summed across resident chunks to get
+    // the engine's GPU mesh footprint, the VRAM analogue of RSS.
+    std::size_t gpu_bytes = 0;
 };
 
 // Tight per-chunk AABB: XZ from the chunk's world origin, Y from the actual
@@ -212,6 +216,15 @@ public:
     int debug_validate_gpu_meshes() const;
 
     std::size_t chunk_count() const { return chunks_.size(); }
+
+    // Total bytes the resident chunks hold in GPU vertex + index buffers: the
+    // engine's GPU mesh footprint, to sit alongside RSS. O(resident chunks),
+    // so call it once per report, not per drawn section.
+    std::size_t resident_gpu_bytes() const {
+        std::size_t total = 0;
+        for (const auto& [coord, slot] : chunks_) total += slot->gpu_bytes;
+        return total;
+    }
 
     // Cumulative timing counters across all completed chunks. Worker total
     // is wall time spent in terrain.fill_chunk + greedy meshing on a worker

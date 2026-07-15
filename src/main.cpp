@@ -1344,6 +1344,7 @@ int main(int argc, char** argv) {
         pf.place_block_name  = block_name(place_id);
         pf.ai_texture_tiles  = ai_texture_tiles;
         pf.triangles_drawn = last_stats.triangles_drawn;
+        pf.gpu_bytes       = wrld.resident_gpu_bytes();
         pf.pending_async   = wrld.pending_async();
         pf.initial_load_ms = initial_load_ms;
         pf.total_chunks    = total_chunks;
@@ -1397,6 +1398,10 @@ int main(int argc, char** argv) {
 #else
                 const double peak_mb = static_cast<double>(ru.ru_maxrss) / 1024.0;
 #endif
+                // GPU mesh footprint: vertex + index bytes resident across all
+                // chunks, the VRAM analogue of the RSS above.
+                const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
+                                      / (1024.0 * 1024.0);
                 // Mean triangles per sampled frame, and throughput from the
                 // whole window (mean tris / mean frame time). For a static
                 // pose avg_tris equals the per-frame count; for the orbit it
@@ -1411,7 +1416,8 @@ int main(int argc, char** argv) {
                             " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
                             " min_ms=%.2f max_ms=%.2f stddev_ms=%.2f avg_fps=%.1f"
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
-                            " avg_tris=%.0f tris_per_sec=%.0f peak_rss_mb=%.1f\n",
+                            " avg_tris=%.0f tris_per_sec=%.0f peak_rss_mb=%.1f"
+                            " gpu_buffers_mb=%.1f\n",
                             stream_radius,
                             static_cast<int>(bench_pose.size()), bench_pose.data(),
                             total_chunks, n,
@@ -1420,7 +1426,7 @@ int main(int argc, char** argv) {
                             last_stats.chunks_drawn,
                             last_stats.sections_drawn,
                             last_stats.triangles_drawn,
-                            avg_tris, tris_per_sec, peak_mb);
+                            avg_tris, tris_per_sec, peak_mb, gpu_mb);
                 if (bench_pass_breakdown && !pass_ms_shadow.empty()) {
                     auto mean = [](const std::vector<double>& v) {
                         double s = 0.0; for (double x : v) s += x;
