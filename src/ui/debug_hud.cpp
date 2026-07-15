@@ -64,6 +64,8 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
                         f.sections_drawn);
         }
         ImGui::Text("triangles    : %zu", f.triangles_drawn);
+        ImGui::Text("gpu mesh mem : %.1f MB",
+                    static_cast<double>(f.gpu_bytes) / (1024.0 * 1024.0));
         ImGui::Text("pending gen  : %d", f.pending_async);
         if (f.place_block_name) {
             ImGui::Text("place block  : %s (1-7 to switch)", f.place_block_name);
@@ -118,6 +120,9 @@ void DebugHud::copy_perf_to_clipboard(const PerfFrame& f) const {
                        f.sections_drawn, f.sections_occluded);
     n += std::snprintf(buf + n, sizeof(buf) - n,
                        "- triangles: %zu\n", f.triangles_drawn);
+    n += std::snprintf(buf + n, sizeof(buf) - n,
+                       "- gpu mesh mem: %.1f MB\n",
+                       static_cast<double>(f.gpu_bytes) / (1024.0 * 1024.0));
     if (f.initial_load_ms > 0.0 && f.total_chunks > 0) {
         double cps = f.total_chunks * 1000.0 / f.initial_load_ms;
         n += std::snprintf(buf + n, sizeof(buf) - n,

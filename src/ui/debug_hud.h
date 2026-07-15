@@ -17,6 +17,7 @@ struct PerfFrame {
     const char* place_block_name = nullptr;
     int   ai_texture_tiles = 0;   // >0 -> show the AI-art credit line
     std::size_t triangles_drawn = 0;
+    std::size_t gpu_bytes = 0;   // resident vertex + index buffer bytes
     int   pending_async = 0;
     double initial_load_ms = 0.0;
     int    total_chunks = 0;
