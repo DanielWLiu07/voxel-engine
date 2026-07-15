@@ -2,7 +2,6 @@
 
 #include "world/chunk_serialize.h"
 
-#include <cerrno>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>

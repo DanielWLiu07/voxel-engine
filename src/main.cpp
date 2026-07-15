@@ -1198,8 +1198,6 @@ int main(int argc, char** argv) {
         // of one that never trips at radius 12.
         const float kCameraFar = fv.fog_end + static_cast<float>(world::kChunkSizeX);
         fv.proj       = cam.proj_matrix(aspect, 70.0f, 0.1f, kCameraFar);
-        // Scripted captures freeze shader time (water waves) so identical
-        // scenes produce byte-identical PNGs.
         // Scripted captures freeze the water phase: shots stay diffable and
         // the orbit's last frame meets its first.
         fv.time_seconds = (shot_after > 0 || orbit_frames > 0 ||
@@ -1290,9 +1288,6 @@ int main(int argc, char** argv) {
                                      /*exposure*/  1.0f);
         pass_end(pass_ms_postfx);
 
-        // Scripted capture: scene only (pre-HUD), after the world finished
-        // loading plus shot_after settle frames. Fixed filename makes runs
-        // pixel-diffable (occlusion on/off A/B).
         // Scripted clip capture: save the frame just rendered (pre-HUD),
         // one PNG per step after a settle period for streaming and shadows.
         const int capture_frames =
@@ -1319,6 +1314,9 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Scripted screenshot: scene only (pre-HUD), after the world finished
+        // loading plus shot_after settle frames. Fixed filename makes runs
+        // pixel-diffable (occlusion on/off A/B).
         if (shot_after > 0 && initial_load_logged && --shot_after == 0) {
             if (std::getenv("VOXEL_VALIDATE")) wrld.debug_dump_visibility(view_frustum);
             const std::string path =
