@@ -528,7 +528,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine                          launch the gameplay window\n"
                 "  voxel_engine --bench                  CPU mesher + cull bench (no GL window)\n"
                 "  voxel_engine --bench-frame N          run N vsync-off frames, print BENCH_FRAME\n"
-                "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high)\n"
+                "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high, cave)\n"
                 "  voxel_engine --bench-frame N --orbit  bench over a moving camera orbit, not a pose\n"
                 "  voxel_engine --seed N                 terrain seed for play/capture/frame bench\n"
                 "  voxel_engine --radius N               stream/draw radius in chunks (default 12)\n"
