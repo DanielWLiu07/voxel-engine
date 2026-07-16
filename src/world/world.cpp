@@ -736,7 +736,6 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
                            const std::function<void(const glm::mat4&)>& set_model) const {
     DrawStats stats;
     stats.chunks_total   = static_cast<int>(chunks_.size());
-    stats.sections_total = stats.chunks_total * kSectionsPerChunk;
     for (const auto& kv : chunks_) {
         const ChunkSlot& slot = *kv.second;
         if (!slot.any_section_has_mesh) continue;
