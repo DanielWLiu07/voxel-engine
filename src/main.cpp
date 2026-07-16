@@ -1009,14 +1009,14 @@ int main(int argc, char** argv) {
             std::printf("[mode] %s\n", walk_mode ? "walk" : "fly");
         }
 
-        // Scripted capture locks the pose: live mouse/keys would steer the
-        // camera mid-run and make the shot non-reproducible.
         for (int k = 0; k < 7; ++k) {
             if (input.key_pressed(GLFW_KEY_1 + k)) {
                 place_id = static_cast<world::BlockId>(k + 1);
                 std::printf("[place] %s\n", block_name(place_id));
             }
         }
+        // Scripted capture locks the pose: live mouse/keys would steer the
+        // camera mid-run and make the shot non-reproducible.
         if (input.cursor_captured() && shot_after == 0 && orbit_frames == 0 &&
             cycle_frames == 0) {
             update_movement(input, dt, cam, player, wrld, walk_mode);

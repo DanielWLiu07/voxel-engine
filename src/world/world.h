@@ -98,7 +98,6 @@ compute_section_bounds(ChunkCoord coord, const Chunk& chunk);
 struct DrawStats {
     int chunks_total = 0;
     int chunks_drawn = 0;
-    int sections_total = 0;
     int sections_drawn = 0;
     // Sections that passed the frustum test but were skipped because the
     // occlusion BFS couldn't reach them through air. 0 on frustum-only paths.
