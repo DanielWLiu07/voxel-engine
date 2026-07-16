@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 
 struct GLFWwindow;
@@ -41,6 +42,13 @@ public:
     void copy_perf_to_clipboard(const PerfFrame& f) const;
 
 private:
+    // Rolling frame-time history for the perf-panel graph: a fixed ring the
+    // panel pushes each frame, so the plot shows the last few seconds of
+    // frame times (the shape of a stutter the average and stddev only hint at).
+    static constexpr int kFrameHistory = 120;
+    std::array<float, kFrameHistory> frame_ms_history_{};
+    int frame_history_head_ = 0;
+
     bool initialized_ = false;
     bool visible_ = true;
 };
