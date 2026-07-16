@@ -47,6 +47,23 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
 
     if (ImGui::Begin("voxel_engine perf", nullptr, ImGuiWindowFlags_NoCollapse)) {
         ImGui::Text("%.1f fps   |   %.2f ms/frame", f.fps, f.frame_ms);
+
+        // Frame-time history graph: push the newest sample into the ring and
+        // plot the window, so a stutter's shape shows even when the average
+        // looks fine. values_offset = head makes the ring read oldest-first.
+        frame_ms_history_[frame_history_head_] = f.frame_ms;
+        frame_history_head_ = (frame_history_head_ + 1) % kFrameHistory;
+        float ft_max = 0.0f, ft_sum = 0.0f;
+        for (float v : frame_ms_history_) {
+            ft_sum += v;
+            if (v > ft_max) ft_max = v;
+        }
+        char ft_overlay[32];
+        std::snprintf(ft_overlay, sizeof(ft_overlay), "avg %.2f ms",
+                      ft_sum / static_cast<float>(kFrameHistory));
+        ImGui::PlotLines("##frametimes", frame_ms_history_.data(),
+                         kFrameHistory, frame_history_head_, ft_overlay, 0.0f,
+                         ft_max * 1.25f + 0.01f, ImVec2(0, 40));
         ImGui::Separator();
 
         ImGui::Text("chunks drawn : %d / %d", f.chunks_drawn, f.chunks_total);
