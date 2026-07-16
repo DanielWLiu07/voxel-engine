@@ -668,6 +668,9 @@ int main(int argc, char** argv) {
     // frustum-only path stays one keypress away (or --no-occlusion) for
     // A/B comparison.
     bool occlusion_cull_enabled = !no_occlusion;
+    // G toggles a wireframe terrain pass: the greedy mesher's merged faces
+    // show as a few large quads where a naive mesher would draw one per block.
+    bool wireframe = false;
 
     int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0) {
@@ -848,7 +851,7 @@ int main(int argc, char** argv) {
     std::printf("[input] LClick = break, RClick = place, 1-7 = pick block, Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
-    std::printf("[input] O = toggle occlusion culling\n");
+    std::printf("[input] O = toggle occlusion culling, G = toggle wireframe\n");
     std::printf("[input] F5 = save world, F6 = load world (./saves/world1)\n");
     std::printf("[input] F12 = screenshot (./screenshots)\n");
 
@@ -947,6 +950,10 @@ int main(int argc, char** argv) {
             vsync_enabled = !vsync_enabled;
             glfwSwapInterval(vsync_enabled ? 1 : 0);
             std::printf("[gfx] vsync %s\n", vsync_enabled ? "on" : "off");
+        }
+        if (input.key_pressed(GLFW_KEY_G)) {
+            wireframe = !wireframe;
+            std::printf("[gfx] wireframe %s\n", wireframe ? "on" : "off");
         }
         if (input.key_pressed(GLFW_KEY_F5)) {
             auto t0 = std::chrono::steady_clock::now();
@@ -1259,9 +1266,14 @@ int main(int argc, char** argv) {
         render::draw_sky(sky_shader, sky_vao, fv, light);
         pass_end(pass_ms_sky);
         pass_start();
+        // Wireframe wraps only the terrain color pass; the shadow depth pass
+        // is already done and the sky, water, and post-process fullscreen
+        // quad must stay filled, so bracket the draw and restore immediately.
+        if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         last_stats = render::draw_terrain(shader, shadow_map, wrld, fv, light,
                                           kBlockPalette, view_frustum,
                                           occlusion_cull_enabled);
+        if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         pass_end(pass_ms_terrain);
         pass_start();
         render::draw_water(water_shader, water, fv, light,
