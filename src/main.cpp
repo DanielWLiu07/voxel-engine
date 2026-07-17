@@ -504,6 +504,9 @@ int main(int argc, char** argv) {
     // pixel A/B of the occlusion culler.
     int shot_after = 0;
     std::string shot_file;
+    // --load DIR: boot straight into a saved world (RLE snapshot on disk)
+    // instead of generating fresh terrain, then stream normally from there.
+    std::string load_path;
     // --capture-orbit N: after the world loads and settles, fly one full
     // fixed-step circle around the scene over N frames, saving each frame
     // to ./capture/frame_NNNN.png, then exit. --capture-cycle N holds the
@@ -532,6 +535,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --bench-frame N --orbit  bench over a moving camera orbit, not a pose\n"
                 "  voxel_engine --seed N                 terrain seed for play/capture/frame bench\n"
                 "  voxel_engine --radius N               stream/draw radius in chunks (default 12)\n"
+                "  voxel_engine --load DIR               boot from a saved world (RLE snapshot) instead of generating\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -579,6 +583,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--shot-file" && i + 1 < argc) {
             shot_file = argv[i + 1];
+            ++i;
+        }
+        if (arg == "--load" && i + 1 < argc) {
+            load_path = argv[i + 1];
             ++i;
         }
         if (arg == "--capture-orbit" && i + 1 < argc) {
@@ -769,7 +777,25 @@ int main(int argc, char** argv) {
                 total_chunks, stream_radius, worker_count);
 
     auto async_t0 = std::chrono::steady_clock::now();
-    wrld.enqueue_grid_async(stream_radius, terrain, pool);
+    bool loaded_from_disk = false;
+    if (!load_path.empty()) {
+        // Boot from a saved snapshot instead of generating: load_world reads
+        // the RLE chunks (meshing them through the same worker pool), then the
+        // per-frame streamer fills in anything outside the snapshot as the
+        // player moves -- the same path F6 uses to swap worlds at runtime.
+        auto l = world::load_world(wrld, load_path, terrain, pool);
+        if (l.chunks_read > 0) {
+            std::printf("[world] loaded %d chunks from %s\n",
+                        l.chunks_read, load_path.c_str());
+            loaded_from_disk = true;
+        } else {
+            std::printf("[world] --load %s had no chunks; generating instead\n",
+                        load_path.c_str());
+        }
+    }
+    if (!loaded_from_disk) {
+        wrld.enqueue_grid_async(stream_radius, terrain, pool);
+    }
 
     bool   initial_load_logged = false;
     double initial_load_ms     = 0.0;
