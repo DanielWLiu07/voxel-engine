@@ -507,6 +507,10 @@ int main(int argc, char** argv) {
     // --load DIR: boot straight into a saved world (RLE snapshot on disk)
     // instead of generating fresh terrain, then stream normally from there.
     std::string load_path;
+    // --save DIR: generate the world, write it to DIR as an RLE snapshot,
+    // then exit. A headless counterpart to F5 so saves are scriptable (and
+    // can seed --load).
+    std::string save_path;
     // --capture-orbit N: after the world loads and settles, fly one full
     // fixed-step circle around the scene over N frames, saving each frame
     // to ./capture/frame_NNNN.png, then exit. --capture-cycle N holds the
@@ -536,6 +540,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --seed N                 terrain seed for play/capture/frame bench\n"
                 "  voxel_engine --radius N               stream/draw radius in chunks (default 12)\n"
                 "  voxel_engine --load DIR               boot from a saved world (RLE snapshot) instead of generating\n"
+                "  voxel_engine --save DIR               generate the world, write it to DIR, then exit\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -587,6 +592,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--load" && i + 1 < argc) {
             load_path = argv[i + 1];
+            ++i;
+        }
+        if (arg == "--save" && i + 1 < argc) {
+            save_path = argv[i + 1];
             ++i;
         }
         if (arg == "--capture-orbit" && i + 1 < argc) {
@@ -662,7 +671,8 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 2);
-    if (bench_frames > 0 || bench_io) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    if (bench_frames > 0 || bench_io || !save_path.empty())
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
     if (!window) {
@@ -1350,6 +1360,24 @@ int main(int argc, char** argv) {
                     glfwSetWindowShouldClose(window, GLFW_TRUE);
                 }
             }
+        }
+
+        // Headless --save: once the world has finished generating, write it
+        // to disk and exit. The RLE snapshot is chunk data, so no settle
+        // frames are needed -- the world is complete when streaming drained.
+        if (!save_path.empty() && initial_load_logged) {
+            auto t0 = std::chrono::steady_clock::now();
+            auto s = world::save_world(wrld, save_path);
+            const double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            const double ratio = s.bytes_written > 0
+                ? static_cast<double>(s.bytes_raw) / s.bytes_written : 0.0;
+            std::printf("[save] wrote %d chunks to %s in %.1f ms  |  "
+                        "%.2f MB on disk, %.1fx ratio  |  %s\n",
+                        s.chunks_written, save_path.c_str(), ms,
+                        s.bytes_written / (1024.0 * 1024.0), ratio,
+                        s.ok ? "ok" : "ERRORS");
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
         // Scripted screenshot: scene only (pre-HUD), after the world finished
