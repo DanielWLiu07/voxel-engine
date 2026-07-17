@@ -115,6 +115,12 @@ enforces (>= 15x). Caves break face runs into smaller mergeable rectangles,
 so the same algorithm produces fewer quads but a lower ratio. Both numbers
 come out of `./build/voxel_engine --bench`.
 
+![Wireframe terrain: greedy meshing merges coplanar faces into large quads](docs/media/greedy_wireframe.jpg)
+
+The wireframe view (`--wireframe`, or `G` at runtime) shows the merge
+directly: flat spans render as a few large quads rather than one per block
+face. This shot is `--wireframe --pose ground --screenshot-after 40`.
+
 The frustum cull rows come from `--bench`'s deterministic pose (camera at
 (0, 80, 0), yaw -90, pitch -15, 70 deg FOV, 16:9). The chunk row counts
 loaded chunks that survive the per-chunk tight AABB test. The section rows

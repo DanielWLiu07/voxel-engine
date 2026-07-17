@@ -511,6 +511,9 @@ int main(int argc, char** argv) {
     // then exit. A headless counterpart to F5 so saves are scriptable (and
     // can seed --load).
     std::string save_path;
+    // --wireframe: start with the wireframe terrain pass on (G still toggles
+    // it). Lets a headless --screenshot-after capture the greedy mesh for docs.
+    bool start_wireframe = false;
     // --capture-orbit N: after the world loads and settles, fly one full
     // fixed-step circle around the scene over N frames, saving each frame
     // to ./capture/frame_NNNN.png, then exit. --capture-cycle N holds the
@@ -541,6 +544,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --radius N               stream/draw radius in chunks (default 12)\n"
                 "  voxel_engine --load DIR               boot from a saved world (RLE snapshot) instead of generating\n"
                 "  voxel_engine --save DIR               generate the world, write it to DIR, then exit\n"
+                "  voxel_engine --wireframe              start with wireframe terrain (G toggles at runtime)\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -598,6 +602,7 @@ int main(int argc, char** argv) {
             save_path = argv[i + 1];
             ++i;
         }
+        if (arg == "--wireframe") start_wireframe = true;
         if (arg == "--capture-orbit" && i + 1 < argc) {
             orbit_frames = std::atoi(argv[i + 1]);
             ++i;
@@ -688,7 +693,7 @@ int main(int argc, char** argv) {
     bool occlusion_cull_enabled = !no_occlusion;
     // G toggles a wireframe terrain pass: the greedy mesher's merged faces
     // show as a few large quads where a naive mesher would draw one per block.
-    bool wireframe = false;
+    bool wireframe = start_wireframe;
 
     int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0) {
