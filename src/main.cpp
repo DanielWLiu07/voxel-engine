@@ -514,6 +514,11 @@ int main(int argc, char** argv) {
     // --wireframe: start with the wireframe terrain pass on (G still toggles
     // it). Lets a headless --screenshot-after capture the greedy mesh for docs.
     bool start_wireframe = false;
+    // --threads N: pin the worker pool to exactly N threads instead of the
+    // cores-1 default. Exists so the parallel-efficiency claim is measurable:
+    // a --save sweep over N gives chunks/sec at each pool size (see
+    // scripts/bench_scaling.sh). 0 means use the default.
+    int thread_override = 0;
     // --capture-orbit N: after the world loads and settles, fly one full
     // fixed-step circle around the scene over N frames, saving each frame
     // to ./capture/frame_NNNN.png, then exit. --capture-cycle N holds the
@@ -545,6 +550,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --load DIR               boot from a saved world (RLE snapshot) instead of generating\n"
                 "  voxel_engine --save DIR               generate the world, write it to DIR, then exit\n"
                 "  voxel_engine --wireframe              start with wireframe terrain (G toggles at runtime)\n"
+                "  voxel_engine --threads N              worker pool size, 1-64 (default: cores-1, min 2)\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -603,6 +609,13 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--wireframe") start_wireframe = true;
+        if (arg == "--threads" && i + 1 < argc) {
+            // Same strtol-then-range-check pattern as --radius: reject junk
+            // and out-of-band values via the 0 sentinel checked below.
+            const long t = std::strtol(argv[i + 1], nullptr, 10);
+            thread_override = (t >= 1 && t <= 64) ? static_cast<int>(t) : -1;
+            ++i;
+        }
         if (arg == "--capture-orbit" && i + 1 < argc) {
             orbit_frames = std::atoi(argv[i + 1]);
             ++i;
@@ -661,6 +674,10 @@ int main(int argc, char** argv) {
     // chunks, already well past a comfortable draw distance.
     if (stream_radius < 1 || stream_radius > 40) {
         std::fprintf(stderr, "--radius must be between 1 and 40\n");
+        return EXIT_FAILURE;
+    }
+    if (thread_override < 0) {
+        std::fprintf(stderr, "--threads must be between 1 and 64\n");
         return EXIT_FAILURE;
     }
 
@@ -781,8 +798,9 @@ int main(int argc, char** argv) {
     gfx::WireframeCube selection_cube;
     selection_cube.init();
 
-    const std::size_t worker_count = std::max<std::size_t>(2,
-        std::thread::hardware_concurrency() - 1);
+    const std::size_t worker_count = thread_override > 0
+        ? static_cast<std::size_t>(thread_override)
+        : std::max<std::size_t>(2, std::thread::hardware_concurrency() - 1);
     world::TerrainGen terrain(terrain_seed);
     world::World wrld;
     core::ThreadPool pool(worker_count);
