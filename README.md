@@ -65,6 +65,7 @@ Reproduce:
 ./build/voxel_engine --bench-frame 720 --orbit  # timing over a moving camera path
 scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
+scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 workers
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
@@ -162,6 +163,31 @@ chunk stream to settle, then collects 300 vsync-off samples and
 prints one stable summary line. p99 reflects occasional heavy frames
 (cascade refresh, chunk stream events). Avg is the steady-state
 gameplay number at this pose.
+
+Worker-pool scaling (`scripts/bench_scaling.sh`, radius 12, median of 3
+runs per point): the `--threads N` flag pins the pool size, and the
+headless `--save` path runs the exact generate + greedy-mesh + upload
+pipeline a fresh boot uses, so the parallel claim is a sweep anyone can
+rerun rather than a one-off number.
+
+| Workers | Chunks/sec | End-to-end speedup |
+| ---: | ---: | ---: |
+| 1 | 712 | 1.0x |
+| 2 | 1,158 | 1.6x |
+| 4 | 1,547 | 2.2x |
+| 6 | 2,231 | 3.1x |
+| 9 | 2,378 | 3.3x |
+
+End-to-end wall speedup saturates near 3.3x even though the workers stay
+~7x busier than wall clock at 9 threads, and the gap decomposes into two
+measured causes the sweep prints per run: average per-chunk worker time
+inflates from 1.28 ms at 1 worker to 2.14 ms at 9 (memory-bandwidth
+contention between cores doing noise fill + meshing), and every GL upload
+serializes onto the main thread (the fixed fraction Amdahl's law charges
+against). Run-to-run swing widens with worker count (scheduler placement
+across the M4's P/E cores, thermal state); hence medians. The
+worker-busy ratio (worker CPU ms over wall ms) is the number the 8.4x
+headline reports, and both lines print in every sweep row.
 
 Frame time across three named poses (`--bench-frame 300 --pose <name>`),
 radius 12, M4:
