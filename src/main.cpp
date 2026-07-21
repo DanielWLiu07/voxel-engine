@@ -514,6 +514,10 @@ int main(int argc, char** argv) {
     // --wireframe: start with the wireframe terrain pass on (G still toggles
     // it). Lets a headless --screenshot-after capture the greedy mesh for docs.
     bool start_wireframe = false;
+    // --bench-edit N: after the world loads, run N deterministic block edits
+    // (break + restore pairs underground) and print the BENCH_EDIT latency
+    // distribution of the synchronous edit-remesh path, then exit.
+    int bench_edit = 0;
     // --threads N: pin the worker pool to exactly N threads instead of the
     // cores-1 default. Exists so the parallel-efficiency claim is measurable:
     // a --save sweep over N gives chunks/sec at each pool size (see
@@ -551,6 +555,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --save DIR               generate the world, write it to DIR, then exit\n"
                 "  voxel_engine --wireframe              start with wireframe terrain (G toggles at runtime)\n"
                 "  voxel_engine --threads N              worker pool size, 1-64 (default: cores-1, min 2)\n"
+                "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -609,6 +614,10 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--wireframe") start_wireframe = true;
+        if (arg == "--bench-edit" && i + 1 < argc) {
+            bench_edit = std::atoi(argv[i + 1]);
+            ++i;
+        }
         if (arg == "--threads" && i + 1 < argc) {
             // Same strtol-then-range-check pattern as --radius: reject junk
             // and out-of-band values via the 0 sentinel checked below.
@@ -693,7 +702,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 2);
-    if (bench_frames > 0 || bench_io || !save_path.empty())
+    if (bench_frames > 0 || bench_io || bench_edit > 0 || !save_path.empty())
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
@@ -1403,6 +1412,59 @@ int main(int argc, char** argv) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
+        // Headless --bench-edit: once the world is resident, hammer set_block
+        // with deterministic break-then-restore edit pairs spread across
+        // chunks, timing each full synchronous edit (greedy remesh +
+        // section re-bucket + GL upload + visibility recompute), then print
+        // one BENCH_EDIT distribution line and exit. Restoring the original
+        // block keeps the world unchanged between pairs.
+        if (bench_edit > 0 && initial_load_logged) {
+            std::vector<double> edit_samples;
+            edit_samples.reserve(static_cast<std::size_t>(bench_edit));
+            int probe = 0;
+            // Positions walk a deterministic lattice over a 7x7-chunk
+            // neighborhood at underground depths that are solid on any
+            // seed's terrain, so break edits never no-op.
+            while (static_cast<int>(edit_samples.size()) < bench_edit &&
+                   probe < bench_edit * 64) {
+                const int x = ((probe * 37) % 112) - 56;
+                const int z = ((probe * 53) % 112) - 56;
+                const int y = 20 + (probe % 30);
+                ++probe;
+                const world::BlockId prev = wrld.block_at(x, y, z);
+                if (prev == world::BlockId::Air) continue;
+                const auto t0 = std::chrono::steady_clock::now();
+                wrld.set_block(x, y, z, world::BlockId::Air);
+                edit_samples.push_back(std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count());
+                if (static_cast<int>(edit_samples.size()) < bench_edit) {
+                    const auto t1 = std::chrono::steady_clock::now();
+                    wrld.set_block(x, y, z, prev);
+                    edit_samples.push_back(std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t1).count());
+                } else {
+                    wrld.set_block(x, y, z, prev);  // restore untimed
+                }
+            }
+            if (edit_samples.empty()) {
+                std::fprintf(stderr, "--bench-edit found no solid blocks to edit\n");
+                return EXIT_FAILURE;
+            }
+            std::vector<double> sorted = edit_samples;
+            std::sort(sorted.begin(), sorted.end());
+            const std::size_t n = sorted.size();
+            double sum = 0.0;
+            for (double s : sorted) sum += s;
+            const double p50 = sorted[n / 2];
+            const double p99 = sorted[std::min<std::size_t>(n - 1,
+                static_cast<std::size_t>(static_cast<double>(n) * 0.99))];
+            std::printf("\nBENCH_EDIT edits=%zu avg_ms=%.3f p50_ms=%.3f "
+                        "p99_ms=%.3f max_ms=%.3f radius=%d\n",
+                        n, sum / static_cast<double>(n), p50, p99,
+                        sorted[n - 1], stream_radius);
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
         // Scripted screenshot: scene only (pre-HUD), after the world finished
         // loading plus shot_after settle frames. Fixed filename makes runs
         // pixel-diffable (occlusion on/off A/B).
@@ -1438,6 +1500,10 @@ int main(int argc, char** argv) {
         pf.worker_count    = worker_count;
         pf.streamed_in     = streamed_in_total;
         pf.streamed_out    = streamed_out_total;
+        pf.edit_count      = wrld.edit_count();
+        pf.edit_last_ms    = wrld.edit_last_ms();
+        pf.edit_avg_ms     = wrld.edit_avg_ms();
+        pf.edit_max_ms     = wrld.edit_max_ms();
         hud.draw_perf_panel(pf);
         if (copy_perf_requested) hud.copy_perf_to_clipboard(pf);
         hud.end_frame_and_render();

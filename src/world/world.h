@@ -236,6 +236,18 @@ public:
     double total_mesh_ms()    const { return total_mesh_ms_; }
     double total_upload_ms()  const { return total_upload_ms_; }
 
+    // Block-edit remesh latency: set_block runs the full greedy remesh +
+    // section re-bucket + GL re-upload + visibility recompute synchronously
+    // on the main thread, so this is the real place/break-to-visible cost
+    // the player pays. Counted only for edits that changed a block.
+    std::uint64_t edit_count()   const { return edit_count_; }
+    double        edit_last_ms() const { return edit_last_ms_; }
+    double        edit_max_ms()  const { return edit_max_ms_; }
+    double edit_avg_ms() const {
+        return edit_count_ > 0
+            ? edit_total_ms_ / static_cast<double>(edit_count_) : 0.0;
+    }
+
 private:
     struct FinishedChunk {
         ChunkCoord      coord;
@@ -270,6 +282,10 @@ private:
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;
     double                             total_upload_ms_  = 0.0;
+    std::uint64_t                      edit_count_    = 0;
+    double                             edit_last_ms_  = 0.0;
+    double                             edit_max_ms_   = 0.0;
+    double                             edit_total_ms_ = 0.0;
 };
 
 }  // namespace world
