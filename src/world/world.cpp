@@ -495,6 +495,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     if (slot.chunk.get(lx, wy, lz) == b) return false;
 
     slot.chunk.set(lx, wy, lz, b);
+    const auto edit_t0 = std::chrono::steady_clock::now();
     auto mesh_data = build_chunk_mesh_greedy(slot.chunk);
     // Edits can shift quads across section boundaries (placing a block on
     // top of a tall column, breaking the lowest solid in a section), so
@@ -504,6 +505,11 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
     apply_sections(slot, std::move(built));
     slot.section_visibility = compute_section_visibility(slot.chunk);
+    edit_last_ms_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - edit_t0).count();
+    edit_total_ms_ += edit_last_ms_;
+    edit_max_ms_ = std::max(edit_max_ms_, edit_last_ms_);
+    ++edit_count_;
     return true;
 }
 

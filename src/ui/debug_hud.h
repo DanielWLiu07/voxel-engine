@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 struct GLFWwindow;
 
@@ -20,6 +21,12 @@ struct PerfFrame {
     std::size_t triangles_drawn = 0;
     std::size_t gpu_bytes = 0;   // resident vertex + index buffer bytes
     int   pending_async = 0;
+    // Block-edit remesh latency (full synchronous set_block: greedy remesh
+    // + re-bucket + GL upload + visibility). Row hidden until edit_count > 0.
+    std::uint64_t edit_count = 0;
+    double edit_last_ms = 0.0;
+    double edit_avg_ms = 0.0;
+    double edit_max_ms = 0.0;
     double initial_load_ms = 0.0;
     int    total_chunks = 0;
     std::size_t worker_count = 0;
