@@ -66,6 +66,7 @@ Reproduce:
 scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 workers
+./build/voxel_engine --bench-edit 200      # block-edit remesh latency distribution
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
@@ -84,6 +85,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | Frustum cull (sections), vs all loaded sections (radius 12) | 407 / 5000 drawn (~12.3x) |
 | Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
+| Block edit, full remesh path (`--bench-edit 200`) | 0.80 ms p50 per edit: greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous |
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
 
@@ -109,6 +111,14 @@ the per-chunk mesh and block data. `BENCH_FRAME` also reports
 the 625 chunks hold ~48 MB of GPU mesh buffers under the ~253 MB RSS,
 the number the greedy mesher's face merging shrinks. It also shows live in
 the HUD's perf panel.
+
+Block edits (place/break) remesh the whole 16x256x16 chunk synchronously
+rather than patching the mesh, because greedy meshing is fast enough to
+make patching pointless: `--bench-edit 200` runs deterministic
+break-and-restore pairs across chunks and reports 0.80 ms p50 for the
+full path (greedy remesh, section re-bucket, GL re-upload, visibility
+recompute) -- about a seventh of the 5.7 ms frame budget. The HUD shows
+the same numbers live (`edit remesh` row) once you edit a block.
 
 Greedy ratio depends on terrain richness. The "contiguous" number is the
 mesher's algorithmic gain on continuous terrain, which is what the CI gate

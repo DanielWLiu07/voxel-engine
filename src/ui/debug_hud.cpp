@@ -87,6 +87,11 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         if (f.place_block_name) {
             ImGui::Text("place block  : %s (1-7 to switch)", f.place_block_name);
         }
+        if (f.edit_count > 0) {
+            ImGui::Text("edit remesh  : %.2f ms last (avg %.2f, max %.2f, n=%llu)",
+                        f.edit_last_ms, f.edit_avg_ms, f.edit_max_ms,
+                        static_cast<unsigned long long>(f.edit_count));
+        }
 
         if (f.initial_load_ms > 0.0 && f.total_chunks > 0) {
             ImGui::Separator();
@@ -150,6 +155,12 @@ void DebugHud::copy_perf_to_clipboard(const PerfFrame& f) const {
         n += std::snprintf(buf + n, sizeof(buf) - n,
                            "- streaming: %d chunks in, %d out\n",
                            f.streamed_in, f.streamed_out);
+    }
+    if (f.edit_count > 0) {
+        n += std::snprintf(buf + n, sizeof(buf) - n,
+                           "- edit remesh: %.2f ms avg, %.2f max over %llu edits\n",
+                           f.edit_avg_ms, f.edit_max_ms,
+                           static_cast<unsigned long long>(f.edit_count));
     }
 
     ImGui::SetClipboardText(buf);
