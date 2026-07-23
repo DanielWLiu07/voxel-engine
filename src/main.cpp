@@ -518,6 +518,11 @@ int main(int argc, char** argv) {
     // (break + restore pairs underground) and print the BENCH_EDIT latency
     // distribution of the synchronous edit-remesh path, then exit.
     int bench_edit = 0;
+    // --validate: after the world loads, read every chunk's vertex/index
+    // buffers back off the GPU and check each triangle is an axis-aligned
+    // face backed by a solid block, print a VALIDATE line, exit nonzero on
+    // offenders. Validates what the GPU will draw, not what the CPU built.
+    bool validate_mode = false;
     // --threads N: pin the worker pool to exactly N threads instead of the
     // cores-1 default. Exists so the parallel-efficiency claim is measurable:
     // a --save sweep over N gives chunks/sec at each pool size (see
@@ -556,6 +561,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --wireframe              start with wireframe terrain (G toggles at runtime)\n"
                 "  voxel_engine --threads N              worker pool size, 1-64 (default: cores-1, min 2)\n"
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
+                "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -618,6 +624,7 @@ int main(int argc, char** argv) {
             bench_edit = std::atoi(argv[i + 1]);
             ++i;
         }
+        if (arg == "--validate") validate_mode = true;
         if (arg == "--threads" && i + 1 < argc) {
             // Same strtol-then-range-check pattern as --radius: reject junk
             // and out-of-band values via the 0 sentinel checked below.
@@ -702,7 +709,8 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 2);
-    if (bench_frames > 0 || bench_io || bench_edit > 0 || !save_path.empty())
+    if (bench_frames > 0 || bench_io || bench_edit > 0 || validate_mode ||
+        !save_path.empty())
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
@@ -1148,7 +1156,6 @@ int main(int argc, char** argv) {
             initial_load_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - async_t0).count();
             initial_load_logged = true;
-            if (std::getenv("VOXEL_VALIDATE")) wrld.debug_validate_gpu_meshes();
             double cps = initial_load_ms > 0.0
                 ? total_chunks * 1000.0 / initial_load_ms : 0.0;
             std::printf("[world] %d chunks loaded in %.1f ms  (%.0f chunks/sec, %zu workers)\n",
@@ -1409,6 +1416,21 @@ int main(int argc, char** argv) {
                         s.chunks_written, save_path.c_str(), ms,
                         s.bytes_written / (1024.0 * 1024.0), ratio,
                         s.ok ? "ok" : "ERRORS");
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // Headless --validate: once the world is resident, read every mesh
+        // back off the GPU, check each triangle against the voxel data, and
+        // exit nonzero on offenders. Composes with --load to verify a saved
+        // world and with --seed to spot-check other maps.
+        if (validate_mode && initial_load_logged) {
+            const int bad = wrld.debug_validate_gpu_meshes();
+            std::printf("\nVALIDATE chunks=%zu bad_triangles=%d %s\n",
+                        wrld.chunk_count(), bad, bad == 0 ? "ok" : "FAILED");
+            if (bad > 0) {
+                glfwDestroyWindow(window); glfwTerminate();
+                return EXIT_FAILURE;
+            }
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
