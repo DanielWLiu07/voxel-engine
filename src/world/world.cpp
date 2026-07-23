@@ -742,14 +742,28 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
                            const std::function<void(const glm::mat4&)>& set_model) const {
     DrawStats stats;
     stats.chunks_total   = static_cast<int>(chunks_.size());
-    for (const auto& kv : chunks_) {
-        const ChunkSlot& slot = *kv.second;
+    // Deterministic draw order. Hash-map iteration follows insertion order,
+    // i.e. whichever worker finished each chunk first, so two identical runs
+    // draw in different orders and MSAA resolves seam pixels differently --
+    // which breaks the byte-stable screenshot guarantee the occlusion A/B
+    // verification depends on. Sorting by coord is O(n log n) on the
+    // resident set (~625 chunks) once per pass, well under the noise floor.
+    draw_order_.clear();
+    draw_order_.reserve(chunks_.size());
+    for (const auto& kv : chunks_) draw_order_.push_back(kv.second.get());
+    std::sort(draw_order_.begin(), draw_order_.end(),
+              [](const ChunkSlot* a, const ChunkSlot* b) {
+                  return a->coord.x != b->coord.x ? a->coord.x < b->coord.x
+                                                  : a->coord.z < b->coord.z;
+              });
+    for (const ChunkSlot* slot_ptr : draw_order_) {
+        const ChunkSlot& slot = *slot_ptr;
         if (!slot.any_section_has_mesh) continue;
         if (!frustum.intersects_aabb(slot.chunk_aabb)) continue;
 
         std::uint8_t reach_mask = 0xFF;
         if (reachable) {
-            auto it = reachable->find(kv.first);
+            auto it = reachable->find(slot.coord);
             reach_mask = (it != reachable->end()) ? it->second : 0;
         }
 

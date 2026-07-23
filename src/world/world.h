@@ -268,6 +268,10 @@ private:
                         const std::function<void(const glm::mat4&)>& set_model) const;
 
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
+    // Scratch for draw_impl's coord-sorted traversal (see the comment
+    // there); a member so the allocation is reused across passes. Mutable
+    // scratch only -- draw_impl stays logically const.
+    mutable std::vector<ChunkSlot*> draw_order_;
     std::unordered_set<ChunkCoord, ChunkCoordHash> requested_;
 
     mutable std::mutex                 finished_mutex_;
