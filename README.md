@@ -19,8 +19,11 @@ the seamless loop).
 
 Stills are reproducible the same way: `./build/voxel_engine
 --screenshot-after 60 --pose center` renders a deterministic pose (locked
-camera, frozen shader time) and writes a byte-stable PNG, which is also
-how the occlusion culler is pixel-diff verified in development.
+camera, frozen shader time, coord-sorted draw order) and writes a
+byte-stable PNG. `scripts/verify_occlusion.sh` builds on that: it renders
+each pose with the occlusion culler on and off and requires the PNGs to
+be byte-identical, so the culler provably never changes a pixel -- even
+in a cave where it drops 391 of 395 drawn sections.
 
 Block textures are **AI-generated (SDXL-Turbo) and labeled as such.** The
 game shows the credit at boot and in the HUD, and every tile's model,
@@ -68,6 +71,7 @@ POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 workers
 ./build/voxel_engine --bench-edit 200      # block-edit remesh latency distribution
 ./build/voxel_engine --validate            # read GPU meshes back, verify vs voxel data
+scripts/verify_occlusion.sh                # occlusion on/off renders must be byte-identical
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
