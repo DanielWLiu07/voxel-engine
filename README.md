@@ -67,6 +67,7 @@ scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 workers
 ./build/voxel_engine --bench-edit 200      # block-edit remesh latency distribution
+./build/voxel_engine --validate            # read GPU meshes back, verify vs voxel data
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
@@ -88,6 +89,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | Block edit, full remesh path (`--bench-edit 200`) | 0.80 ms p50 per edit: greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous |
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
+| GPU mesh validation (`--validate`) | reads every VBO/EBO back off the GPU and checks each triangle is an axis-aligned face backed by a solid block; composes with `--load`/`--seed`, exits nonzero on offenders |
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
 (section/triangle counts are exact at current HEAD; the ms columns are
