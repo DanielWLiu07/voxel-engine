@@ -15,6 +15,10 @@ enum class BlockId : std::uint8_t {
     Snow   = 7,
 };
 
+// Highest id the enum defines; bytes above this are not blocks. The RLE
+// decoder rejects them so a corrupt save cannot smuggle in garbage ids.
+constexpr std::uint8_t kMaxBlockId = static_cast<std::uint8_t>(BlockId::Snow);
+
 constexpr bool is_solid(BlockId b) { return b != BlockId::Air; }
 
 constexpr bool face_visible(BlockId self, BlockId neighbor) {
