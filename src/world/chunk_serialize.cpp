@@ -81,6 +81,7 @@ bool decode_chunk_rle(const std::vector<std::uint8_t>& bytes, Chunk& out) {
             bytes[cursor + 1] | (bytes[cursor + 2] << 8));
         cursor += 3;
         if (len == 0) return false;
+        if (id > kMaxBlockId) return false;
         if (total + len > static_cast<std::uint32_t>(kChunkVolume)) return false;
 
         for (std::uint32_t k = 0; k < len; ++k) {

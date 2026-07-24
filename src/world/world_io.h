@@ -18,6 +18,9 @@ struct SaveStats {
 
 struct LoadStats {
     int         chunks_read = 0;
+    // .vchk files present but unreadable or failing RLE decode: corruption,
+    // never silently dropped. Non-chunk filenames are simply ignored.
+    int         files_skipped = 0;
     std::size_t bytes_read  = 0;
     std::size_t bytes_raw   = 0;
     bool        ok          = false;

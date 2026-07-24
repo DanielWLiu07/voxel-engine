@@ -834,6 +834,13 @@ int main(int argc, char** argv) {
         // per-frame streamer fills in anything outside the snapshot as the
         // player moves -- the same path F6 uses to swap worlds at runtime.
         auto l = world::load_world(wrld, load_path, terrain, pool);
+        if (l.files_skipped > 0) {
+            std::fprintf(stderr,
+                         "[world] WARNING: %d chunk file%s in %s corrupt or "
+                         "unreadable, skipped\n",
+                         l.files_skipped, l.files_skipped == 1 ? "" : "s",
+                         load_path.c_str());
+        }
         if (l.chunks_read > 0) {
             std::printf("[world] loaded %d chunks from %s\n",
                         l.chunks_read, load_path.c_str());
@@ -1070,7 +1077,12 @@ int main(int argc, char** argv) {
                         l.chunks_read, ms,
                         mb_disk, mb_raw, ratio,
                         disk_mbps, raw_mbps,
-                        l.ok ? "ok" : "ERRORS");
+                        l.ok && l.files_skipped == 0 ? "ok" : "ERRORS");
+            if (l.files_skipped > 0) {
+                std::fprintf(stderr, "[load] WARNING: %d chunk file%s corrupt "
+                             "or unreadable, skipped\n",
+                             l.files_skipped, l.files_skipped == 1 ? "" : "s");
+            }
             // Reset streaming bookkeeping so the next move triggers a refill
             // around the player for anything missing on disk.
             last_center = world::ChunkCoord{

@@ -126,10 +126,10 @@ LoadStats load_world(World& w, const std::string& dir,
         if (!parse_chunk_filename(name, coord)) continue;
 
         buf.clear();
-        if (!read_bytes(entry.path(), buf)) continue;
+        if (!read_bytes(entry.path(), buf)) { ++stats.files_skipped; continue; }
 
         Chunk chunk;
-        if (!decode_chunk_rle(buf, chunk)) continue;
+        if (!decode_chunk_rle(buf, chunk)) { ++stats.files_skipped; continue; }
 
         stats.bytes_read += buf.size();
         stats.bytes_raw  += static_cast<std::size_t>(kChunkVolume);

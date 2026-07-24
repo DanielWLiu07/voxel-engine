@@ -336,6 +336,27 @@ void test_rle_decode_garbage_fails_gracefully() {
            "decode of garbage either returns false or yields a degenerate chunk");
 }
 
+void test_rle_decode_rejects_unknown_block_ids() {
+    // Encode a valid chunk, then corrupt the first run's id byte to a value
+    // no BlockId defines. A corrupt save must fail decode, not smuggle
+    // garbage ids into the world (they would render as a clamped wrong
+    // texture and break the id -> block invariant everywhere else).
+    world::Chunk a;
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                a.set(x, y, z, world::BlockId::Stone);
+    auto bytes = world::encode_chunk_rle(a);
+    world::Chunk out;
+    EXPECT(world::decode_chunk_rle(bytes, out), "control: intact bytes decode");
+    bytes[world::kChunkFormatHeaderBytes] = world::kMaxBlockId + 1;
+    EXPECT(!world::decode_chunk_rle(bytes, out),
+           "decode rejects a run whose id no BlockId defines");
+    bytes[world::kChunkFormatHeaderBytes] = 0xFF;
+    EXPECT(!world::decode_chunk_rle(bytes, out),
+           "decode rejects an 0xFF id byte");
+}
+
 // Fill a chunk with one of four random distributions (chosen by style) that
 // stress the RLE codec differently. Deterministic given rng.
 void fuzz_fill_chunk(world::Chunk& c, std::mt19937& rng, int style) {
@@ -696,6 +717,7 @@ int main() {
     test_rle_empty_roundtrip();
     test_rle_solid_roundtrip();
     test_rle_decode_garbage_fails_gracefully();
+    test_rle_decode_rejects_unknown_block_ids();
     test_rle_fuzz_roundtrip();
     test_rle_full_chunk_boundary();
     test_rle_decoder_fuzz_no_crash();
