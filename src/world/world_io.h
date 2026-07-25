@@ -5,9 +5,21 @@
 #include "world/world.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 namespace world {
+
+// Atomically replaces `path` with `bytes`: writes "<path>.tmp" in the same
+// directory, then renames it over the target. A crash mid-save therefore
+// leaves either the previous file or a stray .tmp (which the loader's
+// filename parse ignores), never a torn half-written .vchk. This guards
+// against torn writes, not power loss - there is no fsync before the
+// rename. On failure the target is untouched and the .tmp is removed.
+bool write_bytes_atomic(const std::filesystem::path& path,
+                        const std::vector<std::uint8_t>& bytes);
 
 struct SaveStats {
     int         chunks_written = 0;
