@@ -80,6 +80,25 @@ bool read_bytes(const fs::path& path, std::vector<std::uint8_t>& out) {
 
 }  // namespace
 
+bool write_bytes_atomic(const fs::path& path,
+                        const std::vector<std::uint8_t>& bytes) {
+    fs::path tmp = path;
+    tmp += ".tmp";
+    if (!write_bytes(tmp, bytes)) {
+        std::error_code ec;
+        fs::remove(tmp, ec);
+        return false;
+    }
+    std::error_code ec;
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        std::error_code ec2;
+        fs::remove(tmp, ec2);
+        return false;
+    }
+    return true;
+}
+
 SaveStats save_world(const World& w, const std::string& dir) {
     SaveStats stats;
     std::error_code ec;
@@ -92,7 +111,7 @@ SaveStats save_world(const World& w, const std::string& dir) {
         if (any_error) return;
         auto bytes = encode_chunk_rle(chunk);
         fs::path path = base / chunk_filename(c);
-        if (!write_bytes(path, bytes)) { any_error = true; return; }
+        if (!write_bytes_atomic(path, bytes)) { any_error = true; return; }
         ++stats.chunks_written;
         stats.bytes_written += bytes.size();
         stats.bytes_raw     += static_cast<std::size_t>(kChunkVolume);

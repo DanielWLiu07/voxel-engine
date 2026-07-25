@@ -12,6 +12,7 @@
 #include "world/chunk_mesh.h"
 #include "world/chunk_serialize.h"
 #include "world/section_visibility.h"
+#include "world/world_io.h"
 #include "world/world.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -21,6 +22,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <random>
 #include <vector>
 
@@ -698,6 +702,68 @@ void test_bfs_never_culls_line_of_sight() {
     EXPECT(rays_checked > 100, "ray fan actually ran");
 }
 
+// ----- write_bytes_atomic --------------------------------------------------
+
+namespace fs = std::filesystem;
+
+fs::path make_scratch_dir() {
+    fs::path dir = fs::temp_directory_path() / "voxel_atomic_write_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    return dir;
+}
+
+std::vector<std::uint8_t> read_all(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+}
+
+void test_atomic_write_creates_then_replaces() {
+    const fs::path dir = make_scratch_dir();
+    const fs::path target = dir / "chunk_0_0.vchk";
+
+    const std::vector<std::uint8_t> first = {1, 2, 3, 4};
+    EXPECT(world::write_bytes_atomic(target, first), "fresh write succeeds");
+    EXPECT(read_all(target) == first, "fresh write lands the exact bytes");
+    EXPECT(!fs::exists(dir / "chunk_0_0.vchk.tmp"),
+           "no .tmp left after a successful write");
+
+    const std::vector<std::uint8_t> second = {9, 8, 7};
+    EXPECT(world::write_bytes_atomic(target, second), "overwrite succeeds");
+    EXPECT(read_all(target) == second, "overwrite replaces the content");
+    EXPECT(!fs::exists(dir / "chunk_0_0.vchk.tmp"),
+           "no .tmp left after an overwrite");
+    fs::remove_all(dir);
+}
+
+void test_atomic_write_consumes_a_stale_tmp() {
+    // A crash between the .tmp write and the rename leaves a stray .tmp.
+    // The next save of the same chunk must not be confused by it.
+    const fs::path dir = make_scratch_dir();
+    const fs::path target = dir / "chunk_1_-2.vchk";
+    {
+        std::ofstream stale(target.string() + ".tmp", std::ios::binary);
+        stale << "torn leftover from a crashed save";
+    }
+    const std::vector<std::uint8_t> bytes = {42, 42};
+    EXPECT(world::write_bytes_atomic(target, bytes),
+           "write succeeds over a stale .tmp");
+    EXPECT(read_all(target) == bytes, "target holds the new bytes");
+    EXPECT(!fs::exists(target.string() + ".tmp"), "stale .tmp is consumed");
+    fs::remove_all(dir);
+}
+
+void test_atomic_write_missing_dir_fails_cleanly() {
+    const fs::path dir = make_scratch_dir();
+    const fs::path target = dir / "no_such_subdir" / "chunk_0_0.vchk";
+    const std::vector<std::uint8_t> bytes = {1};
+    EXPECT(!world::write_bytes_atomic(target, bytes),
+           "write into a missing directory reports failure");
+    EXPECT(!fs::exists(target), "no target file appears on failure");
+    EXPECT(!fs::exists(target.string() + ".tmp"), "no .tmp survives failure");
+    fs::remove_all(dir);
+}
+
 }  // namespace
 
 int main() {
@@ -727,6 +793,9 @@ int main() {
     test_visibility_wall_blocks_x_only();
     test_bfs_solid_chunk_blocks_sightline();
     test_bfs_never_culls_line_of_sight();
+    test_atomic_write_creates_then_replaces();
+    test_atomic_write_consumes_a_stale_tmp();
+    test_atomic_write_missing_dir_fails_cleanly();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");

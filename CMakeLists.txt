@@ -166,6 +166,7 @@ if(VOXEL_BUILD_TESTS)
     src/world/world.cpp
     src/world/chunk_mesh.cpp
     src/world/chunk_serialize.cpp
+    src/world/world_io.cpp
     src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
     src/gfx/frustum.cpp
