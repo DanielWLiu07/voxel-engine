@@ -353,12 +353,57 @@ void test_rle_decode_rejects_unknown_block_ids() {
     auto bytes = world::encode_chunk_rle(a);
     world::Chunk out;
     EXPECT(world::decode_chunk_rle(bytes, out), "control: intact bytes decode");
+    // Re-stamp the CRC after each corruption so decode gets past the
+    // integrity check and the id validation itself is what rejects.
+    auto restamp_crc = [](std::vector<std::uint8_t>& b) {
+        const std::uint32_t crc = world::crc32_ieee(
+            b.data() + world::kChunkFormatHeaderBytes,
+            b.size() - world::kChunkFormatHeaderBytes);
+        b[8]  = static_cast<std::uint8_t>(crc & 0xFF);
+        b[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
+        b[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
+        b[11] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
+    };
     bytes[world::kChunkFormatHeaderBytes] = world::kMaxBlockId + 1;
+    restamp_crc(bytes);
     EXPECT(!world::decode_chunk_rle(bytes, out),
            "decode rejects a run whose id no BlockId defines");
     bytes[world::kChunkFormatHeaderBytes] = 0xFF;
+    restamp_crc(bytes);
     EXPECT(!world::decode_chunk_rle(bytes, out),
            "decode rejects an 0xFF id byte");
+}
+
+void test_crc_known_answer() {
+    // The IEEE 802.3 check value: CRC-32 of the ASCII digits "123456789".
+    const std::uint8_t digits[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    EXPECT(world::crc32_ieee(digits, sizeof(digits)) == 0xCBF43926u,
+           "crc32_ieee matches the standard check value");
+}
+
+void test_crc_catches_a_valid_looking_bit_flip() {
+    // Corrupt one run's id from Stone to another *defined* id, leaving the
+    // run structure intact. Every structural check passes on these bytes;
+    // only the checksum knows they are not what was saved.
+    world::Chunk a;
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                a.set(x, y, z, world::BlockId::Stone);
+    auto bytes = world::encode_chunk_rle(a);
+    world::Chunk out;
+    EXPECT(world::decode_chunk_rle(bytes, out), "control: intact bytes decode");
+    const auto id_offset = world::kChunkFormatHeaderBytes;
+    EXPECT(bytes[id_offset] == static_cast<std::uint8_t>(world::BlockId::Stone),
+           "fixture: first run is Stone");
+    bytes[id_offset] = static_cast<std::uint8_t>(world::BlockId::Dirt);
+    EXPECT(!world::decode_chunk_rle(bytes, out),
+           "a bit flip to another valid id fails the CRC, not the structure");
+    // And a flipped bit in the stored CRC itself is also fatal.
+    bytes[id_offset] = static_cast<std::uint8_t>(world::BlockId::Stone);
+    bytes[8] ^= 0x01;
+    EXPECT(!world::decode_chunk_rle(bytes, out),
+           "a corrupted stored CRC fails decode");
 }
 
 // Fill a chunk with one of four random distributions (chosen by style) that
@@ -784,6 +829,8 @@ int main() {
     test_rle_solid_roundtrip();
     test_rle_decode_garbage_fails_gracefully();
     test_rle_decode_rejects_unknown_block_ids();
+    test_crc_known_answer();
+    test_crc_catches_a_valid_looking_bit_flip();
     test_rle_fuzz_roundtrip();
     test_rle_full_chunk_boundary();
     test_rle_decoder_fuzz_no_crash();

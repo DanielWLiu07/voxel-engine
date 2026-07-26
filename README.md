@@ -294,7 +294,11 @@ World
   three tree variants, and 3D-noise carved cave systems.
 - AABB collision in walk mode, DDA voxel raycast for break/place at 8-block
   reach.
-- RLE-compressed binary chunk save/load with magic + version header.
+- RLE-compressed binary chunk save/load with magic + version header and a
+  CRC-32 over the payload: structural checks catch truncation and garbage,
+  the checksum catches bit flips that still spell valid runs. Saves are
+  atomic (write `.tmp`, rename over the target) so a crash mid-save can
+  never leave a torn chunk file.
 
 Tooling
 - Worker-pool chunk streaming with main-thread-only GPU upload. Ships a
