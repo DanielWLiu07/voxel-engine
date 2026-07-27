@@ -9,7 +9,7 @@
 namespace world {
 
 struct ChunkMeshData {
-    std::vector<gfx::VertexPNT> vertices;
+    std::vector<gfx::VertexPacked> vertices;
     std::vector<std::uint32_t>  indices;
     int    quad_count = 0;
     double build_ms = 0.0;
