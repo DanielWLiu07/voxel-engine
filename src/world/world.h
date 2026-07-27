@@ -73,6 +73,10 @@ struct ChunkSlot {
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
     std::size_t gpu_bytes = 0;
+    // Set by set_block (and for chunks that came off disk rather than the
+    // terrain generator). Streaming eviction stashes modified chunks so
+    // walking away from an edit can never silently regenerate it.
+    bool player_modified = false;
 };
 
 // Tight per-chunk AABB: XZ from the chunk's world origin, Y from the actual
@@ -154,6 +158,11 @@ public:
         int evicted = 0;
         int requested = 0;
         int loaded = 0;
+        // Edit persistence: modified chunks RLE-stashed on eviction, and
+        // chunks rebuilt from the stash (instead of the terrain generator)
+        // on re-entry.
+        int stashed = 0;
+        int restored = 0;
     };
     StreamStats update_streaming(ChunkCoord center, int radius,
                                  const TerrainGen& terrain,
@@ -215,6 +224,17 @@ public:
     int debug_validate_gpu_meshes() const;
 
     std::size_t chunk_count() const { return chunks_.size(); }
+    bool has_chunk(ChunkCoord c) const { return chunks_.count(c) != 0; }
+
+    // Edited chunks currently held only as an RLE stash (evicted from the
+    // resident set but preserved). Save must include these or edits made
+    // outside the current stream window would vanish from the save file.
+    std::size_t stash_count() const { return edited_stash_.size(); }
+    void for_each_stashed(
+        const std::function<void(ChunkCoord,
+                                 const std::vector<std::uint8_t>&)>& fn) const {
+        for (const auto& kv : edited_stash_) fn(kv.first, kv.second);
+    }
 
     // Total bytes the resident chunks hold in GPU vertex + index buffers: the
     // engine's GPU mesh footprint, to sit alongside RSS. O(resident chunks),
@@ -257,6 +277,10 @@ private:
         double          worker_ms  = 0.0;
         double          terrain_ms = 0.0;
         std::uint64_t   generation = 0;  // job's world generation at submit
+        // True when the chunk bytes came from disk or the edit stash rather
+        // than the terrain generator; the built slot is marked
+        // player_modified so eviction preserves it.
+        bool            from_decoded = false;
     };
 
     // Shared draw loop. reachable == nullptr means frustum-only; otherwise
@@ -273,6 +297,14 @@ private:
     // scratch only -- draw_impl stays logically const.
     mutable std::vector<ChunkSlot*> draw_order_;
     std::unordered_set<ChunkCoord, ChunkCoordHash> requested_;
+    // Player-modified chunks that streaming evicted, kept as RLE bytes
+    // (~KBs each at the measured ~58x ratio). An entry outlives its
+    // restore on purpose: a restore job can itself be evicted mid-flight,
+    // and the surviving entry is then the only copy of the edit. Eviction
+    // of a modified chunk re-encodes and overwrites the entry. Grows with
+    // the number of distinct chunks the player has edited, not play time.
+    std::unordered_map<ChunkCoord, std::vector<std::uint8_t>, ChunkCoordHash>
+        edited_stash_;
 
     mutable std::mutex                 finished_mutex_;
     std::queue<FinishedChunk>          finished_;
