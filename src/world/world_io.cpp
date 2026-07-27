@@ -116,6 +116,17 @@ SaveStats save_world(const World& w, const std::string& dir) {
         stats.bytes_written += bytes.size();
         stats.bytes_raw     += static_cast<std::size_t>(kChunkVolume);
     });
+    // Edited chunks the stream window evicted exist only as the RLE stash;
+    // a save that skipped them would drop every edit made out of view. A
+    // coord both stashed and resident saves the resident copy (newer).
+    w.for_each_stashed([&](ChunkCoord c, const std::vector<std::uint8_t>& bytes) {
+        if (any_error || w.has_chunk(c)) return;
+        fs::path path = base / chunk_filename(c);
+        if (!write_bytes_atomic(path, bytes)) { any_error = true; return; }
+        ++stats.chunks_written;
+        stats.bytes_written += bytes.size();
+        stats.bytes_raw     += static_cast<std::size_t>(kChunkVolume);
+    });
     stats.ok = !any_error;
     return stats;
 }

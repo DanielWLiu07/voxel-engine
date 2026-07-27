@@ -71,6 +71,7 @@ POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 workers
 ./build/voxel_engine --bench-edit 200      # block-edit remesh latency distribution
 ./build/voxel_engine --validate            # read GPU meshes back, verify vs voxel data
+./build/voxel_engine --verify-edit-persistence  # edits must survive chunk eviction
 scripts/verify_occlusion.sh                # occlusion on/off renders must be byte-identical
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
@@ -94,6 +95,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
 | GPU mesh validation (`--validate`) | reads every VBO/EBO back off the GPU and checks each triangle is an axis-aligned face backed by a solid block; composes with `--load`/`--seed`, exits nonzero on offenders |
+| Edit persistence (`--verify-edit-persistence`) | `stashed=1 restored=1 survived=1`: a block edit survives its chunk streaming out and back in (modified chunks are RLE-stashed on eviction instead of regenerated; saves include the stash) |
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
 (section/triangle counts are exact at current HEAD; the ms columns are
