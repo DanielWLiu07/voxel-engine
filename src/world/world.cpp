@@ -2,6 +2,7 @@
 
 #include "core/profiler.h"
 #include "world/chunk_mesh.h"
+#include "world/chunk_serialize.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -344,7 +345,17 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
     };
 
     for (auto it = chunks_.begin(); it != chunks_.end(); ) {
-        if (!in_window(it->first)) { it = chunks_.erase(it); ++stats.evicted; }
+        if (!in_window(it->first)) {
+            // Edits must survive eviction: regeneration from the terrain
+            // generator would silently undo them. Unmodified chunks are
+            // cheaper to regenerate than to keep.
+            if (it->second->player_modified) {
+                edited_stash_[it->first] = encode_chunk_rle(it->second->chunk);
+                ++stats.stashed;
+            }
+            it = chunks_.erase(it);
+            ++stats.evicted;
+        }
         else ++it;
     }
     // In-flight jobs that fell out of window stay scheduled but their
@@ -359,6 +370,20 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
         for (int dx = -radius; dx <= radius; ++dx) {
             ChunkCoord c{center.x + dx, center.z + dz};
             if (chunks_.count(c) || requested_.count(c)) continue;
+            // A stashed edit takes priority over fresh terrain. Decode is
+            // main-thread (microseconds at RLE sizes); meshing still goes
+            // through the worker pool like any load.
+            if (auto sit = edited_stash_.find(c); sit != edited_stash_.end()) {
+                Chunk restored;
+                if (decode_chunk_rle(sit->second, restored)) {
+                    enqueue_decoded_chunk(c, std::move(restored), pool);
+                    ++stats.restored;
+                    continue;
+                }
+                // A stash entry we wrote ourselves failing to decode is a
+                // bug, not a file-corruption case; fall through to terrain
+                // rather than crash-loop on it.
+            }
             requested_.insert(c);
             jobs_in_flight_.fetch_add(1);
             ++stats.requested;
@@ -412,9 +437,13 @@ int World::drain_finished(int max_per_frame) {
         requested_.erase(req_it);
 
         const auto up_t0 = clock::now();
-        chunks_.emplace(fc.coord,
-                        build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data),
-                                   fc.visibility));
+        auto [slot_it, inserted] = chunks_.emplace(
+            fc.coord,
+            build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data),
+                       fc.visibility));
+        // Chunks that came from disk or the edit stash must keep stashing
+        // on eviction; the terrain generator cannot reproduce them.
+        if (inserted) slot_it->second->player_modified = fc.from_decoded;
         total_upload_ms_ += std::chrono::duration<double, std::milli>(
             clock::now() - up_t0).count();
         ++uploaded;
@@ -437,6 +466,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         fc.coord = c;
         fc.generation = gen;
         fc.chunk = std::move(chunk);
+        fc.from_decoded = true;
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
@@ -459,6 +489,9 @@ void World::insert_chunk(ChunkCoord c, Chunk chunk) {
 void World::clear_all() {
     chunks_.clear();
     requested_.clear();
+    // A full reload replaces world state wholesale; stale stashed edits
+    // from the previous state must not leak into it.
+    edited_stash_.clear();
     ++generation_;  // in-flight jobs are now stale; drain_finished drops them
     std::lock_guard<std::mutex> lock(finished_mutex_);
     // Results already queued but not yet drained are dropped here, so their
@@ -495,6 +528,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     if (slot.chunk.get(lx, wy, lz) == b) return false;
 
     slot.chunk.set(lx, wy, lz, b);
+    slot.player_modified = true;
     const auto edit_t0 = std::chrono::steady_clock::now();
     auto mesh_data = build_chunk_mesh_greedy(slot.chunk);
     // Edits can shift quads across section boundaries (placing a block on

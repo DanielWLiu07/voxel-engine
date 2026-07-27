@@ -523,6 +523,11 @@ int main(int argc, char** argv) {
     // face backed by a solid block, print a VALIDATE line, exit nonzero on
     // offenders. Validates what the GPU will draw, not what the CPU built.
     bool validate_mode = false;
+    // --verify-edit-persistence: after the world loads, edit a block, walk
+    // the stream window far enough away that the edited chunk evicts, walk
+    // back, and check the edit survived (stash -> restore round trip).
+    // Prints one EDIT_PERSIST line; exits nonzero if the edit was lost.
+    bool verify_edit_persistence = false;
     // --threads N: pin the worker pool to exactly N threads instead of the
     // cores-1 default. Exists so the parallel-efficiency claim is measurable:
     // a --save sweep over N gives chunks/sec at each pool size (see
@@ -562,6 +567,7 @@ int main(int argc, char** argv) {
                 "  voxel_engine --threads N              worker pool size, 1-64 (default: cores-1, min 2)\n"
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
+                "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -625,6 +631,7 @@ int main(int argc, char** argv) {
             ++i;
         }
         if (arg == "--validate") validate_mode = true;
+        if (arg == "--verify-edit-persistence") verify_edit_persistence = true;
         if (arg == "--threads" && i + 1 < argc) {
             // Same strtol-then-range-check pattern as --radius: reject junk
             // and out-of-band values via the 0 sentinel checked below.
@@ -710,7 +717,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 2);
     if (bench_frames > 0 || bench_io || bench_edit > 0 || validate_mode ||
-        !save_path.empty())
+        verify_edit_persistence || !save_path.empty())
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
@@ -1440,6 +1447,55 @@ int main(int argc, char** argv) {
             std::printf("\nVALIDATE chunks=%zu bad_triangles=%d %s\n",
                         wrld.chunk_count(), bad, bad == 0 ? "ok" : "FAILED");
             if (bad > 0) {
+                glfwDestroyWindow(window); glfwTerminate();
+                return EXIT_FAILURE;
+            }
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // Headless --verify-edit-persistence: prove a block edit survives
+        // its chunk being streamed out and back in. Break a solid block
+        // near the origin, recenter the stream window far away (edited
+        // chunk evicts -> stash), recenter home (chunk restores from the
+        // stash, not the terrain generator), then check the hole is still
+        // there. All on the main thread, deterministic.
+        if (verify_edit_persistence && initial_load_logged) {
+            int ex = 0, ey = 0, ez = 0;
+            world::BlockId prev = world::BlockId::Air;
+            for (int probe = 0; probe < 4096 && prev == world::BlockId::Air;
+                 ++probe) {
+                ex = (probe * 37) % 16;
+                ez = (probe * 53) % 16;
+                ey = 20 + (probe % 30);
+                prev = wrld.block_at(ex, ey, ez);
+            }
+            bool ok = prev != world::BlockId::Air;
+            world::World::StreamStats away{}, back{};
+            bool evicted = false;
+            if (ok) {
+                wrld.set_block(ex, ey, ez, world::BlockId::Air);
+                const world::ChunkCoord home{0, 0};
+                // 3 radii away: no overlap between the two windows, so the
+                // edited chunk cannot ride along in the resident set.
+                const world::ChunkCoord far_off{home.x + 3 * stream_radius, home.z};
+                away = wrld.update_streaming(far_off, stream_radius, terrain, pool);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                evicted = !wrld.has_chunk(home);
+                back = wrld.update_streaming(home, stream_radius, terrain, pool);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                // has_chunk guards the survival check: block_at reports Air
+                // for an unloaded chunk too, which would pass vacuously.
+                ok = evicted && away.stashed >= 1 && back.restored >= 1 &&
+                     wrld.has_chunk(home) &&
+                     wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+            }
+            std::printf("\nEDIT_PERSIST block=(%d,%d,%d) prev_id=%d evicted=%d "
+                        "stashed=%d restored=%d survived=%d %s\n",
+                        ex, ey, ez, static_cast<int>(prev),
+                        evicted ? 1 : 0, away.stashed, back.restored,
+                        wrld.block_at(ex, ey, ez) == world::BlockId::Air ? 1 : 0,
+                        ok ? "ok" : "FAILED");
+            if (!ok) {
                 glfwDestroyWindow(window); glfwTerminate();
                 return EXIT_FAILURE;
             }
