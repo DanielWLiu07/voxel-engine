@@ -107,7 +107,7 @@ int run_bench() {
         // GPU buffer footprint: the merged mesh uploads fewer vertices and
         // indices, so the triangle win is a memory win too.
         auto vram_kb = [](const world::ChunkMeshData& m) {
-            return (m.vertices.size() * sizeof(gfx::VertexPNT) +
+            return (m.vertices.size() * sizeof(gfx::VertexPacked) +
                     m.indices.size() * sizeof(std::uint32_t)) / 1024.0;
         };
         const double naive_kb = vram_kb(last_naive);

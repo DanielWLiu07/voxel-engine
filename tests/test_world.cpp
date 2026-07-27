@@ -147,11 +147,11 @@ double total_quad_area(const world::ChunkMeshData& m) {
     double area = 0.0;
     const std::size_t quad_count = m.vertices.size() / 4;
     for (std::size_t q = 0; q < quad_count; ++q) {
-        const auto& v0 = m.vertices[4 * q + 0];
-        const auto& v2 = m.vertices[4 * q + 2];
-        const double dx = std::abs(v2.position.x - v0.position.x);
-        const double dy = std::abs(v2.position.y - v0.position.y);
-        const double dz = std::abs(v2.position.z - v0.position.z);
+        const auto p0 = m.vertices[4 * q + 0].pos();
+        const auto p2 = m.vertices[4 * q + 2].pos();
+        const double dx = std::abs(p2.x - p0.x);
+        const double dy = std::abs(p2.y - p0.y);
+        const double dz = std::abs(p2.z - p0.z);
         if      (dx == 0.0) area += dy * dz;
         else if (dy == 0.0) area += dx * dz;
         else                area += dx * dy;
@@ -250,7 +250,7 @@ void test_greedy_never_merges_across_block_types() {
 
     bool uniform = true;
     for (std::size_t q = 0; q < greedy.vertices.size() / 4; ++q) {
-        const float id = greedy.vertices[4 * q].block_id;
+        const auto id = greedy.vertices[4 * q].block_id;
         for (int k = 1; k < 4; ++k) {
             if (greedy.vertices[4 * q + k].block_id != id) uniform = false;
         }
@@ -260,15 +260,17 @@ void test_greedy_never_merges_across_block_types() {
     // Same diagonal trick as total_quad_area, bucketed per material: the
     // per-block-id surface area must survive merging untouched.
     auto area_of = [](const world::ChunkMeshData& m, world::BlockId b) {
-        const float want = static_cast<float>(b);
+        const auto want = static_cast<std::uint8_t>(b);
         double area = 0.0;
         for (std::size_t q = 0; q < m.vertices.size() / 4; ++q) {
             const auto& v0 = m.vertices[4 * q + 0];
             const auto& v2 = m.vertices[4 * q + 2];
+            const auto p0 = v0.pos();
+            const auto p2 = v2.pos();
             if (v0.block_id != want) continue;
-            const double dx = std::abs(v2.position.x - v0.position.x);
-            const double dy = std::abs(v2.position.y - v0.position.y);
-            const double dz = std::abs(v2.position.z - v0.position.z);
+            const double dx = std::abs(p2.x - p0.x);
+            const double dy = std::abs(p2.y - p0.y);
+            const double dz = std::abs(p2.z - p0.z);
             if      (dx == 0.0) area += dy * dz;
             else if (dy == 0.0) area += dx * dz;
             else                area += dx * dy;
