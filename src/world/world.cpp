@@ -76,7 +76,7 @@ namespace {
 // positions the mesher emits; the world-space AABB folds in the chunk
 // origin so cull tests don't need the model matrix.
 struct SectionBuild {
-    std::vector<gfx::VertexPNT> vertices;
+    std::vector<gfx::VertexPacked> vertices;
     std::vector<std::uint32_t>  indices;
     glm::vec3 aabb_min{};
     glm::vec3 aabb_max{};
@@ -101,23 +101,17 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
 
     const std::size_t quad_count = src.vertices.size() / 4;
     for (std::size_t q = 0; q < quad_count; ++q) {
-        const auto& v0 = src.vertices[4 * q + 0];
-        const auto& v1 = src.vertices[4 * q + 1];
-        const auto& v2 = src.vertices[4 * q + 2];
-        const auto& v3 = src.vertices[4 * q + 3];
+        const glm::vec3 p0 = src.vertices[4 * q + 0].pos();
+        const glm::vec3 p1 = src.vertices[4 * q + 1].pos();
+        const glm::vec3 p2 = src.vertices[4 * q + 2].pos();
+        const glm::vec3 p3 = src.vertices[4 * q + 3].pos();
 
-        const float ymin = std::min({v0.position.y, v1.position.y,
-                                     v2.position.y, v3.position.y});
-        const float ymax = std::max({v0.position.y, v1.position.y,
-                                     v2.position.y, v3.position.y});
-        const float xmin = std::min({v0.position.x, v1.position.x,
-                                     v2.position.x, v3.position.x});
-        const float xmax = std::max({v0.position.x, v1.position.x,
-                                     v2.position.x, v3.position.x});
-        const float zmin = std::min({v0.position.z, v1.position.z,
-                                     v2.position.z, v3.position.z});
-        const float zmax = std::max({v0.position.z, v1.position.z,
-                                     v2.position.z, v3.position.z});
+        const float ymin = std::min({p0.y, p1.y, p2.y, p3.y});
+        const float ymax = std::max({p0.y, p1.y, p2.y, p3.y});
+        const float xmin = std::min({p0.x, p1.x, p2.x, p3.x});
+        const float xmax = std::max({p0.x, p1.x, p2.x, p3.x});
+        const float zmin = std::min({p0.z, p1.z, p2.z, p3.z});
+        const float zmax = std::max({p0.z, p1.z, p2.z, p3.z});
 
         const int section_idx = std::clamp(
             static_cast<int>(std::floor(ymin)) / kSectionHeight,
@@ -125,10 +119,10 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
         SectionBuild& s = out[section_idx];
 
         const std::uint32_t base = static_cast<std::uint32_t>(s.vertices.size());
-        s.vertices.push_back(v0);
-        s.vertices.push_back(v1);
-        s.vertices.push_back(v2);
-        s.vertices.push_back(v3);
+        s.vertices.push_back(src.vertices[4 * q + 0]);
+        s.vertices.push_back(src.vertices[4 * q + 1]);
+        s.vertices.push_back(src.vertices[4 * q + 2]);
+        s.vertices.push_back(src.vertices[4 * q + 3]);
         // Remap the mesher's own index pattern instead of re-synthesizing
         // {0,1,2,0,2,3}: the greedy mesher flips the quad diagonal when one
         // AO pair is more contrasty (ao_flip), and re-synthesizing here was
@@ -165,7 +159,7 @@ void apply_sections(ChunkSlot& slot,
     slot.quad_count_total     = 0;
     bool union_init = false;
 
-    std::vector<gfx::VertexPNT> all_vertices;
+    std::vector<gfx::VertexPacked> all_vertices;
     std::vector<std::uint32_t>  all_indices;
     std::size_t reserved_v = 0, reserved_i = 0;
     for (const auto& s : built) { reserved_v += s.vertices.size(); reserved_i += s.indices.size(); }
@@ -206,7 +200,7 @@ void apply_sections(ChunkSlot& slot,
     if (slot.any_section_has_mesh) {
         slot.chunk_mesh.upload(all_vertices, all_indices);
     }
-    slot.gpu_bytes = all_vertices.size() * sizeof(gfx::VertexPNT) +
+    slot.gpu_bytes = all_vertices.size() * sizeof(gfx::VertexPacked) +
                      all_indices.size() * sizeof(std::uint32_t);
     if (!union_init) {
         // Fully empty chunk - fall back to the block-extent AABB (returns a
@@ -722,7 +716,7 @@ bool occlusion_bfs(
 }
 
 int World::debug_validate_gpu_meshes() const {
-    std::vector<gfx::VertexPNT> verts;
+    std::vector<gfx::VertexPacked> verts;
     std::vector<std::uint32_t> idx;
     int bad = 0;
     for (const auto& kv : chunks_) {
@@ -730,10 +724,10 @@ int World::debug_validate_gpu_meshes() const {
         if (!slot.any_section_has_mesh) continue;
         slot.chunk_mesh.debug_read_back(verts, idx);
         for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
-            const auto& p0 = verts[idx[t]].position;
-            const auto& p1 = verts[idx[t + 1]].position;
-            const auto& p2 = verts[idx[t + 2]].position;
-            const glm::vec3 n = verts[idx[t]].normal;
+            const glm::vec3 p0 = verts[idx[t]].pos();
+            const glm::vec3 p1 = verts[idx[t + 1]].pos();
+            const glm::vec3 p2 = verts[idx[t + 2]].pos();
+            const glm::vec3 n = verts[idx[t]].nrm();
             const int d = (std::abs(n.x) > 0.5f) ? 0 : (std::abs(n.y) > 0.5f ? 1 : 2);
             const bool coplanar = (p0[d] == p1[d]) && (p1[d] == p2[d]);
             bool backed = false;

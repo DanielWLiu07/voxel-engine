@@ -35,16 +35,29 @@ constexpr int kNeighborOffsets[6][3] = {
     { 0, 0, 1}, { 0, 0,-1},
 };
 
-void emit_quad(ChunkMeshData& out, const glm::vec3& origin, const FaceDef& f, BlockId id) {
+// kFaces order matches gfx::kPackedNormals (+X,-X,+Y,-Y,+Z,-Z), so the
+// face index IS the packed normal index.
+gfx::VertexPacked pack_vertex(const glm::vec3& p, int normal_idx,
+                              float uu, float vv, int ao, std::uint8_t id) {
+    gfx::VertexPacked v;
+    v.x = static_cast<std::uint8_t>(p.x);
+    v.y = static_cast<std::uint16_t>(p.y);
+    v.z = static_cast<std::uint8_t>(p.z);
+    v.normal = static_cast<std::uint8_t>(normal_idx);
+    v.ao = static_cast<std::uint8_t>(ao);
+    v.u = static_cast<std::uint16_t>(uu);
+    v.v = static_cast<std::uint16_t>(vv);
+    v.block_id = id;
+    return v;
+}
+
+void emit_quad(ChunkMeshData& out, const glm::vec3& origin, int face_idx,
+               const FaceDef& f, BlockId id) {
     std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
     for (int i = 0; i < 4; ++i) {
-        gfx::VertexPNT v;
-        v.position = origin + f.corners[i];
-        v.normal   = f.normal;
-        v.uv       = {kFaceUV[i][0], kFaceUV[i][1]};
-        v.ao       = 1.0f;
-        v.block_id = static_cast<float>(static_cast<int>(id));
-        out.vertices.push_back(v);
+        out.vertices.push_back(pack_vertex(origin + f.corners[i], face_idx,
+                                           kFaceUV[i][0], kFaceUV[i][1],
+                                           3, static_cast<std::uint8_t>(id)));
     }
     out.indices.insert(out.indices.end(),
         {base+0, base+1, base+2, base+0, base+2, base+3});
@@ -55,11 +68,6 @@ void emit_quad(ChunkMeshData& out, const glm::vec3& origin, const FaceDef& f, Bl
 inline int corner_ao(int side1, int side2, int corner) {
     if (side1 && side2) return 0;
     return 3 - (side1 + side2 + corner);
-}
-
-inline float ao_to_brightness(int ao) {
-    constexpr float table[4] = {0.45f, 0.65f, 0.82f, 1.00f};
-    return table[ao];
 }
 
 }  // namespace
@@ -88,7 +96,7 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk) {
                     int ny = y + kNeighborOffsets[f][1];
                     int nz = z + kNeighborOffsets[f][2];
                     if (face_visible(self, chunk.get_or_air(nx, ny, nz))) {
-                        emit_quad(out, origin, kFaces[f], self);
+                        emit_quad(out, origin, f, kFaces[f], self);
                     }
                 }
             }
@@ -197,8 +205,8 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                             ++h;
                         }
 
-                        glm::vec3 normal(0.0f);
-                        normal[d] = static_cast<float>(dir);
+                        // kFaces/kPackedNormals order is +X,-X,+Y,-Y,+Z,-Z.
+                        const int face_idx = 2 * d + (dir > 0 ? 0 : 1);
 
                         auto make_corner = [&](int du, int dv) {
                             glm::vec3 c(0.0f);
@@ -236,15 +244,9 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                         int ao01 = vertex_ao(0, 1);
 
                         std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
-                        const float bf = static_cast<float>(id);
                         auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
-                            gfx::VertexPNT vtx;
-                            vtx.position = p;
-                            vtx.normal   = normal;
-                            vtx.uv       = {uu, vv};
-                            vtx.ao       = ao_to_brightness(ao);
-                            vtx.block_id = bf;
-                            out.vertices.push_back(vtx);
+                            out.vertices.push_back(
+                                pack_vertex(p, face_idx, uu, vv, ao, id));
                         };
 
                         if (dir > 0) {

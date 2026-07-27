@@ -28,7 +28,7 @@ void Mesh::destroy() {
     index_count_ = 0;
 }
 
-void Mesh::upload(std::span<const VertexPNT> vertices,
+void Mesh::upload(std::span<const VertexPacked> vertices,
                   std::span<const std::uint32_t> indices) {
     if (!vao_) glGenVertexArrays(1, &vao_);
     if (!vbo_) glGenBuffers(1, &vbo_);
@@ -46,16 +46,17 @@ void Mesh::upload(std::span<const VertexPNT> vertices,
                  static_cast<GLsizeiptr>(indices.size_bytes()),
                  indices.data(), GL_STATIC_DRAW);
 
-    auto attr = [](GLuint loc, GLint comps, std::size_t offset) {
+    // Integer attributes (glVertexAttribIPointer, not the normalizing
+    // float path); the vertex shader decodes positions, normal index, AO
+    // level, and uv spans from raw unsigned integers.
+    auto iattr = [](GLuint loc, GLint comps, GLenum type, std::size_t offset) {
         glEnableVertexAttribArray(loc);
-        glVertexAttribPointer(loc, comps, GL_FLOAT, GL_FALSE,
-                              sizeof(VertexPNT), reinterpret_cast<void*>(offset));
+        glVertexAttribIPointer(loc, comps, type, sizeof(VertexPacked),
+                               reinterpret_cast<void*>(offset));
     };
-    attr(0, 3, offsetof(VertexPNT, position));
-    attr(1, 3, offsetof(VertexPNT, normal));
-    attr(2, 2, offsetof(VertexPNT, uv));
-    attr(3, 1, offsetof(VertexPNT, ao));
-    attr(4, 1, offsetof(VertexPNT, block_id));
+    iattr(0, 4, GL_UNSIGNED_BYTE,  offsetof(VertexPacked, x));
+    iattr(1, 3, GL_UNSIGNED_SHORT, offsetof(VertexPacked, y));
+    iattr(2, 1, GL_UNSIGNED_BYTE,  offsetof(VertexPacked, block_id));
 
     glBindVertexArray(0);
     index_count_ = indices.size();
@@ -72,7 +73,7 @@ void Mesh::bind() const {
     if (vao_) glBindVertexArray(vao_);
 }
 
-void Mesh::debug_read_back(std::vector<VertexPNT>& vertices,
+void Mesh::debug_read_back(std::vector<VertexPacked>& vertices,
                            std::vector<std::uint32_t>& indices) const {
     vertices.clear();
     indices.clear();
@@ -80,7 +81,7 @@ void Mesh::debug_read_back(std::vector<VertexPNT>& vertices,
     GLint vbytes = 0, ibytes = 0;
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vbytes);
-    vertices.resize(static_cast<std::size_t>(vbytes) / sizeof(VertexPNT));
+    vertices.resize(static_cast<std::size_t>(vbytes) / sizeof(VertexPacked));
     glGetBufferSubData(GL_ARRAY_BUFFER, 0, vbytes, vertices.data());
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
     glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &ibytes);

@@ -54,7 +54,7 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
 **Headline (radius 12, gameplay pose, vsync off):**
-5.7 ms avg frame time, **175 fps**, **29 M triangles/sec**, 253 MB peak RSS.
+4.6 ms avg frame time, **219 fps**, **36 M triangles/sec**, 198 MB peak RSS.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
 workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
 frustum + occlusion cull), 167k triangles rendered, post-process the largest
@@ -80,8 +80,8 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 
 | Metric | Value |
 | --- | --- |
-| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 577.5 KB -> 32.0 KB |
-| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build), 642.6 KB -> 81.9 KB |
+| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 226.0 KB -> 12.5 KB |
+| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build), 251.4 KB -> 32.1 KB |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
 | Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
@@ -91,6 +91,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | Frustum cull (sections), vs all loaded sections (radius 12) | 407 / 5000 drawn (~12.3x) |
 | Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
+| Packed vertex format | 40 -> 12 bytes/vertex (integer attributes, shader-side decode): world GPU buffers 48 -> 18.8 MB and peak RSS 253 -> 198 MB at radius 12; renders byte-identical (`verify_occlusion.sh`), GPU-validated (`--validate`), greedy ratios unchanged |
 | Block edit, full remesh path (`--bench-edit 200`) | 0.80 ms p50 per edit: greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous |
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
@@ -103,11 +104,11 @@ the idle-machine measure and reproduce when the box is quiet):
 
 | Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |   289 | 180 |  78,224 | 5.01 | 4.96 | 6.33 | 199.5 | 15.6M | 168 MB |
-| 10 |   441 | 280 | 117,626 | 5.20 | 5.15 | 6.49 | 192.3 | 22.6M | 204 MB |
-| 12 |   625 | 396 | 167,200 | 5.40 | 5.27 | 7.17 | 185.2 | 31.0M | 253 MB |
-| 14 |   841 | 531 | 230,560 | 6.09 | 5.94 | 8.67 | 164.2 | 37.9M | 296 MB |
-| 16 | 1,089 | 687 | 299,170 | 6.04 | 6.20 | 9.15 | 165.5 | 49.5M | 329 MB |
+|  8 |   289 | 180 |  78,224 | 5.19 | 4.28 | 22.35 | 192.7 | 15.1M | 156 MB |
+| 10 |   441 | 280 | 117,626 | 4.42 | 4.29 | 10.96 | 226.5 | 26.6M | 170 MB |
+| 12 |   625 | 396 | 167,200 | 4.56 | 4.54 | 10.15 | 219.1 | 36.6M | 198 MB |
+| 14 |   841 | 531 | 230,560 | 5.08 | 4.83 | 12.88 | 196.7 | 45.3M | 239 MB |
+| 16 | 1,089 | 687 | 299,170 | 4.79 | 4.72 | 10.11 | 208.6 | 62.4M | 281 MB |
 
 Triangle count grows 3.8x from radius 8 to 16; avg frame time grows
 21%. Section-AABB culling holds drawn-section count close to a
@@ -116,8 +117,9 @@ quadruples. Peak RSS scales sub-linearly with chunk count because the
 worker pool, FBOs, and post-process chain are constant cost on top of
 the per-chunk mesh and block data. `BENCH_FRAME` also reports
 `gpu_buffers_mb`, the resident vertex + index buffer bytes: at radius 12
-the 625 chunks hold ~48 MB of GPU mesh buffers under the ~253 MB RSS,
-the number the greedy mesher's face merging shrinks. It also shows live in
+the 625 chunks hold 18.8 MB of GPU mesh buffers under the ~198 MB RSS
+(48 MB before the 12-byte packed vertex format), the number the greedy
+mesher's face merging and the vertex packing both shrink. It also shows live in
 the HUD's perf panel.
 
 Block edits (place/break) remesh the whole 16x256x16 chunk synchronously
