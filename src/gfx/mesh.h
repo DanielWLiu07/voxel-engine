@@ -39,6 +39,37 @@ struct VertexPacked {
 };
 static_assert(sizeof(VertexPacked) == 12, "packed layout drifted");
 
+// One element buffer shared by every quad mesh. All chunk meshes
+// triangulate quad q the same way - {4q+0, 4q+1, 4q+2, 4q+0, 4q+2, 4q+3} -
+// so per-mesh index buffers were pure redundancy (a third of the resident
+// mesh bytes). The buffer holds that fixed pattern, grown to the largest
+// mesh seen; every mesh's VAO binds it by name, and growing the data store
+// in place keeps existing VAOs valid (VAOs reference buffers, not
+// contents). The AO diagonal flip that used to vary the per-quad index
+// pattern is encoded by rotating the quad's vertex order at emit time.
+class QuadIndexBuffer {
+public:
+    QuadIndexBuffer() = default;
+    ~QuadIndexBuffer();
+
+    QuadIndexBuffer(const QuadIndexBuffer&) = delete;
+    QuadIndexBuffer& operator=(const QuadIndexBuffer&) = delete;
+
+    // Binds the buffer into the currently bound VAO, first growing the
+    // pattern if quad_count exceeds capacity. Call with the target VAO
+    // bound - the element-array binding is VAO state.
+    void bind_for(std::size_t quad_count);
+
+    GLuint id() const { return ebo_; }
+    std::size_t bytes() const {
+        return capacity_quads_ * 6 * sizeof(std::uint32_t);
+    }
+
+private:
+    GLuint ebo_ = 0;
+    std::size_t capacity_quads_ = 0;
+};
+
 class Mesh {
 public:
     Mesh() = default;
@@ -49,7 +80,10 @@ public:
     Mesh(Mesh&& other) noexcept;
     Mesh& operator=(Mesh&& other) noexcept;
 
-    void upload(std::span<const VertexPacked> vertices, std::span<const std::uint32_t> indices);
+    // vertices.size() must be a multiple of 4 (whole quads); triangulation
+    // comes from the shared quad pattern, which outlives this mesh.
+    void upload(std::span<const VertexPacked> vertices,
+                QuadIndexBuffer& quad_indices);
     void draw() const;
 
     // Index-range draw for sliced meshes (e.g. per-section sub-chunks sharing
@@ -60,8 +94,10 @@ public:
 
     std::size_t index_count() const { return index_count_; }
 
-    // Debug-only: pulls the uploaded VBO/EBO back off the GPU so a validator
-    // can check exactly what gets drawn (not what the CPU thinks it sent).
+    // Debug-only: pulls this mesh's vertices and the index range it draws
+    // back off the GPU (the indices come from the shared quad buffer) so a
+    // validator can check exactly what gets drawn, not what the CPU thinks
+    // it sent.
     void debug_read_back(std::vector<VertexPacked>& vertices,
                          std::vector<std::uint32_t>& indices) const;
 
@@ -70,7 +106,7 @@ private:
 
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
-    GLuint ebo_ = 0;
+    GLuint shared_ebo_ = 0;  // non-owning; the QuadIndexBuffer deletes it
     std::size_t index_count_ = 0;
 };
 
