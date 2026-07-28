@@ -8,9 +8,12 @@
 
 namespace world {
 
+// Four vertices per quad, in draw order. Triangulation is implicit: every
+// quad uses the shared {0,1,2},{0,2,3} pattern (gfx::QuadIndexBuffer), so
+// meshes carry no index data at all. The greedy mesher's AO diagonal flip
+// is encoded by rotating the quad's vertex order at emit time.
 struct ChunkMeshData {
     std::vector<gfx::VertexPacked> vertices;
-    std::vector<std::uint32_t>  indices;
     int    quad_count = 0;
     double build_ms = 0.0;
 };

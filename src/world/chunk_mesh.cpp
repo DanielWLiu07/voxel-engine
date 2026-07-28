@@ -53,14 +53,11 @@ gfx::VertexPacked pack_vertex(const glm::vec3& p, int normal_idx,
 
 void emit_quad(ChunkMeshData& out, const glm::vec3& origin, int face_idx,
                const FaceDef& f, BlockId id) {
-    std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
     for (int i = 0; i < 4; ++i) {
         out.vertices.push_back(pack_vertex(origin + f.corners[i], face_idx,
                                            kFaceUV[i][0], kFaceUV[i][1],
                                            3, static_cast<std::uint8_t>(id)));
     }
-    out.indices.insert(out.indices.end(),
-        {base+0, base+1, base+2, base+0, base+2, base+3});
     ++out.quad_count;
 }
 
@@ -79,7 +76,6 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk) {
 
     ChunkMeshData out;
     out.vertices.reserve(static_cast<size_t>(chunk.solid_count()) * 8);
-    out.indices.reserve(static_cast<size_t>(chunk.solid_count()) * 12);
 
     for (int y = 0; y < kChunkSizeY; ++y) {
         for (int z = 0; z < kChunkSizeZ; ++z) {
@@ -140,7 +136,6 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
         return out;
     }
     out.vertices.reserve(static_cast<size_t>(chunk.solid_count()));
-    out.indices.reserve(static_cast<size_t>(chunk.solid_count()) * 2);
 
     for (int d = 0; d < 3; ++d) {
         const int u_axis = (d + 1) % 3;
@@ -243,10 +238,10 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                         int ao11 = vertex_ao(1, 1);
                         int ao01 = vertex_ao(0, 1);
 
-                        std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
+                        gfx::VertexPacked corner[4];
+                        int n = 0;
                         auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
-                            out.vertices.push_back(
-                                pack_vertex(p, face_idx, uu, vv, ao, id));
+                            corner[n++] = pack_vertex(p, face_idx, uu, vv, ao, id);
                         };
 
                         if (dir > 0) {
@@ -261,15 +256,16 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                             push(p10, static_cast<float>(w), 0.0f, ao10);
                         }
 
-                        // ao_flip: swap diagonals when one is more contrasty
-                        // so the gradient doesn't appear torn.
-                        bool flip = (ao00 + ao11) < (ao10 + ao01);
-                        if (flip) {
-                            out.indices.insert(out.indices.end(),
-                                {base+1, base+2, base+3, base+1, base+3, base+0});
-                        } else {
-                            out.indices.insert(out.indices.end(),
-                                {base+0, base+1, base+2, base+0, base+2, base+3});
+                        // ao_flip: cut the other diagonal when it is more
+                        // contrasty so the gradient doesn't appear torn.
+                        // The index pattern is fixed engine-wide (shared
+                        // quad buffer), so the flip lives in the vertex
+                        // order: rotating by one makes {0,1,2},{0,2,3}
+                        // produce triangles (1,2,3),(1,3,0) - the flipped
+                        // diagonal, same winding.
+                        const int rot = (ao00 + ao11) < (ao10 + ao01) ? 1 : 0;
+                        for (int k = 0; k < 4; ++k) {
+                            out.vertices.push_back(corner[(k + rot) % 4]);
                         }
                         ++out.quad_count;
 

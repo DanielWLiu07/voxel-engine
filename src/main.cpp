@@ -96,19 +96,20 @@ int run_bench() {
             naive_total  += last_naive.build_ms;
             greedy_total += last_greedy.build_ms;
         }
-        std::size_t naive_tris  = last_naive.indices.size()  / 3;
-        std::size_t greedy_tris = last_greedy.indices.size() / 3;
+        std::size_t naive_tris  = static_cast<std::size_t>(last_naive.quad_count) * 2;
+        std::size_t greedy_tris = static_cast<std::size_t>(last_greedy.quad_count) * 2;
 
         std::printf("---- %s ----\n", label);
         std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
                     last_naive.quad_count, naive_tris, naive_total / kRuns);
         std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
                     last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
-        // GPU buffer footprint: the merged mesh uploads fewer vertices and
-        // indices, so the triangle win is a memory win too.
+        // GPU buffer footprint: the merged mesh uploads fewer vertices, so
+        // the triangle win is a memory win too. Vertex bytes only - the
+        // quad index pattern is one shared buffer engine-wide, not a
+        // per-chunk cost.
         auto vram_kb = [](const world::ChunkMeshData& m) {
-            return (m.vertices.size() * sizeof(gfx::VertexPacked) +
-                    m.indices.size() * sizeof(std::uint32_t)) / 1024.0;
+            return m.vertices.size() * sizeof(gfx::VertexPacked) / 1024.0;
         };
         const double naive_kb = vram_kb(last_naive);
         const double greedy_kb = vram_kb(last_greedy);
