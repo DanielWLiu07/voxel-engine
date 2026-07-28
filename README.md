@@ -80,8 +80,8 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 
 | Metric | Value |
 | --- | --- |
-| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 226.0 KB -> 12.5 KB |
-| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build), 251.4 KB -> 32.1 KB |
+| Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 150.7 KB -> 8.3 KB |
+| Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build), 167.6 KB -> 21.4 KB |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
 | Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
@@ -92,6 +92,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | Occlusion cull (section-graph BFS), surface pose | 407 -> 396 sections (1.03x on open terrain) |
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
 | Packed vertex format | 40 -> 12 bytes/vertex (integer attributes, shader-side decode): world GPU buffers 48 -> 18.8 MB and peak RSS 253 -> 198 MB at radius 12; renders byte-identical (`verify_occlusion.sh`), GPU-validated (`--validate`), greedy ratios unchanged |
+| Shared quad index buffer | per-chunk index buffers eliminated (every quad triangulates the same way; the AO diagonal flip moved into vertex order): world GPU buffers 18.8 -> 12.5 MB at radius 12 (-33%); renders byte-identical to the per-chunk-EBO build across 4 poses, `--validate` clean on all 625 chunks |
 | Block edit, full remesh path (`--bench-edit 200`) | 0.80 ms p50 per edit: greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous |
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
@@ -116,11 +117,12 @@ constant fraction (~30% of loaded sections) while the loaded world
 quadruples. Peak RSS scales sub-linearly with chunk count because the
 worker pool, FBOs, and post-process chain are constant cost on top of
 the per-chunk mesh and block data. `BENCH_FRAME` also reports
-`gpu_buffers_mb`, the resident vertex + index buffer bytes: at radius 12
-the 625 chunks hold 18.8 MB of GPU mesh buffers under the ~198 MB RSS
-(48 MB before the 12-byte packed vertex format), the number the greedy
-mesher's face merging and the vertex packing both shrink. It also shows live in
-the HUD's perf panel.
+`gpu_buffers_mb`, the resident mesh bytes (per-chunk vertex buffers plus
+one shared quad index buffer): at radius 12 the 625 chunks hold 12.5 MB
+of GPU mesh buffers under the RSS - 48 MB before the 12-byte packed
+vertex format, 18.8 MB before per-chunk index buffers were replaced by
+the shared quad pattern. Face merging, vertex packing, and index sharing
+each took a measured bite. It also shows live in the HUD's perf panel.
 
 Block edits (place/break) remesh the whole 16x256x16 chunk synchronously
 rather than patching the mesh, because greedy meshing is fast enough to

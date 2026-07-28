@@ -236,11 +236,12 @@ public:
         for (const auto& kv : edited_stash_) fn(kv.first, kv.second);
     }
 
-    // Total bytes the resident chunks hold in GPU vertex + index buffers: the
-    // engine's GPU mesh footprint, to sit alongside RSS. O(resident chunks),
-    // so call it once per report, not per drawn section.
+    // Total bytes the resident chunks hold in GPU buffers: per-chunk vertex
+    // buffers plus the one shared quad index buffer. The engine's GPU mesh
+    // footprint, to sit alongside RSS. O(resident chunks), so call it once
+    // per report, not per drawn section.
     std::size_t resident_gpu_bytes() const {
-        std::size_t total = 0;
+        std::size_t total = quad_ibo_.bytes();
         for (const auto& [coord, slot] : chunks_) total += slot->gpu_bytes;
         return total;
     }
@@ -292,6 +293,9 @@ private:
                         const std::function<void(const glm::mat4&)>& set_model) const;
 
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
+    // The one element buffer every chunk mesh shares (all quads use the
+    // same index pattern); grown to the largest chunk seen, uploaded once.
+    gfx::QuadIndexBuffer quad_ibo_;
     // Scratch for draw_impl's coord-sorted traversal (see the comment
     // there); a member so the allocation is reused across passes. Mutable
     // scratch only -- draw_impl stays logically const.

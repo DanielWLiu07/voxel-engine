@@ -77,7 +77,6 @@ namespace {
 // origin so cull tests don't need the model matrix.
 struct SectionBuild {
     std::vector<gfx::VertexPacked> vertices;
-    std::vector<std::uint32_t>  indices;
     glm::vec3 aabb_min{};
     glm::vec3 aabb_max{};
     int  quad_count   = 0;
@@ -118,19 +117,14 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
             0, kSectionsPerChunk - 1);
         SectionBuild& s = out[section_idx];
 
-        const std::uint32_t base = static_cast<std::uint32_t>(s.vertices.size());
+        // Copy the quad's four vertices as emitted: the mesher encodes the
+        // AO diagonal flip (ao_flip) in the vertex order itself, so a plain
+        // copy preserves it and the shared quad index pattern applies to
+        // every quad uniformly.
         s.vertices.push_back(src.vertices[4 * q + 0]);
         s.vertices.push_back(src.vertices[4 * q + 1]);
         s.vertices.push_back(src.vertices[4 * q + 2]);
         s.vertices.push_back(src.vertices[4 * q + 3]);
-        // Remap the mesher's own index pattern instead of re-synthesizing
-        // {0,1,2,0,2,3}: the greedy mesher flips the quad diagonal when one
-        // AO pair is more contrasty (ao_flip), and re-synthesizing here was
-        // silently discarding that choice for everything the game renders.
-        for (int k = 0; k < 6; ++k) {
-            const std::uint32_t src_idx = src.indices[6 * q + k];
-            s.indices.push_back(base + (src_idx - static_cast<std::uint32_t>(4 * q)));
-        }
         ++s.quad_count;
 
         const glm::vec3 lo{xmin + ox, ymin, zmin + oz};
@@ -147,44 +141,45 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
     return out;
 }
 
-// Concatenate all non-empty section meshes into one vertex+index buffer
-// per chunk and upload once. Each section keeps an (index_offset,
-// index_count) slice into that shared EBO so culling and drawing happen
-// at section granularity, but the GL upload + VAO bind happen at chunk
-// granularity. Without this, each chunk does up to 8 glBufferData calls
-// at load time and one glBindVertexArray per visible section at draw.
+// Concatenate all non-empty section meshes into one vertex buffer per
+// chunk and upload once. Section quads stay contiguous, so each section
+// keeps an (index_offset, index_count) slice into the engine-wide shared
+// quad index pattern: culling and drawing happen at section granularity,
+// but the GL upload + VAO bind happen at chunk granularity, and no index
+// data is built or uploaded per chunk at all.
 void apply_sections(ChunkSlot& slot,
-                    std::array<SectionBuild, kSectionsPerChunk>&& built) {
+                    std::array<SectionBuild, kSectionsPerChunk>&& built,
+                    gfx::QuadIndexBuffer& quad_indices) {
     slot.any_section_has_mesh = false;
     slot.quad_count_total     = 0;
     bool union_init = false;
 
     std::vector<gfx::VertexPacked> all_vertices;
-    std::vector<std::uint32_t>  all_indices;
-    std::size_t reserved_v = 0, reserved_i = 0;
-    for (const auto& s : built) { reserved_v += s.vertices.size(); reserved_i += s.indices.size(); }
+    std::size_t reserved_v = 0;
+    for (const auto& s : built) reserved_v += s.vertices.size();
     all_vertices.reserve(reserved_v);
-    all_indices.reserve(reserved_i);
 
     for (int i = 0; i < kSectionsPerChunk; ++i) {
         auto& dst = slot.sections[i];
         auto& src = built[i];
-        if (src.indices.empty()) {
+        if (src.quad_count == 0) {
             dst.has_mesh     = false;
             dst.quad_count   = 0;
             dst.index_offset = 0;
             dst.index_count  = 0;
             continue;
         }
-        const std::uint32_t vert_base = static_cast<std::uint32_t>(all_vertices.size());
-        const std::uint32_t idx_start = static_cast<std::uint32_t>(all_indices.size());
+        // Quad q of the chunk buffer draws with indices [6q, 6q+6) of the
+        // shared pattern, so a section's slice is just its quad range
+        // scaled by 6.
+        const std::uint32_t quad_base =
+            static_cast<std::uint32_t>(all_vertices.size() / 4);
         all_vertices.insert(all_vertices.end(), src.vertices.begin(), src.vertices.end());
-        for (auto idx : src.indices) all_indices.push_back(idx + vert_base);
 
         dst.aabb         = {src.aabb_min, src.aabb_max};
         dst.quad_count   = src.quad_count;
-        dst.index_offset = idx_start;
-        dst.index_count  = static_cast<std::uint32_t>(src.indices.size());
+        dst.index_offset = 6 * quad_base;
+        dst.index_count  = static_cast<std::uint32_t>(6 * src.quad_count);
         dst.has_mesh     = true;
         slot.any_section_has_mesh = true;
         slot.quad_count_total += src.quad_count;
@@ -198,10 +193,11 @@ void apply_sections(ChunkSlot& slot,
         }
     }
     if (slot.any_section_has_mesh) {
-        slot.chunk_mesh.upload(all_vertices, all_indices);
+        slot.chunk_mesh.upload(all_vertices, quad_indices);
     }
-    slot.gpu_bytes = all_vertices.size() * sizeof(gfx::VertexPacked) +
-                     all_indices.size() * sizeof(std::uint32_t);
+    // Vertex bytes only: the shared quad pattern is one buffer engine-wide,
+    // counted once in resident_gpu_bytes().
+    slot.gpu_bytes = all_vertices.size() * sizeof(gfx::VertexPacked);
     if (!union_init) {
         // Fully empty chunk - fall back to the block-extent AABB (returns a
         // zero-extent box; nothing will pass the cull test).
@@ -229,13 +225,14 @@ namespace {
 
 std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk,
                                       ChunkMeshData&& mesh_data,
-                                      const SectionVisArray& visibility) {
+                                      const SectionVisArray& visibility,
+                                      gfx::QuadIndexBuffer& quad_indices) {
     auto slot = std::make_unique<ChunkSlot>();
     slot->coord = coord;
     slot->chunk = std::move(chunk);
     slot->section_visibility = visibility;
     auto built = bucket_quads_by_section(mesh_data, coord);
-    apply_sections(*slot, std::move(built));
+    apply_sections(*slot, std::move(built), quad_indices);
     return slot;
 }
 
@@ -256,7 +253,7 @@ void World::generate_grid(int radius, const ColumnFiller& fill_column) {
             auto mesh_data = build_chunk_mesh_greedy(chunk);
             auto vis = compute_section_visibility(chunk);
             ChunkCoord c{cx, cz};
-            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis));
+            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis, quad_ibo_));
         }
     }
 }
@@ -280,7 +277,7 @@ World::GenStats World::generate_grid(int radius, const TerrainGen& terrain) {
 
             auto vis = compute_section_visibility(chunk);
             ChunkCoord c{cx, cz};
-            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis));
+            chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis, quad_ibo_));
             ++stats.chunks_generated;
         }
     }
@@ -434,7 +431,7 @@ int World::drain_finished(int max_per_frame) {
         auto [slot_it, inserted] = chunks_.emplace(
             fc.coord,
             build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data),
-                       fc.visibility));
+                       fc.visibility, quad_ibo_));
         // Chunks that came from disk or the edit stash must keep stashing
         // on eviction; the terrain generator cannot reproduce them.
         if (inserted) slot_it->second->player_modified = fc.from_decoded;
@@ -476,7 +473,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
 void World::insert_chunk(ChunkCoord c, Chunk chunk) {
     auto mesh_data = build_chunk_mesh_greedy(chunk);
     auto vis = compute_section_visibility(chunk);
-    chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data), vis);
+    chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data), vis, quad_ibo_);
     requested_.erase(c);
 }
 
@@ -531,7 +528,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // meshing on a 16x256x16 chunk is sub-millisecond, so doing it again
     // per edit is fine.
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
-    apply_sections(slot, std::move(built));
+    apply_sections(slot, std::move(built), quad_ibo_);
     slot.section_visibility = compute_section_visibility(slot.chunk);
     edit_last_ms_ = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - edit_t0).count();
