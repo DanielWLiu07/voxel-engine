@@ -302,15 +302,17 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
     for (int cz = -radius; cz <= radius; ++cz) {
         for (int cx = -radius; cx <= radius; ++cx) {
             ChunkCoord c{cx, cz};
-            requested_.insert(c);
+            const std::uint64_t stamp = ++request_seq_;
+            requested_[c] = stamp;
             jobs_in_flight_.fetch_add(1);
-            pool.submit([this, &terrain, c, gen]() {
+            pool.submit([this, &terrain, c, gen, stamp]() {
                 ZoneScopedN("chunk_worker_job");
                 using clock = std::chrono::steady_clock;
                 const auto t0 = clock::now();
                 FinishedChunk fc;
                 fc.coord = c;
                 fc.generation = gen;
+                fc.request_stamp = stamp;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
                 const auto t_after_terrain = clock::now();
                 fc.terrain_ms = std::chrono::duration<double, std::milli>(
@@ -352,7 +354,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
     // In-flight jobs that fell out of window stay scheduled but their
     // results get dropped in drain_finished.
     for (auto it = requested_.begin(); it != requested_.end(); ) {
-        if (!in_window(*it)) it = requested_.erase(it);
+        if (!in_window(it->first)) it = requested_.erase(it);
         else ++it;
     }
 
@@ -375,16 +377,18 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 // bug, not a file-corruption case; fall through to terrain
                 // rather than crash-loop on it.
             }
-            requested_.insert(c);
+            const std::uint64_t stamp = ++request_seq_;
+            requested_[c] = stamp;
             jobs_in_flight_.fetch_add(1);
             ++stats.requested;
-            pool.submit([this, &terrain, c, gen]() {
+            pool.submit([this, &terrain, c, gen, stamp]() {
                 ZoneScopedN("chunk_worker_job");
                 using clock = std::chrono::steady_clock;
                 const auto t0 = clock::now();
                 FinishedChunk fc;
                 fc.coord = c;
                 fc.generation = gen;
+                fc.request_stamp = stamp;
                 terrain.fill_chunk(c.x, c.z, fc.chunk);
                 const auto t_after_terrain = clock::now();
                 fc.terrain_ms = std::chrono::duration<double, std::milli>(
@@ -425,6 +429,12 @@ int World::drain_finished(int max_per_frame) {
         if (fc.generation != generation_) continue;
         auto req_it = requested_.find(fc.coord);
         if (req_it == requested_.end()) continue;  // evicted mid-flight
+        // Only the job answering the OUTSTANDING request may land. A coord
+        // cycles through request/evict/re-request while its first job sits
+        // in the pool backlog; accepting any coord match would let stale
+        // pristine terrain drain over a newer stash restore and unmark the
+        // slot, silently reverting the player's edit.
+        if (fc.request_stamp != req_it->second) continue;
         requested_.erase(req_it);
 
         const auto up_t0 = clock::now();
@@ -446,16 +456,18 @@ int World::pending_async() const { return jobs_in_flight_.load(); }
 
 void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
                                   core::ThreadPool& pool) {
-    requested_.insert(c);
+    const std::uint64_t stamp = ++request_seq_;
+    requested_[c] = stamp;
     jobs_in_flight_.fetch_add(1);
     const std::uint64_t gen = generation_;
-    pool.submit([this, c, gen, chunk = std::move(chunk)]() mutable {
+    pool.submit([this, c, gen, stamp, chunk = std::move(chunk)]() mutable {
         ZoneScopedN("chunk_loaded_worker_job");
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
         FinishedChunk fc;
         fc.coord = c;
         fc.generation = gen;
+        fc.request_stamp = stamp;
         fc.chunk = std::move(chunk);
         fc.from_decoded = true;
         // terrain step is skipped on the load path; the chunk came off disk
