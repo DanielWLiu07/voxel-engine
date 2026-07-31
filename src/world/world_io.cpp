@@ -62,7 +62,13 @@ bool write_bytes(const fs::path& path,
     if (!f) return false;
     f.write(reinterpret_cast<const char*>(bytes.data()),
             static_cast<std::streamsize>(bytes.size()));
-    return static_cast<bool>(f);
+    // Close before judging success: filebuf buffers more than most RLE
+    // chunks, so stream state before the flush-on-close proves nothing
+    // reached the OS - and the destructor's implicit flush swallows
+    // errors (ENOSPC, I/O failure). An unverified .tmp here is exactly
+    // the torn file the atomic rename exists to prevent.
+    f.close();
+    return !f.fail();
 }
 
 bool read_bytes(const fs::path& path, std::vector<std::uint8_t>& out) {

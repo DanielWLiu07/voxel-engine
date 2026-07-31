@@ -278,6 +278,11 @@ private:
         double          worker_ms  = 0.0;
         double          terrain_ms = 0.0;
         std::uint64_t   generation = 0;  // job's world generation at submit
+        // Which outstanding request this job answers. A coord can have
+        // several jobs alive at once (request, evict, re-request while the
+        // first job sits in the pool backlog); drain only accepts the job
+        // whose stamp matches the coord's current entry in requested_.
+        std::uint64_t   request_stamp = 0;
         // True when the chunk bytes came from disk or the edit stash rather
         // than the terrain generator; the built slot is marked
         // player_modified so eviction preserves it.
@@ -300,7 +305,14 @@ private:
     // there); a member so the allocation is reused across passes. Mutable
     // scratch only -- draw_impl stays logically const.
     mutable std::vector<ChunkSlot*> draw_order_;
-    std::unordered_set<ChunkCoord, ChunkCoordHash> requested_;
+    // Outstanding chunk requests, keyed by coord with the stamp of the
+    // job expected to answer. The stamp is what gives requests identity:
+    // without it, a stale in-flight job (queued, evicted, re-requested)
+    // could land in place of a newer one - in the worst case pristine
+    // terrain draining over a stash restore, silently reverting a player
+    // edit and unmarking the slot so the edit never re-stashes.
+    std::unordered_map<ChunkCoord, std::uint64_t, ChunkCoordHash> requested_;
+    std::uint64_t request_seq_ = 0;  // main-thread only, like generation_
     // Player-modified chunks that streaming evicted, kept as RLE bytes
     // (~KBs each at the measured ~58x ratio). An entry outlives its
     // restore on purpose: a restore job can itself be evicted mid-flight,
