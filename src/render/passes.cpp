@@ -129,14 +129,26 @@ void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
     water_shader.set_float("u_time", fv.time_seconds);
     water_shader.set_float("u_sea_level", sea_level);
     water_shader.set_vec3("u_camera_pos", fv.camera_pos);
-    water_shader.set_vec3("u_deep_color",    glm::vec3(0.05f, 0.18f, 0.32f));
-    water_shader.set_vec3("u_shallow_color", glm::vec3(0.32f, 0.62f, 0.78f));
+    // Authored for the HDR/ACES pipeline (the original values predated it
+    // and tonemapped to a washed gray film): a saturated deep blue body
+    // and a sky-cyan glancing tone, both below 1.0 so bloom never grabs
+    // the water itself - only the sun glints. Scaled by the day cycle
+    // (noon daylight ambient+sun averages ~1.41) so night water darkens
+    // with the world instead of glowing noon blue.
+    const glm::vec3 daylight =
+        light.ambient + light.sun_color * std::max(light.sun_height, 0.0f);
+    const float day_scale = glm::clamp(
+        (daylight.r + daylight.g + daylight.b) / (3.0f * 1.41f), 0.03f, 1.0f);
+    water_shader.set_vec3("u_deep_color",
+                          day_scale * glm::vec3(0.016f, 0.10f, 0.22f));
+    water_shader.set_vec3("u_shallow_color",
+                          day_scale * glm::vec3(0.15f, 0.42f, 0.60f));
     water_shader.set_vec3("u_sun_dir", light.sun_dir);
     water_shader.set_vec3("u_sun_color", light.sun_color);
     water_shader.set_vec3("u_fog_color", light.sky_horizon);
     water_shader.set_float("u_fog_start", fv.fog_start);
     water_shader.set_float("u_fog_end", fv.fog_end);
-    water_shader.set_float("u_alpha", 0.70f);
+    water_shader.set_float("u_alpha", 0.95f);
     water.draw();
 
     glEnable(GL_CULL_FACE);
