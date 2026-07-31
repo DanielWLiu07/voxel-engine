@@ -17,6 +17,15 @@ the seamless loop).
 | :---: | :---: |
 | Eye level: raking CSM shadows across a cobble terrace, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 436**, byte-identical to the unculled render |
 
+![Lake at midday: rippled water with analytic wave normals, sun glints, day-cycle-scaled color](docs/media/lake.jpg)
+
+The water surface is one sine-displaced plane that follows the player;
+its normals come from the wave field's exact derivatives (plus two
+normal-only detail ripples), so the lighting shows moving waves without
+a denser grid. Reproduce: `./build/voxel_engine --pose-at
+288,40,-340,-90,-15 --radius 10 --screenshot-after 150 --shot-file
+lake.png` (seed 1337).
+
 Stills are reproducible the same way: `./build/voxel_engine
 --screenshot-after 60 --pose center` renders a deterministic pose (locked
 camera, frozen shader time, coord-sorted draw order) and writes a
