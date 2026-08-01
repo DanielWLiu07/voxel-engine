@@ -63,7 +63,7 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
 **Headline (radius 12, gameplay pose, vsync off):**
-4.6 ms avg frame time, **219 fps**, **36 M triangles/sec**, 198 MB peak RSS.
+4.4 ms avg frame time, **229 fps**, **38 M triangles/sec**, 188 MB peak RSS.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
 workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
 frustum + occlusion cull), 167k triangles rendered, post-process the largest
@@ -114,14 +114,14 @@ the idle-machine measure and reproduce when the box is quiet):
 
 | Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |   289 | 180 |  78,224 | 5.19 | 4.28 | 22.35 | 192.7 | 15.1M | 156 MB |
-| 10 |   441 | 280 | 117,626 | 4.42 | 4.29 | 10.96 | 226.5 | 26.6M | 170 MB |
-| 12 |   625 | 396 | 167,200 | 4.56 | 4.54 | 10.15 | 219.1 | 36.6M | 198 MB |
-| 14 |   841 | 531 | 230,560 | 5.08 | 4.83 | 12.88 | 196.7 | 45.3M | 239 MB |
-| 16 | 1,089 | 687 | 299,170 | 4.79 | 4.72 | 10.11 | 208.6 | 62.4M | 281 MB |
+|  8 |   289 | 180 |  78,224 | 4.79 | 4.23 | 19.06 | 208.8 | 16.3M | 144 MB |
+| 10 |   441 | 280 | 117,626 | 4.24 | 4.14 |  9.59 | 235.7 | 27.7M | 158 MB |
+| 12 |   625 | 396 | 167,200 | 4.36 | 4.26 | 11.26 | 229.1 | 38.3M | 188 MB |
+| 14 |   841 | 531 | 230,560 | 4.75 | 4.55 | 10.13 | 210.4 | 48.5M | 218 MB |
+| 16 | 1,089 | 687 | 299,170 | 4.65 | 4.53 | 10.32 | 215.2 | 64.4M | 251 MB |
 
-Triangle count grows 3.8x from radius 8 to 16; avg frame time grows
-21%. Section-AABB culling holds drawn-section count close to a
+Triangle count grows 3.8x from radius 8 to 16; avg frame time stays
+flat to within a few percent. Section-AABB culling holds drawn-section count close to a
 constant fraction (~30% of loaded sections) while the loaded world
 quadruples. Peak RSS scales sub-linearly with chunk count because the
 worker pool, FBOs, and post-process chain are constant cost on top of
