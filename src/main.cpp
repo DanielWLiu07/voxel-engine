@@ -740,9 +740,18 @@ int main(int argc, char** argv) {
     int version = gladLoadGL(glfwGetProcAddress);
     if (version == 0) {
         std::fprintf(stderr, "gladLoadGL failed\n");
-        glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
+    // Owns window + GLFW teardown from here on. Declared BEFORE every
+    // GL-owning object (shaders, world, FBOs, meshes) so it destructs
+    // after them: their glDelete* calls must run while the context is
+    // still current. Destroying GL objects after glfwTerminate() is
+    // undefined behavior that macOS happens to forgive and other drivers
+    // do not - and it also lets every early return below just return.
+    struct WindowGuard {
+        GLFWwindow* window;
+        ~WindowGuard() { glfwDestroyWindow(window); glfwTerminate(); }
+    } window_guard{window};
     std::printf("GL %d.%d  |  vendor=%s  |  renderer=%s\n",
                 GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version),
                 glGetString(GL_VENDOR), glGetString(GL_RENDERER));
@@ -774,14 +783,12 @@ int main(int argc, char** argv) {
         !load_shader(tonemap_shader,   root, "fullscreen.vert",   "tonemap.frag",       "tonemap")   ||
         !load_shader(wireframe_shader, root, "wireframe.vert",    "wireframe.frag",     "wireframe") ||
         !load_shader(crosshair_shader, root, "crosshair.vert",    "crosshair.frag",     "crosshair")) {
-        glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
 
     gfx::PostProcess postfx;
     if (!postfx.init(fb_w, fb_h)) {
         std::fprintf(stderr, "post-process init failed\n");
-        glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
     int postfx_w = fb_w, postfx_h = fb_h;
@@ -790,14 +797,12 @@ int main(int argc, char** argv) {
 
     gfx::CascadedShadowMap shadow_map;
     if (!shadow_map.init(kShadowMapSize)) {
-        glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
     std::printf("[shadow] %dx%d depth map allocated\n", kShadowMapSize, kShadowMapSize);
 
     gfx::WaterPlane water;
     if (!water.init(kWaterSize, kWaterSubdiv)) {
-        glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
     std::printf("[water] %.0fx%.0f plane (sea level y=%d, follows player)\n",
@@ -917,7 +922,6 @@ int main(int argc, char** argv) {
     ui::DebugHud hud;
     if (!hud.init(window)) {
         std::fprintf(stderr, "imgui init failed\n");
-        glfwDestroyWindow(window); glfwTerminate();
         return EXIT_FAILURE;
     }
 
@@ -1448,7 +1452,6 @@ int main(int argc, char** argv) {
             std::printf("\nVALIDATE chunks=%zu bad_triangles=%d %s\n",
                         wrld.chunk_count(), bad, bad == 0 ? "ok" : "FAILED");
             if (bad > 0) {
-                glfwDestroyWindow(window); glfwTerminate();
                 return EXIT_FAILURE;
             }
             glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -1497,7 +1500,6 @@ int main(int argc, char** argv) {
                         wrld.block_at(ex, ey, ez) == world::BlockId::Air ? 1 : 0,
                         ok ? "ok" : "FAILED");
             if (!ok) {
-                glfwDestroyWindow(window); glfwTerminate();
                 return EXIT_FAILURE;
             }
             glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -1712,7 +1714,5 @@ int main(int argc, char** argv) {
     if (sky_vao)       glDeleteVertexArrays(1, &sky_vao);
     if (crosshair_vao) glDeleteVertexArrays(1, &crosshair_vao);
     if (block_atlas)   glDeleteTextures(1, &block_atlas);
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return EXIT_SUCCESS;
+    return EXIT_SUCCESS;  // window_guard tears down GLFW after the GL objects
 }
