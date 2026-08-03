@@ -846,7 +846,7 @@ int main(int argc, char** argv) {
         // the RLE chunks (meshing them through the same worker pool), then the
         // per-frame streamer fills in anything outside the snapshot as the
         // player moves -- the same path F6 uses to swap worlds at runtime.
-        auto l = world::load_world(wrld, load_path, terrain, pool);
+        auto l = world::load_world(wrld, load_path, terrain, pool, terrain_seed);
         if (l.files_skipped > 0) {
             std::fprintf(stderr,
                          "[world] WARNING: %d chunk file%s in %s corrupt or "
@@ -1052,7 +1052,7 @@ int main(int argc, char** argv) {
         }
         if (input.key_pressed(GLFW_KEY_F5)) {
             auto t0 = std::chrono::steady_clock::now();
-            auto s = world::save_world(wrld, kSaveDir);
+            auto s = world::save_world(wrld, kSaveDir, terrain_seed);
             double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
             double ratio = s.bytes_written > 0
@@ -1073,7 +1073,7 @@ int main(int argc, char** argv) {
         if (input.key_pressed(GLFW_KEY_F6)) {
             auto t0 = std::chrono::steady_clock::now();
             wrld.clear_all();
-            auto l = world::load_world(wrld, kSaveDir, terrain, pool);
+            auto l = world::load_world(wrld, kSaveDir, terrain, pool, terrain_seed);
             double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
             double ratio = l.bytes_read > 0
@@ -1235,14 +1235,14 @@ int main(int argc, char** argv) {
 
                 using clock = std::chrono::steady_clock;
                 const auto save_t0 = clock::now();
-                auto s = world::save_world(wrld, io_dir.string());
+                auto s = world::save_world(wrld, io_dir.string(), terrain_seed);
                 const double save_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - save_t0).count();
 
                 wrld.clear_all();
 
                 const auto load_t0 = clock::now();
-                auto l = world::load_world(wrld, io_dir.string(), terrain, pool);
+                auto l = world::load_world(wrld, io_dir.string(), terrain, pool, terrain_seed);
                 const double load_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - load_t0).count();
 
@@ -1430,7 +1430,7 @@ int main(int argc, char** argv) {
         // frames are needed -- the world is complete when streaming drained.
         if (!save_path.empty() && initial_load_logged) {
             auto t0 = std::chrono::steady_clock::now();
-            auto s = world::save_world(wrld, save_path);
+            auto s = world::save_world(wrld, save_path, terrain_seed);
             const double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
             const double ratio = s.bytes_written > 0

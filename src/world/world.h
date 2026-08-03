@@ -180,7 +180,11 @@ public:
     // drain_finished on the main (GL) thread. Used by load_world to
     // parallelize meshing during F6 / --bench-io load - mirrors the
     // enqueue_grid_async path but skips terrain.fill_chunk.
-    void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool);
+    // preserve_on_evict: true when the chunk cannot be regenerated from
+    // the active terrain (player edits, or a save whose seed is unknown
+    // or different); such chunks stash on eviction instead of vanishing.
+    void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool,
+                               bool preserve_on_evict);
 
     // Drops every chunk + pending request. Intended for full-world reload
     // (save/load); does not cancel in-flight worker jobs but their results
@@ -225,6 +229,14 @@ public:
 
     std::size_t chunk_count() const { return chunks_.size(); }
     bool has_chunk(ChunkCoord c) const { return chunks_.count(c) != 0; }
+
+    // Whether the resident chunk at c is preserve-marked (player edits or
+    // a non-regenerable load); this is what the save format's edited bit
+    // records so a later load keeps preserving it.
+    bool chunk_is_preserved(ChunkCoord c) const {
+        auto it = chunks_.find(c);
+        return it != chunks_.end() && it->second->player_modified;
+    }
 
     // Edited chunks currently held only as an RLE stash (evicted from the
     // resident set but preserved). Save must include these or edits made
@@ -283,10 +295,11 @@ private:
         // first job sits in the pool backlog); drain only accepts the job
         // whose stamp matches the coord's current entry in requested_.
         std::uint64_t   request_stamp = 0;
-        // True when the chunk bytes came from disk or the edit stash rather
-        // than the terrain generator; the built slot is marked
-        // player_modified so eviction preserves it.
-        bool            from_decoded = false;
+        // True when the chunk must never be regenerated from terrain
+        // (player edits, stash restores, or disk chunks the active seed
+        // cannot reproduce); the built slot is marked player_modified so
+        // eviction preserves it.
+        bool            preserve_on_evict = false;
     };
 
     // Shared draw loop. reachable == nullptr means frustum-only; otherwise
@@ -313,12 +326,14 @@ private:
     // edit and unmarking the slot so the edit never re-stashes.
     std::unordered_map<ChunkCoord, std::uint64_t, ChunkCoordHash> requested_;
     std::uint64_t request_seq_ = 0;  // main-thread only, like generation_
-    // Player-modified chunks that streaming evicted, kept as RLE bytes
+    // Preserve-marked chunks that streaming evicted, kept as RLE bytes
     // (~KBs each at the measured ~58x ratio). An entry outlives its
     // restore on purpose: a restore job can itself be evicted mid-flight,
     // and the surviving entry is then the only copy of the edit. Eviction
-    // of a modified chunk re-encodes and overwrites the entry. Grows with
-    // the number of distinct chunks the player has edited, not play time.
+    // of a preserved chunk re-encodes and overwrites the entry. Grows
+    // with the number of distinct preserved chunks: edited ones, plus
+    // loaded ones only when the save's manifest seed is absent or does
+    // not match the active terrain (then nothing on disk is regenerable).
     std::unordered_map<ChunkCoord, std::vector<std::uint8_t>, ChunkCoordHash>
         edited_stash_;
 

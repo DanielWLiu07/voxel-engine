@@ -358,9 +358,12 @@ void test_rle_decode_rejects_unknown_block_ids() {
     // Re-stamp the CRC after each corruption so decode gets past the
     // integrity check and the id validation itself is what rejects.
     auto restamp_crc = [](std::vector<std::uint8_t>& b) {
-        const std::uint32_t crc = world::crc32_ieee(
-            b.data() + world::kChunkFormatHeaderBytes,
-            b.size() - world::kChunkFormatHeaderBytes);
+        // v3's CRC covers header bytes 0..7 plus the payload, skipping the
+        // CRC field itself; rebuild that span contiguously to recompute.
+        std::vector<std::uint8_t> span(b.begin(), b.begin() + 8);
+        span.insert(span.end(),
+                    b.begin() + world::kChunkFormatHeaderBytes, b.end());
+        const std::uint32_t crc = world::crc32_ieee(span.data(), span.size());
         b[8]  = static_cast<std::uint8_t>(crc & 0xFF);
         b[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
         b[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
@@ -374,6 +377,57 @@ void test_rle_decode_rejects_unknown_block_ids() {
     restamp_crc(bytes);
     EXPECT(!world::decode_chunk_rle(bytes, out),
            "decode rejects an 0xFF id byte");
+}
+
+void test_edited_flag_roundtrip_and_integrity() {
+    // The v3 header carries the edited bit and the CRC covers it: the
+    // flag must survive a round trip both ways, and a flipped flag bit in
+    // otherwise valid bytes must fail decode rather than silently turn a
+    // hand-edited chunk back into a regenerable one.
+    world::Chunk a;
+    a.set(3, 40, 5, world::BlockId::Stone);
+    for (bool edited : {false, true}) {
+        auto bytes = world::encode_chunk_rle(a, edited);
+        world::Chunk out;
+        bool decoded_edited = !edited;  // must be overwritten
+        EXPECT(world::decode_chunk_rle(bytes, out, &decoded_edited),
+               "control: v3 bytes decode");
+        EXPECT(decoded_edited == edited, "edited bit survives the round trip");
+        bytes[5] ^= 0x01;  // flip the edited bit, nothing else
+        EXPECT(!world::decode_chunk_rle(bytes, out),
+               "a flipped edited bit fails the CRC");
+    }
+    // Unknown flag bits are a format error even with a matching CRC.
+    auto bytes = world::encode_chunk_rle(a, false);
+    bytes[5] |= 0x02;
+    std::vector<std::uint8_t> span(bytes.begin(), bytes.begin() + 8);
+    span.insert(span.end(),
+                bytes.begin() + world::kChunkFormatHeaderBytes, bytes.end());
+    const std::uint32_t crc = world::crc32_ieee(span.data(), span.size());
+    bytes[8]  = static_cast<std::uint8_t>(crc & 0xFF);
+    bytes[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
+    bytes[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
+    bytes[11] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
+    world::Chunk out;
+    EXPECT(!world::decode_chunk_rle(bytes, out),
+           "unknown flag bits are rejected even with a matching CRC");
+}
+
+void test_world_manifest_roundtrip() {
+    namespace fs = std::filesystem;
+    const auto dir = (fs::temp_directory_path() / "voxel_manifest_test").string();
+    fs::create_directories(dir);
+    EXPECT(world::write_world_manifest(dir, 0xDEADBEEFu), "manifest writes");
+    std::uint32_t seed = 0;
+    EXPECT(world::read_world_manifest(dir, seed), "manifest reads back");
+    EXPECT(seed == 0xDEADBEEFu, "manifest seed survives the round trip");
+    // Garbage contents are a read failure, not a zero seed.
+    {
+        std::ofstream f(fs::path(dir) / "world.manifest", std::ios::trunc);
+        f << "not a manifest";
+    }
+    EXPECT(!world::read_world_manifest(dir, seed), "garbage manifest rejected");
+    fs::remove_all(dir);
 }
 
 void test_crc_known_answer() {
@@ -833,6 +887,8 @@ int main() {
     test_rle_decode_rejects_unknown_block_ids();
     test_crc_known_answer();
     test_crc_catches_a_valid_looking_bit_flip();
+    test_edited_flag_roundtrip_and_integrity();
+    test_world_manifest_roundtrip();
     test_rle_fuzz_roundtrip();
     test_rle_full_chunk_boundary();
     test_rle_decoder_fuzz_no_crash();
