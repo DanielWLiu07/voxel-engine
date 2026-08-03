@@ -105,17 +105,39 @@ bool write_bytes_atomic(const fs::path& path,
     return true;
 }
 
-SaveStats save_world(const World& w, const std::string& dir) {
+bool write_world_manifest(const std::string& dir, std::uint32_t seed) {
+    const std::string line = "seed " + std::to_string(seed) + "\n";
+    return write_bytes_atomic(fs::path(dir) / "world.manifest",
+                              {line.begin(), line.end()});
+}
+
+bool read_world_manifest(const std::string& dir, std::uint32_t& seed_out) {
+    std::vector<std::uint8_t> buf;
+    if (!read_bytes(fs::path(dir) / "world.manifest", buf)) return false;
+    const std::string text(buf.begin(), buf.end());
+    if (text.rfind("seed ", 0) != 0) return false;
+    unsigned long long v = 0;
+    std::size_t used = 0;
+    try { v = std::stoull(text.substr(5), &used); } catch (...) { return false; }
+    if (v > 0xFFFFFFFFull) return false;
+    seed_out = static_cast<std::uint32_t>(v);
+    return true;
+}
+
+SaveStats save_world(const World& w, const std::string& dir,
+                     std::uint32_t terrain_seed) {
     SaveStats stats;
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) return stats;
 
     fs::path base = dir;
-    bool any_error = false;
+    bool any_error = !write_world_manifest(dir, terrain_seed);
     w.for_each_chunk([&](ChunkCoord c, const Chunk& chunk) {
         if (any_error) return;
-        auto bytes = encode_chunk_rle(chunk);
+        // The edited bit rides in the chunk header so a load without this
+        // session's memory still knows which chunks it must preserve.
+        auto bytes = encode_chunk_rle(chunk, w.chunk_is_preserved(c));
         fs::path path = base / chunk_filename(c);
         if (!write_bytes_atomic(path, bytes)) { any_error = true; return; }
         ++stats.chunks_written;
@@ -139,10 +161,20 @@ SaveStats save_world(const World& w, const std::string& dir) {
 
 LoadStats load_world(World& w, const std::string& dir,
                      const TerrainGen& /*fallback_terrain*/,
-                     core::ThreadPool& pool) {
+                     core::ThreadPool& pool,
+                     std::uint32_t active_seed) {
     LoadStats stats;
     std::error_code ec;
     if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return stats;
+
+    // Without a manifest whose seed matches the active terrain, nothing
+    // on disk is regenerable and every chunk loads preserve-marked (the
+    // conservative pre-manifest behavior). With a match, only chunks
+    // whose header carries the edited bit are preserved; the rest can be
+    // dropped on eviction and regenerated on re-entry.
+    std::uint32_t manifest_seed = 0;
+    stats.seed_matched = read_world_manifest(dir, manifest_seed) &&
+                         manifest_seed == active_seed;
 
     fs::directory_iterator it(dir, ec);
     if (ec) return stats;
@@ -165,11 +197,13 @@ LoadStats load_world(World& w, const std::string& dir,
         if (!read_bytes(entry.path(), buf)) { ++stats.files_skipped; continue; }
 
         Chunk chunk;
-        if (!decode_chunk_rle(buf, chunk)) { ++stats.files_skipped; continue; }
+        bool edited = false;
+        if (!decode_chunk_rle(buf, chunk, &edited)) { ++stats.files_skipped; continue; }
 
         stats.bytes_read += buf.size();
         stats.bytes_raw  += static_cast<std::size_t>(kChunkVolume);
-        w.enqueue_decoded_chunk(coord, std::move(chunk), pool);
+        w.enqueue_decoded_chunk(coord, std::move(chunk), pool,
+                                edited || !stats.seed_matched);
         ++enqueued;
     }
 

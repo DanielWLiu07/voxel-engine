@@ -43,7 +43,13 @@ std::uint32_t read_u32_le(const std::uint8_t* p) {
 
 }  // namespace
 
-std::uint32_t crc32_ieee(const std::uint8_t* data, std::size_t len) {
+namespace {
+
+// Raw table-driven update over the pre-inverted running state, so the CRC
+// can cover discontiguous spans (v3 checksums header bytes 0..7 plus the
+// payload, skipping the CRC field itself).
+std::uint32_t crc32_update(std::uint32_t crc, const std::uint8_t* data,
+                           std::size_t len) {
     // Table built once, on first use; 256 u32s, thread-safe init.
     static const auto table = [] {
         std::array<std::uint32_t, 256> t{};
@@ -55,19 +61,24 @@ std::uint32_t crc32_ieee(const std::uint8_t* data, std::size_t len) {
         }
         return t;
     }();
-    std::uint32_t crc = 0xFFFFFFFFu;
     for (std::size_t i = 0; i < len; ++i)
         crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
-    return crc ^ 0xFFFFFFFFu;
+    return crc;
 }
 
-std::vector<std::uint8_t> encode_chunk_rle(const Chunk& c) {
+}  // namespace
+
+std::uint32_t crc32_ieee(const std::uint8_t* data, std::size_t len) {
+    return crc32_update(0xFFFFFFFFu, data, len) ^ 0xFFFFFFFFu;
+}
+
+std::vector<std::uint8_t> encode_chunk_rle(const Chunk& c, bool edited) {
     std::vector<std::uint8_t> out;
     out.reserve(kChunkFormatHeaderBytes + 64);
 
     out.insert(out.end(), kMagic, kMagic + 4);
     append_u8(out, kChunkFormatVersion);
-    append_u8(out, 0);
+    append_u8(out, edited ? 0x01 : 0x00);  // flags
     append_u16_le(out, 0);
     append_u32_le(out, 0);  // CRC placeholder, patched after the payload
 
@@ -97,8 +108,12 @@ std::vector<std::uint8_t> encode_chunk_rle(const Chunk& c) {
     }
     if (have_run) flush(run_id, run_len);
 
-    const std::uint32_t crc = crc32_ieee(out.data() + kChunkFormatHeaderBytes,
-                                         out.size() - kChunkFormatHeaderBytes);
+    // v3: the CRC covers the 8 header bytes before it as well as the
+    // payload, so the version and flags (the edited bit in particular)
+    // are integrity-checked too. The CRC field itself is skipped.
+    std::uint32_t crc = crc32_update(0xFFFFFFFFu, out.data(), 8);
+    crc = crc32_update(crc, out.data() + kChunkFormatHeaderBytes,
+                       out.size() - kChunkFormatHeaderBytes) ^ 0xFFFFFFFFu;
     out[8]  = static_cast<std::uint8_t>(crc & 0xFF);
     out[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
     out[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
@@ -106,18 +121,21 @@ std::vector<std::uint8_t> encode_chunk_rle(const Chunk& c) {
     return out;
 }
 
-bool decode_chunk_rle(const std::vector<std::uint8_t>& bytes, Chunk& out) {
+bool decode_chunk_rle(const std::vector<std::uint8_t>& bytes, Chunk& out,
+                      bool* edited) {
     if (bytes.size() < kChunkFormatHeaderBytes) return false;
     if (std::memcmp(bytes.data(), kMagic, 4) != 0) return false;
     if (bytes[4] != kChunkFormatVersion) return false;
-    // reserved bytes [5..7] ignored on read.
+    if ((bytes[5] & ~0x01u) != 0) return false;  // unknown flag bits
+    if (bytes[6] != 0 || bytes[7] != 0) return false;  // reserved
 
-    // Integrity first: a payload that fails its CRC is corrupt regardless
-    // of whether the damage happens to spell valid runs.
+    // Integrity first: bytes that fail the CRC are corrupt regardless of
+    // whether the damage happens to spell a valid header and runs. Covers
+    // header bytes 0..7 (version and flags included) plus the payload.
     const std::uint32_t stored = read_u32_le(bytes.data() + 8);
-    const std::uint32_t actual =
-        crc32_ieee(bytes.data() + kChunkFormatHeaderBytes,
-                   bytes.size() - kChunkFormatHeaderBytes);
+    std::uint32_t actual = crc32_update(0xFFFFFFFFu, bytes.data(), 8);
+    actual = crc32_update(actual, bytes.data() + kChunkFormatHeaderBytes,
+                          bytes.size() - kChunkFormatHeaderBytes) ^ 0xFFFFFFFFu;
     if (stored != actual) return false;
 
     Chunk decoded;
@@ -147,6 +165,7 @@ bool decode_chunk_rle(const std::vector<std::uint8_t>& bytes, Chunk& out) {
     if (total != static_cast<std::uint32_t>(kChunkVolume)) return false;
     if (cursor != bytes.size()) return false;
     out = std::move(decoded);
+    if (edited) *edited = (bytes[5] & 0x01u) != 0;
     return true;
 }
 
