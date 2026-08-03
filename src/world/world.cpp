@@ -343,7 +343,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             // generator would silently undo them. Unmodified chunks are
             // cheaper to regenerate than to keep.
             if (it->second->player_modified) {
-                edited_stash_[it->first] = encode_chunk_rle(it->second->chunk);
+                edited_stash_[it->first] = encode_chunk_rle(it->second->chunk, /*edited=*/true);
                 ++stats.stashed;
             }
             it = chunks_.erase(it);
@@ -369,7 +369,8 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             if (auto sit = edited_stash_.find(c); sit != edited_stash_.end()) {
                 Chunk restored;
                 if (decode_chunk_rle(sit->second, restored)) {
-                    enqueue_decoded_chunk(c, std::move(restored), pool);
+                    enqueue_decoded_chunk(c, std::move(restored), pool,
+                                          /*preserve_on_evict=*/true);
                     ++stats.restored;
                     continue;
                 }
@@ -444,7 +445,7 @@ int World::drain_finished(int max_per_frame) {
                        fc.visibility, quad_ibo_));
         // Chunks that came from disk or the edit stash must keep stashing
         // on eviction; the terrain generator cannot reproduce them.
-        if (inserted) slot_it->second->player_modified = fc.from_decoded;
+        if (inserted) slot_it->second->player_modified = fc.preserve_on_evict;
         total_upload_ms_ += std::chrono::duration<double, std::milli>(
             clock::now() - up_t0).count();
         ++uploaded;
@@ -455,12 +456,14 @@ int World::drain_finished(int max_per_frame) {
 int World::pending_async() const { return jobs_in_flight_.load(); }
 
 void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
-                                  core::ThreadPool& pool) {
+                                  core::ThreadPool& pool,
+                                  bool preserve_on_evict) {
     const std::uint64_t stamp = ++request_seq_;
     requested_[c] = stamp;
     jobs_in_flight_.fetch_add(1);
     const std::uint64_t gen = generation_;
-    pool.submit([this, c, gen, stamp, chunk = std::move(chunk)]() mutable {
+    pool.submit([this, c, gen, stamp, preserve_on_evict,
+                 chunk = std::move(chunk)]() mutable {
         ZoneScopedN("chunk_loaded_worker_job");
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
@@ -469,7 +472,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         fc.generation = gen;
         fc.request_stamp = stamp;
         fc.chunk = std::move(chunk);
-        fc.from_decoded = true;
+        fc.preserve_on_evict = preserve_on_evict;
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
