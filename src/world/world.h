@@ -51,7 +51,6 @@ struct ChunkSection {
     gfx::AABB    aabb{};
     std::uint32_t index_offset = 0;
     std::uint32_t index_count  = 0;
-    int           quad_count   = 0;
     bool          has_mesh     = false;
 };
 
@@ -67,7 +66,6 @@ struct ChunkSlot {
     // Union of section AABBs - the chunk-level fast-path test. If this misses
     // the frustum, we skip all section tests for the chunk.
     gfx::AABB  chunk_aabb{};
-    int        quad_count_total = 0;  // sum of section quad counts
     bool       any_section_has_mesh = false;
     // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
     // and index data uploaded for it. Summed across resident chunks to get
@@ -157,7 +155,6 @@ public:
     struct StreamStats {
         int evicted = 0;
         int requested = 0;
-        int loaded = 0;
         // Edit persistence: modified chunks RLE-stashed on eviction, and
         // chunks rebuilt from the stash (instead of the terrain generator)
         // on re-entry.
@@ -185,6 +182,8 @@ public:
     // or different); such chunks stash on eviction instead of vanishing.
     void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool,
                                bool preserve_on_evict);
+    void request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
+                               core::ThreadPool& pool);
 
     // Drops every chunk + pending request. Intended for full-world reload
     // (save/load); does not cancel in-flight worker jobs but their results

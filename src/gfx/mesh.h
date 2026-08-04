@@ -84,15 +84,12 @@ public:
     // comes from the shared quad pattern, which outlives this mesh.
     void upload(std::span<const VertexPacked> vertices,
                 QuadIndexBuffer& quad_indices);
-    void draw() const;
 
     // Index-range draw for sliced meshes (e.g. per-section sub-chunks sharing
     // one VBO per chunk). Caller is responsible for binding the VAO first
     // (typically via bind() before the first draw_range_bound in a batch).
     void bind() const;
     void draw_range_bound(std::size_t index_offset, std::size_t index_count) const;
-
-    std::size_t index_count() const { return index_count_; }
 
     // Debug-only: pulls this mesh's vertices and the index range it draws
     // back off the GPU (the indices come from the shared quad buffer) so a

@@ -18,6 +18,11 @@ struct LightingFrame {
     glm::vec3 light_dir;        // sun_dir, or slightly-up below horizon
 };
 
+// Mean channel of (ambient + sun) at noon - what compute_lighting's
+// amb_noon and sun_noon constants sum to, averaged. Anchors brightness
+// scales that are authored against noon light (the water body colors).
+inline constexpr float kNoonDaylightMean = 1.41f;
+
 // time_of_day in [0, 1): 0.25 sunrise, 0.5 noon, 0.75 sunset, 0 midnight.
 LightingFrame compute_lighting(float time_of_day);
 

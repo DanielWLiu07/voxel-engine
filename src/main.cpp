@@ -51,7 +51,7 @@ constexpr int   kShadowMapSize  = 2048;
 constexpr float kShadowNear     = 0.1f;
 constexpr float kShadowFar      = 250.0f;
 
-const glm::vec3 kBlockPalette[8] = {
+const glm::vec3 kBlockPalette[world::kBlockPaletteSize] = {
     {1.00f, 0.00f, 1.00f},  // Air (never seen)
     {0.55f, 0.55f, 0.58f},  // Stone
     {0.50f, 0.34f, 0.20f},  // Dirt
@@ -61,6 +61,26 @@ const glm::vec3 kBlockPalette[8] = {
     {0.22f, 0.46f, 0.20f},  // Leaves
     {0.95f, 0.96f, 0.98f},  // Snow
 };
+
+// Shared save/load console report: both directions measure and print
+// identically, so the two lines stay comparable at a glance.
+void print_io_report(const char* verb, int chunks, double ms,
+                     std::size_t bytes_disk, std::size_t bytes_raw,
+                     bool ok) {
+    const double ratio = bytes_disk > 0
+        ? static_cast<double>(bytes_raw) / bytes_disk : 0.0;
+    const double secs = ms / 1000.0;
+    const double mb_disk = bytes_disk / (1024.0 * 1024.0);
+    const double mb_raw  = bytes_raw  / (1024.0 * 1024.0);
+    std::printf("[%s] %s %d chunks in %.1f ms  |  "
+                "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  "
+                "%.0f MB/s disk, %.0f MB/s raw  |  %s\n",
+                verb, verb[0] == 's' ? "wrote" : "read", chunks, ms,
+                mb_disk, mb_raw, ratio,
+                secs > 0.0 ? mb_disk / secs : 0.0,
+                secs > 0.0 ? mb_raw  / secs : 0.0,
+                ok ? "ok" : "ERRORS");
+}
 
 void glfw_error(int code, const char* desc) {
     std::fprintf(stderr, "[glfw] error %d: %s\n", code, desc);
@@ -221,9 +241,10 @@ int run_bench() {
 
     // Section-level cull: same frustum, but each visible chunk's sections
     // are tested individually. Mirrors what World::draw_visible_with does.
-    auto count_sections_visible = [&](float zfar) {
-        gfx::Frustum f;
-        f.from_view_proj(cam.proj_matrix(kAspect, kFovDeg, 0.1f, zfar) * view);
+    // The one section-counting body; the occlusion comparison below feeds
+    // it the surface pose's frustum, so both lines measure with literally
+    // the same code.
+    auto count_frustum_sections = [&](const gfx::Frustum& f) {
         int drawn = 0;
         for (std::size_t i = 0; i < tight_aabbs.size(); ++i) {
             if (!f.intersects_aabb(tight_aabbs[i])) continue;
@@ -233,7 +254,10 @@ int run_bench() {
         }
         return drawn;
     };
-    const int sections_drawn = count_sections_visible(kFarTight);
+    gfx::Frustum tight_section_f;
+    tight_section_f.from_view_proj(
+        cam.proj_matrix(kAspect, kFovDeg, 0.1f, kFarTight) * view);
+    const int sections_drawn = count_frustum_sections(tight_section_f);
 
     // ---- Occlusion cull (section-graph BFS) ---------------------------
     // Same drawn-section count as above, but only sections the camera can
@@ -252,16 +276,6 @@ int run_bench() {
         if (c.x < -kRadius || c.x > kRadius ||
             c.z < -kRadius || c.z > kRadius) return -1;
         return (c.z + kRadius) * side + (c.x + kRadius);
-    };
-    auto count_frustum_sections = [&](const gfx::Frustum& f) {
-        int drawn = 0;
-        for (std::size_t i = 0; i < tight_aabbs.size(); ++i) {
-            if (!f.intersects_aabb(tight_aabbs[i])) continue;
-            for (const auto& s : section_bounds[i]) {
-                if (s.has_mesh && f.intersects_aabb(s.aabb)) ++drawn;
-            }
-        }
-        return drawn;
     };
     // Returns -1 if the BFS refused to run (camera chunk unloaded - can't
     // happen for these poses, but keep the contract visible).
@@ -1058,20 +1072,8 @@ int main(int argc, char** argv) {
             auto s = world::save_world(wrld, kSaveDir, terrain_seed);
             double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
-            double ratio = s.bytes_written > 0
-                ? static_cast<double>(s.bytes_raw) / s.bytes_written : 0.0;
-            const double secs = ms / 1000.0;
-            const double mb_disk = s.bytes_written / (1024.0 * 1024.0);
-            const double mb_raw  = s.bytes_raw     / (1024.0 * 1024.0);
-            const double disk_mbps = secs > 0.0 ? mb_disk / secs : 0.0;
-            const double raw_mbps  = secs > 0.0 ? mb_raw  / secs : 0.0;
-            std::printf("[save] wrote %d chunks in %.1f ms  |  "
-                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  "
-                        "%.0f MB/s disk, %.0f MB/s raw  |  %s\n",
-                        s.chunks_written, ms,
-                        mb_disk, mb_raw, ratio,
-                        disk_mbps, raw_mbps,
-                        s.ok ? "ok" : "ERRORS");
+            print_io_report("save", s.chunks_written, ms,
+                            s.bytes_written, s.bytes_raw, s.ok);
         }
         if (input.key_pressed(GLFW_KEY_F6)) {
             auto t0 = std::chrono::steady_clock::now();
@@ -1079,20 +1081,9 @@ int main(int argc, char** argv) {
             auto l = world::load_world(wrld, kSaveDir, pool, terrain_seed);
             double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
-            double ratio = l.bytes_read > 0
-                ? static_cast<double>(l.bytes_raw) / l.bytes_read : 0.0;
-            const double secs = ms / 1000.0;
-            const double mb_disk = l.bytes_read / (1024.0 * 1024.0);
-            const double mb_raw  = l.bytes_raw  / (1024.0 * 1024.0);
-            const double disk_mbps = secs > 0.0 ? mb_disk / secs : 0.0;
-            const double raw_mbps  = secs > 0.0 ? mb_raw  / secs : 0.0;
-            std::printf("[load] read %d chunks in %.1f ms  |  "
-                        "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  "
-                        "%.0f MB/s disk, %.0f MB/s raw  |  %s\n",
-                        l.chunks_read, ms,
-                        mb_disk, mb_raw, ratio,
-                        disk_mbps, raw_mbps,
-                        l.ok && l.files_skipped == 0 ? "ok" : "ERRORS");
+            print_io_report("load", l.chunks_read, ms,
+                            l.bytes_read, l.bytes_raw,
+                            l.ok && l.files_skipped == 0);
             if (l.files_skipped > 0) {
                 std::fprintf(stderr, "[load] WARNING: %d chunk file%s corrupt "
                              "or unreadable, skipped\n",

@@ -66,7 +66,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
                               const world::World& wrld,
                               const FrameView& fv,
                               const LightingFrame& light,
-                              const glm::vec3 palette[8],
+                              const glm::vec3 palette[world::kBlockPaletteSize],
                               const gfx::Frustum& view_frustum,
                               bool occlusion_cull) {
     ZoneScopedN("terrain_pass");
@@ -96,7 +96,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
         glUniform1fv(cf_loc, gfx::kNumCascades, fv.cascade_far);
     }
     GLint pal_loc = glGetUniformLocation(terrain_shader.id(), "u_palette");
-    if (pal_loc >= 0) glUniform3fv(pal_loc, 8, &palette[0].x);
+    if (pal_loc >= 0) glUniform3fv(pal_loc, world::kBlockPaletteSize, &palette[0].x);
 
     if (occlusion_cull) {
         return wrld.draw_visible_occluded(view_frustum, fv.camera_pos,
@@ -133,12 +133,13 @@ void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
     // and tonemapped to a washed gray film): a saturated deep blue body
     // and a sky-cyan glancing tone, both below 1.0 so bloom never grabs
     // the water itself - only the sun glints. Scaled by the day cycle
-    // (noon daylight ambient+sun averages ~1.41) so night water darkens
-    // with the world instead of glowing noon blue.
+    // against noon daylight so night water darkens with the world
+    // instead of glowing noon blue.
     const glm::vec3 daylight =
         light.ambient + light.sun_color * std::max(light.sun_height, 0.0f);
     const float day_scale = glm::clamp(
-        (daylight.r + daylight.g + daylight.b) / (3.0f * 1.41f), 0.03f, 1.0f);
+        (daylight.r + daylight.g + daylight.b) / (3.0f * kNoonDaylightMean),
+        0.03f, 1.0f);
     water_shader.set_vec3("u_deep_color",
                           day_scale * glm::vec3(0.016f, 0.10f, 0.22f));
     water_shader.set_vec3("u_shallow_color",

@@ -133,27 +133,27 @@ SaveStats save_world(const World& w, const std::string& dir,
 
     fs::path base = dir;
     bool any_error = !write_world_manifest(dir, terrain_seed);
-    w.for_each_chunk([&](ChunkCoord c, const Chunk& chunk) {
-        if (any_error) return;
-        // The edited bit rides in the chunk header so a load without this
-        // session's memory still knows which chunks it must preserve.
-        auto bytes = encode_chunk_rle(chunk, w.chunk_is_preserved(c));
+    // One write-and-tally path for both sources below, so the resident
+    // sweep and the stash sweep cannot drift in how they count.
+    auto write_chunk = [&](ChunkCoord c, const std::vector<std::uint8_t>& bytes) {
         fs::path path = base / chunk_filename(c);
         if (!write_bytes_atomic(path, bytes)) { any_error = true; return; }
         ++stats.chunks_written;
         stats.bytes_written += bytes.size();
         stats.bytes_raw     += static_cast<std::size_t>(kChunkVolume);
+    };
+    w.for_each_chunk([&](ChunkCoord c, const Chunk& chunk) {
+        if (any_error) return;
+        // The edited bit rides in the chunk header so a load without this
+        // session's memory still knows which chunks it must preserve.
+        write_chunk(c, encode_chunk_rle(chunk, w.chunk_is_preserved(c)));
     });
     // Edited chunks the stream window evicted exist only as the RLE stash;
     // a save that skipped them would drop every edit made out of view. A
     // coord both stashed and resident saves the resident copy (newer).
     w.for_each_stashed([&](ChunkCoord c, const std::vector<std::uint8_t>& bytes) {
         if (any_error || w.has_chunk(c)) return;
-        fs::path path = base / chunk_filename(c);
-        if (!write_bytes_atomic(path, bytes)) { any_error = true; return; }
-        ++stats.chunks_written;
-        stats.bytes_written += bytes.size();
-        stats.bytes_raw     += static_cast<std::size_t>(kChunkVolume);
+        write_chunk(c, bytes);
     });
     stats.ok = !any_error;
     return stats;

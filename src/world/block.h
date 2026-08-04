@@ -21,6 +21,10 @@ constexpr std::uint8_t kMaxBlockId = static_cast<std::uint8_t>(BlockId::Snow);
 
 constexpr bool is_solid(BlockId b) { return b != BlockId::Air; }
 
+// One entry per block id, Air included: the size of every id-indexed
+// lookup table (the render palette in particular).
+constexpr int kBlockPaletteSize = static_cast<int>(kMaxBlockId) + 1;
+
 constexpr bool face_visible(BlockId self, BlockId neighbor) {
     return is_solid(self) && !is_solid(neighbor);
 }

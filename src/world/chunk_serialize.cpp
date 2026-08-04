@@ -12,6 +12,12 @@ namespace {
 constexpr char    kMagic[4]   = {'V', 'C', 'H', 'K'};
 constexpr std::uint32_t kMaxRunLen = 0xFFFFu;  // u16 capacity
 
+// Header byte offsets, matching the layout comment in chunk_serialize.h.
+constexpr std::size_t kOffsetVersion  = 4;
+constexpr std::size_t kOffsetFlags    = 5;
+constexpr std::size_t kOffsetReserved = 6;  // u16, bytes 6..7
+constexpr std::size_t kOffsetCrc      = 8;  // u32, bytes 8..11
+
 void append_u8(std::vector<std::uint8_t>& out, std::uint8_t v) {
     out.push_back(v);
 }
@@ -46,8 +52,8 @@ std::uint32_t read_u32_le(const std::uint8_t* p) {
 namespace {
 
 // Raw table-driven update over the pre-inverted running state, so the CRC
-// can cover discontiguous spans (v3 checksums header bytes 0..7 plus the
-// payload, skipping the CRC field itself).
+// can cover discontiguous spans (chunk_crc above stitches header and
+// payload together).
 std::uint32_t crc32_update(std::uint32_t crc, const std::uint8_t* data,
                            std::size_t len) {
     // Table built once, on first use; 256 u32s, thread-safe init.
@@ -64,6 +70,18 @@ std::uint32_t crc32_update(std::uint32_t crc, const std::uint8_t* data,
     for (std::size_t i = 0; i < len; ++i)
         crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
     return crc;
+}
+
+std::uint32_t crc32_update(std::uint32_t, const std::uint8_t*, std::size_t);
+
+// The format's CRC rule, stated once for encode and decode both: seed,
+// run over header bytes 0..7 (magic, version, flags, reserved), skip the
+// CRC field itself, continue over the payload, final-xor. If these two
+// sides ever disagree, every save fails to load.
+std::uint32_t chunk_crc(const std::uint8_t* bytes, std::size_t size) {
+    std::uint32_t crc = crc32_update(0xFFFFFFFFu, bytes, kOffsetCrc);
+    return crc32_update(crc, bytes + kChunkFormatHeaderBytes,
+                        size - kChunkFormatHeaderBytes) ^ 0xFFFFFFFFu;
 }
 
 }  // namespace
@@ -108,16 +126,13 @@ std::vector<std::uint8_t> encode_chunk_rle(const Chunk& c, bool edited) {
     }
     if (have_run) flush(run_id, run_len);
 
-    // v3: the CRC covers the 8 header bytes before it as well as the
-    // payload, so the version and flags (the edited bit in particular)
-    // are integrity-checked too. The CRC field itself is skipped.
-    std::uint32_t crc = crc32_update(0xFFFFFFFFu, out.data(), 8);
-    crc = crc32_update(crc, out.data() + kChunkFormatHeaderBytes,
-                       out.size() - kChunkFormatHeaderBytes) ^ 0xFFFFFFFFu;
-    out[8]  = static_cast<std::uint8_t>(crc & 0xFF);
-    out[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
-    out[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
-    out[11] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
+    // v3: the CRC covers the header (version and flags - the edited bit
+    // in particular - are integrity-checked too) plus the payload.
+    const std::uint32_t crc = chunk_crc(out.data(), out.size());
+    out[kOffsetCrc]     = static_cast<std::uint8_t>(crc & 0xFF);
+    out[kOffsetCrc + 1] = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
+    out[kOffsetCrc + 2] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
+    out[kOffsetCrc + 3] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
     return out;
 }
 
@@ -125,18 +140,15 @@ bool decode_chunk_rle(const std::vector<std::uint8_t>& bytes, Chunk& out,
                       bool* edited) {
     if (bytes.size() < kChunkFormatHeaderBytes) return false;
     if (std::memcmp(bytes.data(), kMagic, 4) != 0) return false;
-    if (bytes[4] != kChunkFormatVersion) return false;
-    if ((bytes[5] & ~0x01u) != 0) return false;  // unknown flag bits
-    if (bytes[6] != 0 || bytes[7] != 0) return false;  // reserved
+    if (bytes[kOffsetVersion] != kChunkFormatVersion) return false;
+    if ((bytes[kOffsetFlags] & ~0x01u) != 0) return false;  // unknown bits
+    if (bytes[kOffsetReserved] != 0 || bytes[kOffsetReserved + 1] != 0)
+        return false;
 
     // Integrity first: bytes that fail the CRC are corrupt regardless of
-    // whether the damage happens to spell a valid header and runs. Covers
-    // header bytes 0..7 (version and flags included) plus the payload.
-    const std::uint32_t stored = read_u32_le(bytes.data() + 8);
-    std::uint32_t actual = crc32_update(0xFFFFFFFFu, bytes.data(), 8);
-    actual = crc32_update(actual, bytes.data() + kChunkFormatHeaderBytes,
-                          bytes.size() - kChunkFormatHeaderBytes) ^ 0xFFFFFFFFu;
-    if (stored != actual) return false;
+    // whether the damage happens to spell a valid header and runs.
+    const std::uint32_t stored = read_u32_le(bytes.data() + kOffsetCrc);
+    if (stored != chunk_crc(bytes.data(), bytes.size())) return false;
 
     Chunk decoded;
     std::size_t cursor = kChunkFormatHeaderBytes;
@@ -165,7 +177,7 @@ bool decode_chunk_rle(const std::vector<std::uint8_t>& bytes, Chunk& out,
     if (total != static_cast<std::uint32_t>(kChunkVolume)) return false;
     if (cursor != bytes.size()) return false;
     out = std::move(decoded);
-    if (edited) *edited = (bytes[5] & 0x01u) != 0;
+    if (edited) *edited = (bytes[kOffsetFlags] & 0x01u) != 0;
     return true;
 }
 
