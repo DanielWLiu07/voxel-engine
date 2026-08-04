@@ -50,7 +50,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
                               const world::World& wrld,
                               const FrameView& fv,
                               const LightingFrame& light,
-                              const glm::vec3 palette[8],
+                              const glm::vec3 palette[world::kBlockPaletteSize],
                               const gfx::Frustum& view_frustum,
                               bool occlusion_cull);
 

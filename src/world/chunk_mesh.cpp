@@ -178,7 +178,7 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
             // per slice (once for each direction) so the actual geometry
             // for both faces of the slice ships in this iteration.
             auto emit_dir = [&](std::vector<std::uint8_t>& mask, int dir) {
-            for (int v = 0; v < v_size; ++v) {
+                for (int v = 0; v < v_size; ++v) {
                     for (int u = 0; u < u_size; ) {
                         std::uint8_t id = mask[static_cast<size_t>(v * u_size + u)];
                         if (id == 0) { ++u; continue; }

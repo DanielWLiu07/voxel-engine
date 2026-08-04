@@ -342,39 +342,45 @@ void test_rle_decode_garbage_fails_gracefully() {
            "decode of garbage either returns false or yields a degenerate chunk");
 }
 
+// Fill every cell of the chunk with one block id.
+void fill_chunk_solid(world::Chunk& c, world::BlockId b) {
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                c.set(x, y, z, b);
+}
+
+// Recompute and patch a v3 chunk buffer's CRC (header bytes 0..7 plus the
+// payload, skipping the CRC field itself), so corruption tests can get
+// past the integrity check and exercise the validation behind it.
+void restamp_v3_crc(std::vector<std::uint8_t>& b) {
+    std::vector<std::uint8_t> span(b.begin(), b.begin() + 8);
+    span.insert(span.end(), b.begin() + world::kChunkFormatHeaderBytes, b.end());
+    const std::uint32_t crc = world::crc32_ieee(span.data(), span.size());
+    b[8]  = static_cast<std::uint8_t>(crc & 0xFF);
+    b[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
+    b[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
+    b[11] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
+}
+
 void test_rle_decode_rejects_unknown_block_ids() {
     // Encode a valid chunk, then corrupt the first run's id byte to a value
     // no BlockId defines. A corrupt save must fail decode, not smuggle
     // garbage ids into the world (they would render as a clamped wrong
     // texture and break the id -> block invariant everywhere else).
     world::Chunk a;
-    for (int y = 0; y < world::kChunkSizeY; ++y)
-        for (int z = 0; z < world::kChunkSizeZ; ++z)
-            for (int x = 0; x < world::kChunkSizeX; ++x)
-                a.set(x, y, z, world::BlockId::Stone);
+    fill_chunk_solid(a, world::BlockId::Stone);
     auto bytes = world::encode_chunk_rle(a);
     world::Chunk out;
     EXPECT(world::decode_chunk_rle(bytes, out), "control: intact bytes decode");
     // Re-stamp the CRC after each corruption so decode gets past the
     // integrity check and the id validation itself is what rejects.
-    auto restamp_crc = [](std::vector<std::uint8_t>& b) {
-        // v3's CRC covers header bytes 0..7 plus the payload, skipping the
-        // CRC field itself; rebuild that span contiguously to recompute.
-        std::vector<std::uint8_t> span(b.begin(), b.begin() + 8);
-        span.insert(span.end(),
-                    b.begin() + world::kChunkFormatHeaderBytes, b.end());
-        const std::uint32_t crc = world::crc32_ieee(span.data(), span.size());
-        b[8]  = static_cast<std::uint8_t>(crc & 0xFF);
-        b[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
-        b[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
-        b[11] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
-    };
     bytes[world::kChunkFormatHeaderBytes] = world::kMaxBlockId + 1;
-    restamp_crc(bytes);
+    restamp_v3_crc(bytes);
     EXPECT(!world::decode_chunk_rle(bytes, out),
            "decode rejects a run whose id no BlockId defines");
     bytes[world::kChunkFormatHeaderBytes] = 0xFF;
-    restamp_crc(bytes);
+    restamp_v3_crc(bytes);
     EXPECT(!world::decode_chunk_rle(bytes, out),
            "decode rejects an 0xFF id byte");
 }
@@ -400,14 +406,7 @@ void test_edited_flag_roundtrip_and_integrity() {
     // Unknown flag bits are a format error even with a matching CRC.
     auto bytes = world::encode_chunk_rle(a, false);
     bytes[5] |= 0x02;
-    std::vector<std::uint8_t> span(bytes.begin(), bytes.begin() + 8);
-    span.insert(span.end(),
-                bytes.begin() + world::kChunkFormatHeaderBytes, bytes.end());
-    const std::uint32_t crc = world::crc32_ieee(span.data(), span.size());
-    bytes[8]  = static_cast<std::uint8_t>(crc & 0xFF);
-    bytes[9]  = static_cast<std::uint8_t>((crc >> 8) & 0xFF);
-    bytes[10] = static_cast<std::uint8_t>((crc >> 16) & 0xFF);
-    bytes[11] = static_cast<std::uint8_t>((crc >> 24) & 0xFF);
+    restamp_v3_crc(bytes);
     world::Chunk out;
     EXPECT(!world::decode_chunk_rle(bytes, out),
            "unknown flag bits are rejected even with a matching CRC");
@@ -442,10 +441,7 @@ void test_crc_catches_a_valid_looking_bit_flip() {
     // run structure intact. Every structural check passes on these bytes;
     // only the checksum knows they are not what was saved.
     world::Chunk a;
-    for (int y = 0; y < world::kChunkSizeY; ++y)
-        for (int z = 0; z < world::kChunkSizeZ; ++z)
-            for (int x = 0; x < world::kChunkSizeX; ++x)
-                a.set(x, y, z, world::BlockId::Stone);
+    fill_chunk_solid(a, world::BlockId::Stone);
     auto bytes = world::encode_chunk_rle(a);
     world::Chunk out;
     EXPECT(world::decode_chunk_rle(bytes, out), "control: intact bytes decode");
@@ -546,10 +542,7 @@ void test_rle_full_chunk_boundary() {
     // kChunkVolume (65,536) exceeds the u16 max run length (65,535) by one, so
     // an all-solid chunk must split into two runs. Pin that boundary.
     world::Chunk a;
-    for (int y = 0; y < world::kChunkSizeY; ++y)
-        for (int z = 0; z < world::kChunkSizeZ; ++z)
-            for (int x = 0; x < world::kChunkSizeX; ++x)
-                a.set(x, y, z, world::BlockId::Stone);
+    fill_chunk_solid(a, world::BlockId::Stone);
     EXPECT(a.solid_count() == world::kChunkVolume, "chunk fully solid");
 
     auto bytes = world::encode_chunk_rle(a);

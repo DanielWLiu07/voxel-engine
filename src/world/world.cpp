@@ -151,7 +151,6 @@ void apply_sections(ChunkSlot& slot,
                     std::array<SectionBuild, kSectionsPerChunk>&& built,
                     gfx::QuadIndexBuffer& quad_indices) {
     slot.any_section_has_mesh = false;
-    slot.quad_count_total     = 0;
     bool union_init = false;
 
     std::vector<gfx::VertexPacked> all_vertices;
@@ -164,7 +163,6 @@ void apply_sections(ChunkSlot& slot,
         auto& src = built[i];
         if (src.quad_count == 0) {
             dst.has_mesh     = false;
-            dst.quad_count   = 0;
             dst.index_offset = 0;
             dst.index_count  = 0;
             continue;
@@ -177,12 +175,10 @@ void apply_sections(ChunkSlot& slot,
         all_vertices.insert(all_vertices.end(), src.vertices.begin(), src.vertices.end());
 
         dst.aabb         = {src.aabb_min, src.aabb_max};
-        dst.quad_count   = src.quad_count;
         dst.index_offset = 6 * quad_base;
         dst.index_count  = static_cast<std::uint32_t>(6 * src.quad_count);
         dst.has_mesh     = true;
         slot.any_section_has_mesh = true;
-        slot.quad_count_total += src.quad_count;
 
         if (!union_init) {
             slot.chunk_aabb = dst.aabb;
@@ -286,6 +282,37 @@ World::GenStats World::generate_grid(int radius, const TerrainGen& terrain) {
     return stats;
 }
 
+// Registers an outstanding request for c (stamping it so a stale in-flight
+// job can never satisfy a newer request) and submits the terrain+mesh job.
+// The one place the worker-side pipeline is spelled out; the grid preload
+// and the streaming window both go through it.
+void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
+                                  core::ThreadPool& pool) {
+    const std::uint64_t stamp = ++request_seq_;
+    const std::uint64_t gen = generation_;
+    requested_[c] = stamp;
+    jobs_in_flight_.fetch_add(1);
+    pool.submit([this, &terrain, c, gen, stamp]() {
+        ZoneScopedN("chunk_worker_job");
+        using clock = std::chrono::steady_clock;
+        const auto t0 = clock::now();
+        FinishedChunk fc;
+        fc.coord = c;
+        fc.generation = gen;
+        fc.request_stamp = stamp;
+        terrain.fill_chunk(c.x, c.z, fc.chunk);
+        const auto t_after_terrain = clock::now();
+        fc.terrain_ms = std::chrono::duration<double, std::milli>(
+            t_after_terrain - t0).count();
+        fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+        fc.visibility = compute_section_visibility(fc.chunk);
+        fc.worker_ms = std::chrono::duration<double, std::milli>(
+            clock::now() - t0).count();
+        std::lock_guard<std::mutex> lock(finished_mutex_);
+        finished_.push(std::move(fc));
+    });
+}
+
 void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
                                core::ThreadPool& pool) {
     chunks_.clear();
@@ -297,33 +324,10 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
     }
     jobs_in_flight_.store(0);
     ++generation_;  // any job from a previous grid is now stale
-    const std::uint64_t gen = generation_;
 
     for (int cz = -radius; cz <= radius; ++cz) {
         for (int cx = -radius; cx <= radius; ++cx) {
-            ChunkCoord c{cx, cz};
-            const std::uint64_t stamp = ++request_seq_;
-            requested_[c] = stamp;
-            jobs_in_flight_.fetch_add(1);
-            pool.submit([this, &terrain, c, gen, stamp]() {
-                ZoneScopedN("chunk_worker_job");
-                using clock = std::chrono::steady_clock;
-                const auto t0 = clock::now();
-                FinishedChunk fc;
-                fc.coord = c;
-                fc.generation = gen;
-                fc.request_stamp = stamp;
-                terrain.fill_chunk(c.x, c.z, fc.chunk);
-                const auto t_after_terrain = clock::now();
-                fc.terrain_ms = std::chrono::duration<double, std::milli>(
-                    t_after_terrain - t0).count();
-                fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
-                fc.visibility = compute_section_visibility(fc.chunk);
-                fc.worker_ms = std::chrono::duration<double, std::milli>(
-                    clock::now() - t0).count();
-                std::lock_guard<std::mutex> lock(finished_mutex_);
-                finished_.push(std::move(fc));
-            });
+            request_terrain_chunk({cx, cz}, terrain, pool);
         }
     }
 }
@@ -358,7 +362,6 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
         else ++it;
     }
 
-    const std::uint64_t gen = generation_;
     for (int dz = -radius; dz <= radius; ++dz) {
         for (int dx = -radius; dx <= radius; ++dx) {
             ChunkCoord c{center.x + dx, center.z + dz};
@@ -378,29 +381,8 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 // bug, not a file-corruption case; fall through to terrain
                 // rather than crash-loop on it.
             }
-            const std::uint64_t stamp = ++request_seq_;
-            requested_[c] = stamp;
-            jobs_in_flight_.fetch_add(1);
+            request_terrain_chunk(c, terrain, pool);
             ++stats.requested;
-            pool.submit([this, &terrain, c, gen, stamp]() {
-                ZoneScopedN("chunk_worker_job");
-                using clock = std::chrono::steady_clock;
-                const auto t0 = clock::now();
-                FinishedChunk fc;
-                fc.coord = c;
-                fc.generation = gen;
-                fc.request_stamp = stamp;
-                terrain.fill_chunk(c.x, c.z, fc.chunk);
-                const auto t_after_terrain = clock::now();
-                fc.terrain_ms = std::chrono::duration<double, std::milli>(
-                    t_after_terrain - t0).count();
-                fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
-                fc.visibility = compute_section_visibility(fc.chunk);
-                fc.worker_ms = std::chrono::duration<double, std::milli>(
-                    clock::now() - t0).count();
-                std::lock_guard<std::mutex> lock(finished_mutex_);
-                finished_.push(std::move(fc));
-            });
         }
     }
     return stats;

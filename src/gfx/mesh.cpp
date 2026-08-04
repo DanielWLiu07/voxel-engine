@@ -93,13 +93,6 @@ void Mesh::upload(std::span<const VertexPacked> vertices,
     index_count_ = quad_count * 6;
 }
 
-void Mesh::draw() const {
-    if (!vao_ || index_count_ == 0) return;
-    glBindVertexArray(vao_);
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(index_count_),
-                   GL_UNSIGNED_INT, nullptr);
-}
-
 void Mesh::bind() const {
     if (vao_) glBindVertexArray(vao_);
 }
