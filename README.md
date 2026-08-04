@@ -82,6 +82,7 @@ scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 wo
 ./build/voxel_engine --validate            # read GPU meshes back, verify vs voxel data
 ./build/voxel_engine --verify-edit-persistence  # edits must survive chunk eviction
 scripts/verify_occlusion.sh                # occlusion on/off renders must be byte-identical
+scripts/verify_persistence.sh              # v3 edited-bit + manifest contract, end to end
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
@@ -107,6 +108,7 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
 | GPU mesh validation (`--validate`) | reads every VBO/EBO back off the GPU and checks each triangle is an axis-aligned face backed by a solid block; composes with `--load`/`--seed`, exits nonzero on offenders |
 | Edit persistence (`--verify-edit-persistence`) | `stashed=1 restored=1 survived=1`: a block edit survives its chunk streaming out and back in (modified chunks are RLE-stashed on eviction instead of regenerated; saves include the stash) |
+| Persistence contract (`scripts/verify_persistence.sh`) | loads a saved world twice: with the manifest seed only the edited chunk stashes (`stashed=1`); with a different seed all 169 loaded chunks are conservatively preserved (`stashed=169`) and the edit still survives |
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
 (section/triangle counts are exact at current HEAD; the ms columns are
