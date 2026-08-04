@@ -242,6 +242,12 @@ public:
     // resident set but preserved). Save must include these or edits made
     // outside the current stream window would vanish from the save file.
     std::size_t stash_count() const { return edited_stash_.size(); }
+    // Total RLE bytes the stash holds; O(entries), cheap at edit counts.
+    std::size_t stash_bytes() const {
+        std::size_t total = 0;
+        for (const auto& kv : edited_stash_) total += kv.second.size();
+        return total;
+    }
     void for_each_stashed(
         const std::function<void(ChunkCoord,
                                  const std::vector<std::uint8_t>&)>& fn) const {

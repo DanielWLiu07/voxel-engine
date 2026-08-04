@@ -1,7 +1,6 @@
 #pragma once
 
 #include "core/thread_pool.h"
-#include "world/terrain_gen.h"
 #include "world/world.h"
 
 #include <cstddef>
@@ -55,10 +54,10 @@ SaveStats save_world(const World& w, const std::string& dir,
 // Greedy meshing happens on the worker pool in parallel; the caller's
 // thread (which must own the GL context) drains the finished queue and
 // performs the GL upload. Blocks until all loaded chunks have been
-// inserted into the world. The terrain reference is reserved for future
-// fallback when a saved chunk is missing.
+// inserted into the world. Missing chunks are simply absent: streaming
+// regenerates them on demand (seed-matched loads) or leaves the hole to
+// the stream window like any unvisited coord.
 LoadStats load_world(World& w, const std::string& dir,
-                     const TerrainGen& fallback_terrain,
                      core::ThreadPool& pool,
                      std::uint32_t active_seed);
 

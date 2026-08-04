@@ -160,7 +160,6 @@ SaveStats save_world(const World& w, const std::string& dir,
 }
 
 LoadStats load_world(World& w, const std::string& dir,
-                     const TerrainGen& /*fallback_terrain*/,
                      core::ThreadPool& pool,
                      std::uint32_t active_seed) {
     LoadStats stats;

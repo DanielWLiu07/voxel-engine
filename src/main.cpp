@@ -846,7 +846,7 @@ int main(int argc, char** argv) {
         // the RLE chunks (meshing them through the same worker pool), then the
         // per-frame streamer fills in anything outside the snapshot as the
         // player moves -- the same path F6 uses to swap worlds at runtime.
-        auto l = world::load_world(wrld, load_path, terrain, pool, terrain_seed);
+        auto l = world::load_world(wrld, load_path, pool, terrain_seed);
         if (l.files_skipped > 0) {
             std::fprintf(stderr,
                          "[world] WARNING: %d chunk file%s in %s corrupt or "
@@ -1073,7 +1073,7 @@ int main(int argc, char** argv) {
         if (input.key_pressed(GLFW_KEY_F6)) {
             auto t0 = std::chrono::steady_clock::now();
             wrld.clear_all();
-            auto l = world::load_world(wrld, kSaveDir, terrain, pool, terrain_seed);
+            auto l = world::load_world(wrld, kSaveDir, pool, terrain_seed);
             double ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
             double ratio = l.bytes_read > 0
@@ -1242,7 +1242,7 @@ int main(int argc, char** argv) {
                 wrld.clear_all();
 
                 const auto load_t0 = clock::now();
-                auto l = world::load_world(wrld, io_dir.string(), terrain, pool, terrain_seed);
+                auto l = world::load_world(wrld, io_dir.string(), pool, terrain_seed);
                 const double load_ms = std::chrono::duration<double, std::milli>(
                     clock::now() - load_t0).count();
 
@@ -1587,6 +1587,8 @@ int main(int argc, char** argv) {
         pf.ai_texture_tiles  = ai_texture_tiles;
         pf.triangles_drawn = last_stats.triangles_drawn;
         pf.gpu_bytes       = wrld.resident_gpu_bytes();
+        pf.stash_chunks    = wrld.stash_count();
+        pf.stash_bytes     = wrld.stash_bytes();
         pf.pending_async   = wrld.pending_async();
         pf.initial_load_ms = initial_load_ms;
         pf.total_chunks    = total_chunks;
