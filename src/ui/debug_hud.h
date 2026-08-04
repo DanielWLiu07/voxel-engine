@@ -20,6 +20,10 @@ struct PerfFrame {
     int   ai_texture_tiles = 0;   // >0 -> show the AI-art credit line
     std::size_t triangles_drawn = 0;
     std::size_t gpu_bytes = 0;   // resident vertex + index buffer bytes
+    // Evicted preserve-marked chunks held as RLE bytes (the write-back
+    // stash) and their total size, so stash growth is visible live.
+    std::size_t stash_chunks = 0;
+    std::size_t stash_bytes  = 0;
     int   pending_async = 0;
     // Block-edit remesh latency (full synchronous set_block: greedy remesh
     // + re-bucket + GL upload + visibility). Row hidden until edit_count > 0.

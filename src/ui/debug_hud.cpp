@@ -84,6 +84,11 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         ImGui::Text("gpu mesh mem : %.1f MB",
                     static_cast<double>(f.gpu_bytes) / (1024.0 * 1024.0));
         ImGui::Text("pending gen  : %d", f.pending_async);
+        if (f.stash_chunks > 0) {
+            ImGui::Text("edit stash   : %zu chunks (%.1f KB RLE)",
+                        f.stash_chunks,
+                        static_cast<double>(f.stash_bytes) / 1024.0);
+        }
         if (f.place_block_name) {
             ImGui::Text("place block  : %s (1-7 to switch)", f.place_block_name);
         }
