@@ -4,6 +4,12 @@ Committed measurements, each reproducible from the repo. Deterministic counts
 (triangles, drawn sections, cull ratios) are machine-independent and CI-gated.
 Wall-clock figures depend on machine load and are quoted with their variance.
 
+## `persistence.md` - save format and edit-persistence contract
+
+The v3 chunk format (edited bit, header-covered CRC, world manifest), the
+atomic write path, and the three persistence guarantees, each with the
+command that proves it end to end.
+
 ## `queue_bench.txt` - lock-free vs mutex queue
 
 Throughput/latency sweep of `core/mpmc_queue.h` against a `std::mutex +
