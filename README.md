@@ -83,6 +83,8 @@ scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 wo
 ./build/voxel_engine --verify-edit-persistence  # edits must survive chunk eviction
 scripts/verify_occlusion.sh                # occlusion on/off renders must be byte-identical
 scripts/verify_persistence.sh              # v3 edited-bit + manifest contract, end to end
+./build/voxel_engine --pose-at x,y,z,yaw,pitch --screenshot-after N --shot-file f.png
+                                           # deterministic still from any camera
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
