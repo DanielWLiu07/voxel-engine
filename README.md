@@ -88,6 +88,7 @@ scripts/verify_persistence.sh              # v3 edited-bit + manifest contract, 
 scripts/bench_variance.sh 10 300 center    # run-to-run frame-time distribution
 ./build/queue_bench                        # lock-free vs mutex queue sweep
 scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (logic)
+scripts/audit.sh                           # the whole battery above in one command
 ```
 
 | Metric | Value |
