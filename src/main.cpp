@@ -473,8 +473,11 @@ struct OrbitPose {
     float yaw;
     float pitch;
 };
-OrbitPose orbit_pose_at(int frame, int total) {
-    constexpr glm::vec3 center{-10.0f, 45.0f, -10.0f};
+// Default orbit: the biome triple point near spawn. --orbit-center moves
+// the circle (and optionally the look-at height) so clips can frame other
+// set pieces - the lake at (288,-400) is the other README subject.
+OrbitPose orbit_pose_at(int frame, int total,
+                        glm::vec3 center = {-10.0f, 45.0f, -10.0f}) {
     constexpr float radius = 65.0f;
     constexpr float height = 62.0f;
     const float angle = 2.0f * std::numbers::pi_v<float> *
@@ -503,6 +506,7 @@ int main(int argc, char** argv) {
     // pose. A more representative number than any single vantage point.
     bool bench_orbit = false;
     std::string_view bench_pose = "center";
+    glm::vec3 orbit_center{-10.0f, 45.0f, -10.0f};
     // --seed N picks the terrain seed for the interactive, capture, and
     // frame-bench world, so the greedy and cull numbers can be checked
     // against different maps and clips vary. The CPU --bench keeps its own
@@ -591,6 +595,8 @@ int main(int argc, char** argv) {
                 "                                        benches (overrides --pose); the water/\n"
                 "                                        lake README shot documents an example\n"
                 "  voxel_engine --shot-file NAME         filename for --screenshot-after (in ./screenshots)\n"
+                "  voxel_engine --orbit-center x,z[,y]   move the orbit/capture circle (default\n"
+                "                                        spawn; the lake sits at 288,-400,30)\n"
                 "  voxel_engine --capture-orbit N        orbit the scene over N frames, save each\n"
                 "                                        to ./capture, exit (README clip source)\n"
                 "  voxel_engine --capture-cycle N        fixed pose, one day/night cycle over N\n"
@@ -667,6 +673,17 @@ int main(int argc, char** argv) {
         }
         if (arg == "--no-occlusion") no_occlusion = true;
         // Free-position pose for investigating spots found in screenshots:
+        if (arg == "--orbit-center" && i + 1 < argc) {
+            float x = 0, z = 0, look_y = 45.0f;
+            const int got = std::sscanf(argv[i + 1], "%f,%f,%f", &x, &z, &look_y);
+            if (got < 2) {
+                std::fprintf(stderr, "--orbit-center expects x,z[,look_y]\n");
+                return EXIT_FAILURE;
+            }
+            orbit_center = {x, look_y, z};
+            ++i;
+            continue;
+        }
         // --pose-at x,y,z,yaw,pitch (overrides --pose).
         if (arg == "--pose-at" && i + 1 < argc) {
             float v[5]{};
@@ -921,7 +938,7 @@ int main(int argc, char** argv) {
         } else if (bench_pose == "orbit") {
             // The orbit bench drives the camera per frame; start it at the
             // path's first point so the settle happens where sampling begins.
-            const OrbitPose op = orbit_pose_at(0, bench_frames);
+            const OrbitPose op = orbit_pose_at(0, bench_frames, orbit_center);
             cam.set_position(op.pos);
             cam.set_yaw_pitch(op.yaw, op.pitch);
         } else {
@@ -1134,8 +1151,8 @@ int main(int argc, char** argv) {
             // Cycle parks at the orbit start (frame 0) and spends its
             // frames on time-of-day; orbit sweeps the full circle.
             const OrbitPose op = (orbit_frames > 0)
-                ? orbit_pose_at(capture_frame, orbit_frames)
-                : orbit_pose_at(0, 1);
+                ? orbit_pose_at(capture_frame, orbit_frames, orbit_center)
+                : orbit_pose_at(0, 1, orbit_center);
             cam.set_position(op.pos);
             cam.set_yaw_pitch(op.yaw, op.pitch);
             if (cycle_frames > 0) {
