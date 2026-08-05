@@ -20,11 +20,17 @@ case "$MODE" in
   cycle) OUT=${3:-docs/media/daycycle.gif} ;;
   *) echo "usage: $0 orbit|cycle [frames] [out.gif]" >&2; exit 1 ;;
 esac
+# CLIP_ORBIT_CENTER="x,z[,look_y]" recenters the orbit (the lake clip uses
+# 288,-400,30); unset keeps the spawn triple-point circle.
+CENTER_ARGS=()
+if [ -n "${CLIP_ORBIT_CENTER:-}" ]; then
+  CENTER_ARGS=(--orbit-center "$CLIP_ORBIT_CENTER")
+fi
 WIDTH=${CLIP_GIF_WIDTH:-560}
 FPS=${CLIP_GIF_FPS:-12}
 
 rm -rf capture
-./build/voxel_engine "--capture-$MODE" "$FRAMES"
+./build/voxel_engine "--capture-$MODE" "$FRAMES" "${CENTER_ARGS[@]}"
 
 # Two-pass palette assembly: a shared palette across the whole clip avoids
 # per-frame palette flicker, and lanczos keeps block edges crisp at README
