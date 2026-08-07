@@ -1649,6 +1649,26 @@ int main(int argc, char** argv) {
                 }
                 const double stddev = n > 1
                     ? std::sqrt(var_sum / static_cast<double>(n - 1)) : 0.0;
+                // The two numbers a player actually feels, which an average
+                // hides. 1% low is the mean of the worst 1% of frames
+                // expressed as fps: the rate the engine holds through its
+                // bad moments, not its good ones. over_budget counts frames
+                // that missed a 60 Hz vsync deadline, which is the stutter
+                // an average of 4 ms can still contain.
+                constexpr double kFrameBudgetMs = 1000.0 / 60.0;
+                const std::size_t worst_n =
+                    std::max<std::size_t>(1, n / 100);
+                double worst_sum = 0.0;
+                for (std::size_t i = n - worst_n; i < n; ++i) worst_sum += sorted[i];
+                const double low1_ms = worst_sum / static_cast<double>(worst_n);
+                const double low1_fps = low1_ms > 0.0 ? 1000.0 / low1_ms : 0.0;
+                std::size_t over_budget = 0;
+                for (double v : sorted) {
+                    if (v > kFrameBudgetMs) ++over_budget;
+                }
+                const double over_budget_pct =
+                    100.0 * static_cast<double>(over_budget) /
+                    static_cast<double>(n);
                 // Peak RSS. ru_maxrss is bytes on macOS, kilobytes on Linux.
                 struct rusage ru{};
                 getrusage(RUSAGE_SELF, &ru);
@@ -1676,7 +1696,8 @@ int main(int argc, char** argv) {
                             " min_ms=%.2f max_ms=%.2f stddev_ms=%.2f avg_fps=%.1f"
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
                             " avg_tris=%.0f tris_per_sec=%.0f peak_rss_mb=%.1f"
-                            " gpu_buffers_mb=%.1f\n",
+                            " gpu_buffers_mb=%.1f low1_fps=%.1f"
+                            " over_budget=%zu over_budget_pct=%.1f\n",
                             stream_radius,
                             static_cast<int>(bench_pose.size()), bench_pose.data(),
                             total_chunks, n,
@@ -1685,7 +1706,8 @@ int main(int argc, char** argv) {
                             last_stats.chunks_drawn,
                             last_stats.sections_drawn,
                             last_stats.triangles_drawn,
-                            avg_tris, tris_per_sec, peak_mb, gpu_mb);
+                            avg_tris, tris_per_sec, peak_mb, gpu_mb,
+                            low1_fps, over_budget, over_budget_pct);
                 if (bench_pass_breakdown && !pass_ms_shadow.empty()) {
                     auto mean = [](const std::vector<double>& v) {
                         double s = 0.0; for (double x : v) s += x;
