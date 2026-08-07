@@ -86,17 +86,11 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     // u_atlas already bound to unit 0 by the caller; remind the shader.
     terrain_shader.set_int("u_atlas", 0);
 
-    GLint lvp_loc = glGetUniformLocation(terrain_shader.id(), "u_light_vp");
-    if (lvp_loc >= 0) {
-        glUniformMatrix4fv(lvp_loc, gfx::kNumCascades, GL_FALSE,
-                           &fv.light_vp[0][0][0]);
-    }
-    GLint cf_loc = glGetUniformLocation(terrain_shader.id(), "u_cascade_far");
-    if (cf_loc >= 0) {
-        glUniform1fv(cf_loc, gfx::kNumCascades, fv.cascade_far);
-    }
-    GLint pal_loc = glGetUniformLocation(terrain_shader.id(), "u_palette");
-    if (pal_loc >= 0) glUniform3fv(pal_loc, world::kBlockPaletteSize, &palette[0].x);
+    terrain_shader.set_mat4_array("u_light_vp", fv.light_vp, gfx::kNumCascades);
+    terrain_shader.set_float_array("u_cascade_far", fv.cascade_far,
+                                   gfx::kNumCascades);
+    terrain_shader.set_vec3_array("u_palette", palette,
+                                  world::kBlockPaletteSize);
 
     if (occlusion_cull) {
         return wrld.draw_visible_occluded(view_frustum, fv.camera_pos,
@@ -199,11 +193,9 @@ void draw_crosshair_and_selection(const gfx::Shader& wireframe_shader,
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     crosshair_shader.use();
-    GLint sloc = glGetUniformLocation(crosshair_shader.id(), "u_screen_size");
-    if (sloc >= 0) {
-        glUniform2f(sloc, static_cast<float>(fv.window_w),
-                          static_cast<float>(fv.window_h));
-    }
+    crosshair_shader.set_vec2("u_screen_size",
+                              {static_cast<float>(fv.window_w),
+                               static_cast<float>(fv.window_h)});
     crosshair_shader.set_float("u_arm_px",    12.0f);
     crosshair_shader.set_float("u_stroke_px", 1.0f);
 

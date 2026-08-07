@@ -119,12 +119,32 @@ void Shader::set_float(const char* name, float v) const {
     glUniform1f(uniform_loc(name), v);
 }
 
+void Shader::set_vec2(const char* name, const glm::vec2& v) const {
+    glUniform2fv(uniform_loc(name), 1, glm::value_ptr(v));
+}
+
 void Shader::set_vec3(const char* name, const glm::vec3& v) const {
     glUniform3fv(uniform_loc(name), 1, glm::value_ptr(v));
 }
 
 void Shader::set_mat4(const char* name, const glm::mat4& m) const {
     glUniformMatrix4fv(uniform_loc(name), 1, GL_FALSE, glm::value_ptr(m));
+}
+
+void Shader::set_mat4_array(const char* name, const glm::mat4* m,
+                            int count) const {
+    glUniformMatrix4fv(uniform_loc(name), count, GL_FALSE,
+                       glm::value_ptr(m[0]));
+}
+
+void Shader::set_float_array(const char* name, const float* v,
+                             int count) const {
+    glUniform1fv(uniform_loc(name), count, v);
+}
+
+void Shader::set_vec3_array(const char* name, const glm::vec3* v,
+                            int count) const {
+    glUniform3fv(uniform_loc(name), count, glm::value_ptr(v[0]));
 }
 
 }  // namespace gfx
