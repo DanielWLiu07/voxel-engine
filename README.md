@@ -127,6 +127,16 @@ the idle-machine measure and reproduce when the box is quiet):
 | 14 |   841 | 531 | 230,560 | 4.75 | 4.55 | 10.13 | 210.4 | 48.5M | 218 MB |
 | 16 | 1,089 | 687 | 299,170 | 4.65 | 4.53 | 10.32 | 215.2 | 64.4M | 251 MB |
 
+`BENCH_FRAME` also reports the two numbers an average hides: `low1_fps`
+is the mean of the worst 1% of frames expressed as fps, and
+`over_budget` counts frames that missed a 60 Hz vsync deadline. At
+radius 12 the engine averages ~220 fps but its worst 1% lands between
+27 and 113 fps depending on the run, with 0 to 2 of 300 frames over
+budget (14 of 900 on a longer window). Those outliers are chunk uploads
+and OS scheduling, not steady-state rendering, and they are reported
+rather than smoothed away: a 4.4 ms average can still contain a visible
+hitch, and this is where it would show.
+
 Triangle count grows 3.8x from radius 8 to 16; avg frame time stays
 flat to within a few percent. Section-AABB culling holds drawn-section count close to a
 constant fraction (~30% of loaded sections) while the loaded world
