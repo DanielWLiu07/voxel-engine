@@ -123,6 +123,131 @@ constexpr int axis_size(int axis) {
 
 }  // namespace
 
+namespace {
+
+// One slice of the sweep: the axis being swept, the slice index along it,
+// the two in-plane axes, and their extents. Everything the rectangle
+// merger needs that does not vary within a slice.
+struct SliceContext {
+    const Chunk& chunk;
+    int d;
+    int u_axis;
+    int v_axis;
+    int u_size;
+    int v_size;
+    int slice;
+};
+
+// Rectangle merge + emit for one direction's mask. Called twice per slice
+// (once per face direction), so the geometry for both faces of the slice
+// ships in one iteration. Consumes the mask: every emitted rectangle is
+// zeroed so the sweep never emits it twice.
+void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
+                       int dir, ChunkMeshData& out) {
+    for (int v = 0; v < ctx.v_size; ++v) {
+        for (int u = 0; u < ctx.u_size; ) {
+            std::uint8_t id = mask[static_cast<size_t>(v * ctx.u_size + u)];
+            if (id == 0) { ++u; continue; }
+
+            int w = 1;
+            while (u + w < ctx.u_size
+                   && mask[static_cast<size_t>(v * ctx.u_size + u + w)] == id) ++w;
+
+            int h = 1;
+            while (v + h < ctx.v_size) {
+                bool row_matches = true;
+                for (int k = 0; k < w; ++k) {
+                    if (mask[static_cast<size_t>((v + h) * ctx.u_size + u + k)] != id) {
+                        row_matches = false;
+                        break;
+                    }
+                }
+                if (!row_matches) break;
+                ++h;
+            }
+
+            // kFaces/kPackedNormals order is +X,-X,+Y,-Y,+Z,-Z.
+            const int face_idx = 2 * ctx.d + (dir > 0 ? 0 : 1);
+
+            auto make_corner = [&](int du, int dv) {
+                glm::vec3 c(0.0f);
+                c[ctx.d]      = static_cast<float>(ctx.slice);
+                c[ctx.u_axis] = static_cast<float>(u + du);
+                c[ctx.v_axis] = static_cast<float>(v + dv);
+                return c;
+            };
+            glm::vec3 p00 = make_corner(0, 0);
+            glm::vec3 p10 = make_corner(w, 0);
+            glm::vec3 p11 = make_corner(w, h);
+            glm::vec3 p01 = make_corner(0, h);
+
+            // AO samples sit on the slice's outside cell.
+            const int out_d = (dir > 0) ? ctx.slice : (ctx.slice - 1);
+            auto sample_solid = [&](int sd, int su, int sv) -> int {
+                int xa, ya, za;
+                slice_coords(ctx.d, ctx.u_axis, ctx.v_axis, sd, su, sv, xa, ya, za);
+                return is_solid(ctx.chunk.get_or_air(xa, ya, za)) ? 1 : 0;
+            };
+            auto vertex_ao = [&](int du, int dv) {
+                const int U = u + du * w;
+                const int V = v + dv * h;
+                const int du_step = (du == 0) ? -1 : 0;
+                const int dv_step = (dv == 0) ? -1 : 0;
+                int s1 = sample_solid(out_d, U + du_step,             V + (dv == 0 ?  0 : -1));
+                int s2 = sample_solid(out_d, U + (du == 0 ? 0 : -1),  V + dv_step);
+                int sc = sample_solid(out_d, U + du_step,             V + dv_step);
+                return corner_ao(s1, s2, sc);
+            };
+
+            int ao00 = vertex_ao(0, 0);
+            int ao10 = vertex_ao(1, 0);
+            int ao11 = vertex_ao(1, 1);
+            int ao01 = vertex_ao(0, 1);
+
+            gfx::VertexPacked corner[4];
+            int n = 0;
+            auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
+                corner[n++] = pack_vertex(p, face_idx, uu, vv, ao, id);
+            };
+
+            if (dir > 0) {
+                push(p00, 0.0f, 0.0f, ao00);
+                push(p10, static_cast<float>(w), 0.0f, ao10);
+                push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
+                push(p01, 0.0f, static_cast<float>(h), ao01);
+            } else {
+                push(p00, 0.0f, 0.0f, ao00);
+                push(p01, 0.0f, static_cast<float>(h), ao01);
+                push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
+                push(p10, static_cast<float>(w), 0.0f, ao10);
+            }
+
+            // ao_flip: cut the other diagonal when it is more
+            // contrasty so the gradient doesn't appear torn.
+            // The index pattern is fixed engine-wide (shared
+            // quad buffer), so the flip lives in the vertex
+            // order: rotating by one makes {0,1,2},{0,2,3}
+            // produce triangles (1,2,3),(1,3,0) - the flipped
+            // diagonal, same winding.
+            const int rot = (ao00 + ao11) < (ao10 + ao01) ? 1 : 0;
+            for (int k = 0; k < 4; ++k) {
+                out.vertices.push_back(corner[(k + rot) % 4]);
+            }
+            ++out.quad_count;
+
+            for (int dv = 0; dv < h; ++dv) {
+                for (int du = 0; du < w; ++du) {
+                    mask[static_cast<size_t>((v + dv) * ctx.u_size + u + du)] = 0;
+                }
+            }
+
+            u += w;
+        }
+    }
+}
+
+}  // namespace
+
 // Greedy mesh: sweep 6 (axis, dir) combos. Per slice, build a BlockId mask
 // then merge contiguous same-id cells into maximal rectangles.
 ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
@@ -174,114 +299,11 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                 }
             }
 
-            // Rectangle merge + emit for one direction's mask. Called twice
-            // per slice (once for each direction) so the actual geometry
-            // for both faces of the slice ships in this iteration.
-            auto emit_dir = [&](std::vector<std::uint8_t>& mask, int dir) {
-                for (int v = 0; v < v_size; ++v) {
-                    for (int u = 0; u < u_size; ) {
-                        std::uint8_t id = mask[static_cast<size_t>(v * u_size + u)];
-                        if (id == 0) { ++u; continue; }
 
-                        int w = 1;
-                        while (u + w < u_size
-                               && mask[static_cast<size_t>(v * u_size + u + w)] == id) ++w;
-
-                        int h = 1;
-                        while (v + h < v_size) {
-                            bool row_matches = true;
-                            for (int k = 0; k < w; ++k) {
-                                if (mask[static_cast<size_t>((v + h) * u_size + u + k)] != id) {
-                                    row_matches = false;
-                                    break;
-                                }
-                            }
-                            if (!row_matches) break;
-                            ++h;
-                        }
-
-                        // kFaces/kPackedNormals order is +X,-X,+Y,-Y,+Z,-Z.
-                        const int face_idx = 2 * d + (dir > 0 ? 0 : 1);
-
-                        auto make_corner = [&](int du, int dv) {
-                            glm::vec3 c(0.0f);
-                            c[d]      = static_cast<float>(s);
-                            c[u_axis] = static_cast<float>(u + du);
-                            c[v_axis] = static_cast<float>(v + dv);
-                            return c;
-                        };
-                        glm::vec3 p00 = make_corner(0, 0);
-                        glm::vec3 p10 = make_corner(w, 0);
-                        glm::vec3 p11 = make_corner(w, h);
-                        glm::vec3 p01 = make_corner(0, h);
-
-                        // AO samples sit on the slice's outside cell.
-                        const int out_d = (dir > 0) ? s : (s - 1);
-                        auto sample_solid = [&](int sd, int su, int sv) -> int {
-                            int xa, ya, za;
-                            slice_coords(d, u_axis, v_axis, sd, su, sv, xa, ya, za);
-                            return is_solid(chunk.get_or_air(xa, ya, za)) ? 1 : 0;
-                        };
-                        auto vertex_ao = [&](int du, int dv) {
-                            const int U = u + du * w;
-                            const int V = v + dv * h;
-                            const int du_step = (du == 0) ? -1 : 0;
-                            const int dv_step = (dv == 0) ? -1 : 0;
-                            int s1 = sample_solid(out_d, U + du_step,             V + (dv == 0 ?  0 : -1));
-                            int s2 = sample_solid(out_d, U + (du == 0 ? 0 : -1),  V + dv_step);
-                            int sc = sample_solid(out_d, U + du_step,             V + dv_step);
-                            return corner_ao(s1, s2, sc);
-                        };
-
-                        int ao00 = vertex_ao(0, 0);
-                        int ao10 = vertex_ao(1, 0);
-                        int ao11 = vertex_ao(1, 1);
-                        int ao01 = vertex_ao(0, 1);
-
-                        gfx::VertexPacked corner[4];
-                        int n = 0;
-                        auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
-                            corner[n++] = pack_vertex(p, face_idx, uu, vv, ao, id);
-                        };
-
-                        if (dir > 0) {
-                            push(p00, 0.0f, 0.0f, ao00);
-                            push(p10, static_cast<float>(w), 0.0f, ao10);
-                            push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
-                            push(p01, 0.0f, static_cast<float>(h), ao01);
-                        } else {
-                            push(p00, 0.0f, 0.0f, ao00);
-                            push(p01, 0.0f, static_cast<float>(h), ao01);
-                            push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
-                            push(p10, static_cast<float>(w), 0.0f, ao10);
-                        }
-
-                        // ao_flip: cut the other diagonal when it is more
-                        // contrasty so the gradient doesn't appear torn.
-                        // The index pattern is fixed engine-wide (shared
-                        // quad buffer), so the flip lives in the vertex
-                        // order: rotating by one makes {0,1,2},{0,2,3}
-                        // produce triangles (1,2,3),(1,3,0) - the flipped
-                        // diagonal, same winding.
-                        const int rot = (ao00 + ao11) < (ao10 + ao01) ? 1 : 0;
-                        for (int k = 0; k < 4; ++k) {
-                            out.vertices.push_back(corner[(k + rot) % 4]);
-                        }
-                        ++out.quad_count;
-
-                        for (int dv = 0; dv < h; ++dv) {
-                            for (int du = 0; du < w; ++du) {
-                                mask[static_cast<size_t>((v + dv) * u_size + u + du)] = 0;
-                            }
-                        }
-
-                        u += w;
-                    }
-                }
-            };  // emit_dir lambda
-
-            emit_dir(mask_pos, +1);
-            emit_dir(mask_neg, -1);
+            const SliceContext ctx{chunk, d, u_axis, v_axis,
+                                   u_size, v_size, s};
+            emit_merged_quads(ctx, mask_pos, +1, out);
+            emit_merged_quads(ctx, mask_neg, -1, out);
         }  // for s
     }  // for d
 
