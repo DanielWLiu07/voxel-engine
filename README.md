@@ -97,6 +97,7 @@ scripts/audit.sh                           # the whole battery above in one comm
 | --- | --- |
 | Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 150.7 KB -> 8.3 KB |
 | Greedy meshing, same chunk with caves carved | 7.8x fewer quads (0.9 ms build), 167.6 KB -> 21.4 KB |
+| Greedy meshing, counting only faces a camera can reach | 5.5x contiguous / 2.9x caves - see the note below |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
 | Worker breakdown (per chunk avg) | terrain.fill_chunk 0.71 ms, greedy mesh 1.68 ms, GL upload 0.05-0.14 ms |
@@ -114,6 +115,28 @@ scripts/audit.sh                           # the whole battery above in one comm
 | GPU mesh validation (`--validate`) | reads every VBO/EBO back off the GPU and checks each triangle is an axis-aligned face backed by a solid block; composes with `--load`/`--seed`, exits nonzero on offenders |
 | Edit persistence (`--verify-edit-persistence`) | `stashed=1 restored=1 survived=1`: a block edit survives its chunk streaming out and back in (modified chunks are RLE-stashed on eviction instead of regenerated; saves include the stash) |
 | Persistence contract (`scripts/verify_persistence.sh`) | loads a saved world twice: with the manifest seed only the edited chunk stashes (`stashed=1`); with a different seed all 169 loaded chunks are conservatively preserved (`stashed=169`) and the edit still survives |
+
+**What the greedy ratio does and does not include.** The mesher is
+chunk-local: it treats anything outside the chunk as air
+(`Chunk::get_or_air`), so a chunk emits its full side walls even where the
+neighbouring chunk is solid there. Both meshers do this, so 18.1x is an
+honest naive-versus-greedy comparison on identical input - but those
+sealed border walls are the flattest geometry in the chunk and merge
+almost perfectly, which flatters the ratio.
+
+Measured against the real neighbour chunks at seed 1337: 79.4% of the
+naive quads and 32.0% of the greedy quads on a contiguous chunk are
+sealed against a solid neighbour (70.2% and 18.6% with caves). Counting
+only faces a camera could ever reach, the ratio is 5.5x contiguous and
+2.9x with caves. Roughly 2 MB of the 12.5 MB resident GPU mesh is
+back-to-back faces between adjacent chunks.
+
+Cross-chunk face culling is the fix and is not implemented: the mesher
+would need its four neighbours, which changes the streaming order (a
+chunk cannot be meshed until its neighbours exist) and re-meshes
+neighbours on every edit at a chunk boundary. It is the clearest
+remaining win in the renderer, worth about 17% of resident quads with
+caves on, and it is listed here rather than left to be discovered.
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
 (section/triangle counts are exact at current HEAD; the ms columns are

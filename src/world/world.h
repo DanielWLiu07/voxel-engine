@@ -78,9 +78,12 @@ struct ChunkSlot {
 };
 
 // Tight per-chunk AABB: XZ from the chunk's world origin, Y from the actual
-// min/max of solid blocks (closed range, +1 on max). Exposed so the cull
-// benchmark can build the same AABBs the renderer uses without going through
-// the GL-backed ChunkSlot path.
+// min/max of solid blocks (closed range, +1 on max). Used for a chunk with
+// no mesh at all, and by the cull benchmark, which needs an AABB without
+// going through the GL-backed ChunkSlot path. Note the renderer culls
+// against ChunkSlot::chunk_aabb, which apply_sections builds as the union
+// of the section AABBs: the two coincide closely on real terrain but they
+// are not the same object.
 gfx::AABB make_chunk_aabb(ChunkCoord coord, const Chunk& chunk);
 
 // One row of the bench's section-AABB readout: the world-space AABB plus
@@ -167,10 +170,6 @@ public:
 
     int  drain_finished(int max_per_frame = 8);
     int  pending_async() const;
-
-    // Replaces (or inserts) a chunk slot. Builds the greedy mesh and uploads
-    // it on the calling thread, so the caller must own a current GL context.
-    void insert_chunk(ChunkCoord c, Chunk chunk);
 
     // Submits a worker job that greedy-meshes the already-decoded chunk and
     // pushes the result onto the finished queue. The caller drains via
