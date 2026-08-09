@@ -467,13 +467,6 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     });
 }
 
-void World::insert_chunk(ChunkCoord c, Chunk chunk) {
-    auto mesh_data = build_chunk_mesh_greedy(chunk);
-    auto vis = compute_section_visibility(chunk);
-    chunks_[c] = build_slot(c, std::move(chunk), std::move(mesh_data), vis, quad_ibo_);
-    requested_.erase(c);
-}
-
 void World::clear_all() {
     chunks_.clear();
     requested_.clear();
@@ -764,9 +757,11 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
                            const std::function<void(const glm::mat4&)>& set_model) const {
     DrawStats stats;
     stats.chunks_total   = static_cast<int>(chunks_.size());
-    // Deterministic draw order. Hash-map iteration follows insertion order,
-    // i.e. whichever worker finished each chunk first, so two identical runs
-    // draw in different orders and MSAA resolves seam pixels differently --
+    // Deterministic draw order. unordered_map iteration order is
+    // unspecified: it follows bucket layout and shifts on rehash, so it
+    // varies with insertion history and therefore with which worker
+    // finished each chunk first. Two identical runs then draw in
+    // different orders and MSAA resolves seam pixels differently --
     // which breaks the byte-stable screenshot guarantee the occlusion A/B
     // verification depends on. Sorting by coord is O(n log n) on the
     // resident set (~625 chunks) once per pass, well under the noise floor.

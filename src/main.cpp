@@ -826,6 +826,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     int postfx_w = fb_w, postfx_h = fb_h;
+    bool postfx_failed = false;
     std::printf("[postfx] HDR %dx%d + %d-level bloom pyramid allocated\n",
                 fb_w, fb_h, postfx.bloom_mip_count());
 
@@ -1171,7 +1172,8 @@ int main(int argc, char** argv) {
         // never pays.
         if (bench_frames > 0 && bench_orbit && initial_load_logged) {
             const OrbitPose op = orbit_pose_at(
-                static_cast<int>(bench_samples.size()), bench_frames);
+                static_cast<int>(bench_samples.size()), bench_frames,
+                orbit_center);
             cam.set_position(op.pos);
             cam.set_yaw_pitch(op.yaw, op.pitch);
         }
@@ -1296,7 +1298,17 @@ int main(int argc, char** argv) {
 
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
         if (fb_w != postfx_w || fb_h != postfx_h) {
-            postfx.init(fb_w, fb_h);
+            // init() destroys the old targets first, so a failure here
+            // leaves the chain unusable and every later frame renders
+            // through a 0x0 framebuffer. Say so once instead of emitting
+            // an incomplete-FBO warning per frame forever.
+            if (!postfx.init(fb_w, fb_h) && !postfx_failed) {
+                postfx_failed = true;
+                std::fprintf(stderr,
+                             "[postfx] re-init failed at %dx%d; "
+                             "post-processing is disabled for this run\n",
+                             fb_w, fb_h);
+            }
             postfx_w = fb_w;
             postfx_h = fb_h;
         }
