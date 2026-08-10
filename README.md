@@ -64,8 +64,18 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
-**Headline (radius 12, gameplay pose, vsync off):**
-4.4 ms avg frame time, **229 fps**, **38 M triangles/sec**, 188 MB peak RSS.
+**Headline (radius 12, the default gameplay setting, vsync off):**
+4.4 ms avg frame time, **229 fps**, **38 M triangles/sec**, 188 MB peak RSS,
+across a **40-million-voxel** resident world (625 chunks).
+
+**Largest configuration tested (radius 16):** a **71-million-voxel** world
+(1,089 chunks) still at **215 fps** and 4.7 ms, pushing **64 M
+triangles/sec** for 251 MB peak RSS and 22.1 MB of GPU mesh. The engine
+runs the bigger world at 94% of the smaller one's frame rate, which is
+the scaling claim the sweep table below exists to support. Note that
+radius 16 needs the full 300-frame window to reach steady state; a
+shorter bench reports a lower RSS because the world has not finished
+streaming in.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
 workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
 frustum + occlusion cull), 167k triangles rendered, post-process the largest
