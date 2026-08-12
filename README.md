@@ -160,15 +160,38 @@ the idle-machine measure and reproduce when the box is quiet):
 | 14 |   841 | 531 | 230,560 | 4.75 | 4.55 | 10.13 | 210.4 | 48.5M | 218 MB |
 | 16 | 1,089 | 687 | 299,170 | 4.65 | 4.53 | 10.32 | 215.2 | 64.4M | 251 MB |
 
-`BENCH_FRAME` also reports the two numbers an average hides: `low1_fps`
-is the mean of the worst 1% of frames expressed as fps, and
-`over_budget` counts frames that missed a 60 Hz vsync deadline. At
-radius 12 the engine averages ~220 fps but its worst 1% lands between
-27 and 113 fps depending on the run, with 0 to 2 of 300 frames over
-budget (14 of 900 on a longer window). Those outliers are chunk uploads
-and OS scheduling, not steady-state rendering, and they are reported
-rather than smoothed away: a 4.4 ms average can still contain a visible
-hitch, and this is where it would show.
+`BENCH_FRAME` also reports the numbers an average hides: `low1_fps` is
+the mean of the worst 1% of frames expressed as fps, and `over_budget`
+counts frames that missed a 60 Hz vsync deadline. A 4.4 ms average can
+still contain a visible hitch, and this is where it would show.
+
+Those outliers turned out to be mostly a property of the machine rather
+than the engine, which is worth separating instead of asserting. Each
+sampled frame also records the render thread's own CPU time
+(`CLOCK_THREAD_CPUTIME_ID`, per thread rather than per process because
+the worker pool would otherwise swamp the signal). A frame that burns
+88 ms of wall time while its thread accumulates 4 ms of CPU was not a
+slow frame: the thread spent 84 ms off-core because something else on
+the box wanted the CPU. `descheduled_frames` counts over-budget frames
+that lost at least half their wall time off-CPU, `stolen_ms` totals it,
+and `engine_low1_fps` recomputes the worst 1% charging those frames only
+the CPU time they actually used.
+
+Three 720-frame runs at radius 12 on a machine at load 6.5:
+
+| Run | over_budget | descheduled | stolen | low1_fps | engine_low1_fps |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 6 | 6 | 109.4 ms | 47.2 | 66.4 |
+| 2 | 0 | 0 | 0 ms | 95.7 | 95.7 |
+| 3 | 0 | 0 | 0 ms | 105.8 | 105.8 |
+
+Every frame that missed the deadline was a descheduled one; none was the
+engine failing to finish its work in time. On the quiet runs the two
+columns are identical by construction, which is the check that the
+metric is not manufacturing a flattering number out of nothing. An
+earlier revision of this section blamed the outliers on "chunk uploads
+and OS scheduling" without distinguishing them; measuring says the
+upload half of that claim was not carrying its weight.
 
 Triangle count grows 3.8x from radius 8 to 16; avg frame time stays
 flat to within a few percent. Section-AABB culling holds drawn-section count close to a
