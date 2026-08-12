@@ -96,6 +96,7 @@ endif()
 # --- App ----------------------------------------------------------------------
 add_executable(voxel_engine
   src/main.cpp
+  src/core/frame_stats.cpp
   src/core/input.cpp
   src/core/thread_pool.cpp
   src/game/player.cpp
@@ -172,6 +173,7 @@ if(VOXEL_BUILD_TESTS)
     src/gfx/frustum.cpp
     src/gfx/mesh.cpp
     src/gfx/shader.cpp
+    src/core/frame_stats.cpp
     src/core/thread_pool.cpp
   )
   target_include_directories(voxel_tests PRIVATE src)

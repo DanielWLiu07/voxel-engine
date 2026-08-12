@@ -64,18 +64,39 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
-**Headline (radius 12, the default gameplay setting, vsync off):**
-4.4 ms avg frame time, **229 fps**, **38 M triangles/sec**, 188 MB peak RSS,
-across a **40-million-voxel** resident world (625 chunks).
+The numbers worth reading first are the ones that do not depend on the
+machine. A frame rate is a property of this laptop as much as of this
+engine; a ratio and a byte count are properties of the engine alone, and
+they reproduce exactly on any GPU:
 
-**Largest configuration tested (radius 16):** a **71-million-voxel** world
-(1,089 chunks) still at **215 fps** and 4.7 ms, pushing **64 M
-triangles/sec** for 251 MB peak RSS and 22.1 MB of GPU mesh. The engine
-runs the bigger world at 94% of the smaller one's frame rate, which is
-the scaling claim the sweep table below exists to support. Note that
-radius 16 needs the full 300-frame window to reach steady state; a
-shorter bench reports a lower RSS because the world has not finished
-streaming in.
+| Hardware-independent result | Value |
+| :--- | ---: |
+| Greedy meshing, triangles vs naive per-face | **18.1x fewer** (CI-gated at >=15x) |
+| Vertex format, packed vs float | 40 B to **12 B**, 3.3x |
+| Whole-world GPU mesh at radius 12 | 48 MB to **12.5 MB** |
+| Index data per chunk, one shared quad EBO | **zero** |
+| Chunk serialization, RLE vs raw | 39.06 MB to 0.67 MB, **58x** |
+| Sub-chunks drawn vs loaded, underground | up to **70x fewer** |
+| Chunk pipeline scaling on 9 workers | **8.4x** parallel efficiency |
+
+Those hold whatever you run this on. The frame numbers below are what
+they buy on one specific machine, and are quoted against the 60 Hz frame
+budget rather than as a bare frame rate, because a budget is a fixed
+target and the headroom against it carries meaning across hardware in a
+way that "229 fps" does not.
+
+**Radius 12, the default gameplay setting, vsync off:** 4.4 ms per frame
+against a 16.7 ms 60 Hz budget, **3.8x inside budget** (229 fps), 38 M
+triangles/sec, 188 MB peak RSS, across a **40-million-voxel** resident
+world of 625 chunks.
+
+**Largest configuration tested, radius 16:** a **71-million-voxel** world
+(1,089 chunks) at 4.7 ms, **3.6x inside the same budget** (215 fps), 64 M
+triangles/sec, 251 MB peak RSS, 22.1 MB of GPU mesh. A 1.7x larger world
+costs 6% of the frame rate, which is the scaling claim the sweep table
+below exists to support. Radius 16 needs the full 300-frame window to
+reach steady state; a shorter bench reports a lower RSS because the world
+has not finished streaming in.
 Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
 workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
 frustum + occlusion cull), 167k triangles rendered, post-process the largest
