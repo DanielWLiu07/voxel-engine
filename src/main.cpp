@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
+#include "core/cpu_time.h"
 #include "core/input.h"
 #include "core/profiler.h"
 #include "core/thread_pool.h"
@@ -1005,12 +1006,21 @@ int main(int argc, char** argv) {
     // rendering rather than the streaming ramp or first-frame GL state
     // transitions.
     std::vector<double> bench_samples;
+    // Main-thread CPU time per sampled frame, paired with the wall
+    // time above. The gap between them is time the render thread was
+    // not on a core, which is the machine's jitter and not the
+    // engine's (core/cpu_time.h).
+    std::vector<double> bench_cpu_samples;
+    double last_cpu_ms = core::thread_cpu_ms();
     // Triangles summed over the same sampled frames. A moving camera (orbit
     // bench) draws a different count each frame, so throughput has to divide
     // total triangles by total time, not multiply the average frame time by
     // one arbitrary frame's count.
     double bench_tris_sum = 0.0;
-    if (bench_frames > 0) bench_samples.reserve(static_cast<std::size_t>(bench_frames));
+    if (bench_frames > 0) {
+        bench_samples.reserve(static_cast<std::size_t>(bench_frames));
+        bench_cpu_samples.reserve(static_cast<std::size_t>(bench_frames));
+    }
     // 30 settle frames after initial_load_logged is generous (~200 ms at
     // typical bench frame times) but cleanly clears post-load shader
     // re-jit, driver buffer-orphan settling, and the cascade-warmup spike
@@ -1634,9 +1644,13 @@ int main(int argc, char** argv) {
         ++frame_index;
 
         if (bench_frames > 0 && initial_load_logged) {
+            const double cpu_now = core::thread_cpu_ms();
+            const double cpu_dt  = cpu_now - last_cpu_ms;
+            last_cpu_ms = cpu_now;
             if (bench_settle_remaining > 0) { --bench_settle_remaining; }
             else {
                 bench_samples.push_back(static_cast<double>(dt) * 1000.0);
+                bench_cpu_samples.push_back(cpu_dt);
                 bench_tris_sum += static_cast<double>(last_stats.triangles_drawn);
             }
             if (static_cast<int>(bench_samples.size()) >= bench_frames) {
@@ -1681,6 +1695,43 @@ int main(int argc, char** argv) {
                 const double over_budget_pct =
                     100.0 * static_cast<double>(over_budget) /
                     static_cast<double>(n);
+                // Split the frames that missed the deadline into the ones
+                // the engine spent working and the ones it spent waiting for
+                // a core. A frame is counted as descheduled when at least
+                // half its wall time went by with the render thread off-CPU;
+                // on a quiet box this is 0, and it rises with machine load
+                // while the engine's own work is unchanged. Without this,
+                // benchmarking on a busy machine silently reports the
+                // machine's contention as the engine's stutter.
+                std::size_t stalled = 0;
+                double stolen_ms = 0.0;
+                for (std::size_t i = 0; i < bench_cpu_samples.size(); ++i) {
+                    const double wall = bench_samples[i];
+                    const double off_cpu = wall - bench_cpu_samples[i];
+                    if (wall > kFrameBudgetMs && off_cpu > wall * 0.5) {
+                        ++stalled;
+                        stolen_ms += off_cpu;
+                    }
+                }
+                // The engine's own worst-1%, with descheduled frames charged
+                // only for the CPU time they actually used.
+                std::vector<double> engine_ms;
+                engine_ms.reserve(bench_samples.size());
+                for (std::size_t i = 0; i < bench_cpu_samples.size(); ++i) {
+                    const double wall = bench_samples[i];
+                    const double off_cpu = wall - bench_cpu_samples[i];
+                    engine_ms.push_back(
+                        (wall > kFrameBudgetMs && off_cpu > wall * 0.5)
+                            ? bench_cpu_samples[i] : wall);
+                }
+                std::sort(engine_ms.begin(), engine_ms.end());
+                double eworst_sum = 0.0;
+                for (std::size_t i = engine_ms.size() - worst_n;
+                     i < engine_ms.size(); ++i) eworst_sum += engine_ms[i];
+                const double elow1_ms =
+                    eworst_sum / static_cast<double>(worst_n);
+                const double engine_low1_fps =
+                    elow1_ms > 0.0 ? 1000.0 / elow1_ms : 0.0;
                 // Peak RSS. ru_maxrss is bytes on macOS, kilobytes on Linux.
                 struct rusage ru{};
                 getrusage(RUSAGE_SELF, &ru);
@@ -1709,7 +1760,9 @@ int main(int argc, char** argv) {
                             " drawn_chunks=%d drawn_sections=%d tris=%zu"
                             " avg_tris=%.0f tris_per_sec=%.0f peak_rss_mb=%.1f"
                             " gpu_buffers_mb=%.1f low1_fps=%.1f"
-                            " over_budget=%zu over_budget_pct=%.1f\n",
+                            " over_budget=%zu over_budget_pct=%.1f"
+                            " descheduled_frames=%zu stolen_ms=%.1f"
+                            " engine_low1_fps=%.1f\n",
                             stream_radius,
                             static_cast<int>(bench_pose.size()), bench_pose.data(),
                             total_chunks, n,
@@ -1719,7 +1772,8 @@ int main(int argc, char** argv) {
                             last_stats.sections_drawn,
                             last_stats.triangles_drawn,
                             avg_tris, tris_per_sec, peak_mb, gpu_mb,
-                            low1_fps, over_budget, over_budget_pct);
+                            low1_fps, over_budget, over_budget_pct,
+                            stalled, stolen_ms, engine_low1_fps);
                 if (bench_pass_breakdown && !pass_ms_shadow.empty()) {
                     auto mean = [](const std::vector<double>& v) {
                         double s = 0.0; for (double x : v) s += x;
