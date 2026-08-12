@@ -7,6 +7,7 @@
 // The harness is intentionally minimal: a single EXPECT macro, a failure
 // counter, and a main that reports pass/fail. No external test framework.
 
+#include "core/frame_stats.h"
 #include "world/block.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
@@ -860,6 +861,83 @@ void test_atomic_write_missing_dir_fails_cleanly() {
 
 }  // namespace
 
+
+// --- frame statistics ------------------------------------------------------
+//
+// The descheduled-frame attribution decides whether a missed deadline is
+// reported as the engine stuttering or the machine stealing the CPU, which
+// is a claim the README makes, so it is pinned here rather than trusted.
+
+void test_frame_stats_basic_percentiles() {
+    std::vector<double> wall;
+    for (int i = 1; i <= 100; ++i) wall.push_back(static_cast<double>(i));
+    const auto s = core::compute_frame_stats(wall, {});
+    EXPECT(s.frames == 100, "frame stats sees every sample");
+    EXPECT(std::fabs(s.avg_ms - 50.5) < 1e-9, "mean of 1..100 is 50.5");
+    EXPECT(std::fabs(s.min_ms - 1.0) < 1e-9, "min is the fastest frame");
+    EXPECT(std::fabs(s.max_ms - 100.0) < 1e-9, "max is the slowest frame");
+    EXPECT(s.p50_ms >= 50.0 && s.p50_ms <= 52.0, "p50 near the middle");
+    EXPECT(s.p99_ms >= 99.0, "p99 near the slow tail");
+}
+
+// With no stall, the engine's worst-1% must equal the raw worst-1%. This is
+// the property that makes engine_low1_fps an attribution rather than a
+// flattering recomputation: when nothing was stolen, nothing is subtracted.
+void test_frame_stats_quiet_run_leaves_low1_untouched() {
+    std::vector<double> wall(300, 4.5);
+    std::vector<double> cpu(300, 4.4);   // thread on-core the whole time
+    const auto s = core::compute_frame_stats(wall, cpu);
+    EXPECT(s.descheduled_frames == 0, "no stalls on a quiet run");
+    EXPECT(s.stolen_ms == 0.0, "nothing stolen on a quiet run");
+    EXPECT(s.over_budget == 0, "4.5 ms frames are inside a 60 Hz budget");
+    EXPECT(std::fabs(s.engine_low1_fps - s.low1_fps) < 1e-9,
+           "quiet run: engine 1% low equals raw 1% low");
+}
+
+// A frame that blew the deadline while its thread sat off-core is the
+// machine's fault, and is charged only the CPU it used.
+void test_frame_stats_attributes_a_descheduled_frame() {
+    std::vector<double> wall(100, 4.0);
+    std::vector<double> cpu(100, 3.9);
+    wall[7] = 88.0;   // long frame...
+    cpu[7]  = 4.0;    // ...but the thread only ran 4 ms of it
+    const auto s = core::compute_frame_stats(wall, cpu);
+    EXPECT(s.descheduled_frames == 1, "the stalled frame is identified");
+    EXPECT(std::fabs(s.stolen_ms - 84.0) < 1e-9, "stolen time is wall minus cpu");
+    EXPECT(s.over_budget == 1, "it still counts as a missed deadline");
+    EXPECT(s.engine_low1_fps > s.low1_fps,
+           "excusing the stall improves the engine's own 1% low");
+}
+
+// A slow frame the engine genuinely spent working must NOT be excused.
+void test_frame_stats_does_not_excuse_real_engine_work() {
+    std::vector<double> wall(100, 4.0);
+    std::vector<double> cpu(100, 3.9);
+    wall[3] = 40.0;
+    cpu[3]  = 39.0;   // the thread was on-core for essentially all of it
+    const auto s = core::compute_frame_stats(wall, cpu);
+    EXPECT(s.descheduled_frames == 0, "genuine slow work is not descheduled");
+    EXPECT(std::fabs(s.engine_low1_fps - s.low1_fps) < 1e-9,
+           "a real slow frame still counts against the engine");
+}
+
+// Frames with no paired CPU sample must keep their wall time rather than
+// being silently excused.
+void test_frame_stats_unpaired_samples_are_not_excused() {
+    std::vector<double> wall(100, 4.0);
+    wall[9] = 90.0;
+    const auto s = core::compute_frame_stats(wall, {});  // no cpu samples
+    EXPECT(s.descheduled_frames == 0, "nothing attributed without cpu data");
+    EXPECT(std::fabs(s.engine_low1_fps - s.low1_fps) < 1e-9,
+           "unmeasured frames keep their wall time");
+}
+
+void test_frame_stats_empty_is_safe() {
+    const auto s = core::compute_frame_stats({}, {});
+    EXPECT(s.frames == 0, "no samples reports no frames");
+    EXPECT(s.low1_fps == 0.0, "no samples reports no rate");
+}
+
 int main() {
     std::printf("voxel_tests: running...\n");
     test_aabb_empty_chunk();
@@ -887,6 +965,12 @@ int main() {
     test_rle_decoder_fuzz_no_crash();
     test_face_pair_bits_unique();
     test_visibility_empty_and_solid();
+    test_frame_stats_basic_percentiles();
+    test_frame_stats_quiet_run_leaves_low1_untouched();
+    test_frame_stats_attributes_a_descheduled_frame();
+    test_frame_stats_does_not_excuse_real_engine_work();
+    test_frame_stats_unpaired_samples_are_not_excused();
+    test_frame_stats_empty_is_safe();
     test_visibility_slab_blocks_vertical_only();
     test_visibility_wall_blocks_x_only();
     test_bfs_solid_chunk_blocks_sightline();

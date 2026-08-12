@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include "core/cpu_time.h"
+#include "core/frame_stats.h"
 #include "core/input.h"
 #include "core/profiler.h"
 #include "core/thread_pool.h"
@@ -1654,84 +1655,18 @@ int main(int argc, char** argv) {
                 bench_tris_sum += static_cast<double>(last_stats.triangles_drawn);
             }
             if (static_cast<int>(bench_samples.size()) >= bench_frames) {
-                std::vector<double> sorted = bench_samples;
-                std::sort(sorted.begin(), sorted.end());
-                const std::size_t n = sorted.size();
-                double sum = 0.0;
-                for (double v : sorted) sum += v;
-                const double avg = sum / static_cast<double>(n);
-                const double p50 = sorted[n / 2];
-                const double p99 = sorted[std::min<std::size_t>(n - 1,
-                                            static_cast<std::size_t>(n * 0.99))];
-                const double mn  = sorted.front();
-                const double mx  = sorted.back();
-                // Frame-time spread: a low average with a high standard
-                // deviation still stutters, so this is the consistency
-                // signal the percentiles only hint at. Sample stddev (n-1).
-                double var_sum = 0.0;
-                for (double v : sorted) {
-                    const double d = v - avg;
-                    var_sum += d * d;
-                }
-                const double stddev = n > 1
-                    ? std::sqrt(var_sum / static_cast<double>(n - 1)) : 0.0;
-                // The two numbers a player actually feels, which an average
-                // hides. 1% low is the mean of the worst 1% of frames
-                // expressed as fps: the rate the engine holds through its
-                // bad moments, not its good ones. over_budget counts frames
-                // that missed a 60 Hz vsync deadline, which is the stutter
-                // an average of 4 ms can still contain.
-                constexpr double kFrameBudgetMs = 1000.0 / 60.0;
-                const std::size_t worst_n =
-                    std::max<std::size_t>(1, n / 100);
-                double worst_sum = 0.0;
-                for (std::size_t i = n - worst_n; i < n; ++i) worst_sum += sorted[i];
-                const double low1_ms = worst_sum / static_cast<double>(worst_n);
-                const double low1_fps = low1_ms > 0.0 ? 1000.0 / low1_ms : 0.0;
-                std::size_t over_budget = 0;
-                for (double v : sorted) {
-                    if (v > kFrameBudgetMs) ++over_budget;
-                }
-                const double over_budget_pct =
-                    100.0 * static_cast<double>(over_budget) /
-                    static_cast<double>(n);
-                // Split the frames that missed the deadline into the ones
-                // the engine spent working and the ones it spent waiting for
-                // a core. A frame is counted as descheduled when at least
-                // half its wall time went by with the render thread off-CPU;
-                // on a quiet box this is 0, and it rises with machine load
-                // while the engine's own work is unchanged. Without this,
-                // benchmarking on a busy machine silently reports the
-                // machine's contention as the engine's stutter.
-                std::size_t stalled = 0;
-                double stolen_ms = 0.0;
-                for (std::size_t i = 0; i < bench_cpu_samples.size(); ++i) {
-                    const double wall = bench_samples[i];
-                    const double off_cpu = wall - bench_cpu_samples[i];
-                    if (wall > kFrameBudgetMs && off_cpu > wall * 0.5) {
-                        ++stalled;
-                        stolen_ms += off_cpu;
-                    }
-                }
-                // The engine's own worst-1%, with descheduled frames charged
-                // only for the CPU time they actually used.
-                std::vector<double> engine_ms;
-                engine_ms.reserve(bench_samples.size());
-                for (std::size_t i = 0; i < bench_cpu_samples.size(); ++i) {
-                    const double wall = bench_samples[i];
-                    const double off_cpu = wall - bench_cpu_samples[i];
-                    engine_ms.push_back(
-                        (wall > kFrameBudgetMs && off_cpu > wall * 0.5)
-                            ? bench_cpu_samples[i] : wall);
-                }
-                std::sort(engine_ms.begin(), engine_ms.end());
-                double eworst_sum = 0.0;
-                for (std::size_t i = engine_ms.size() - worst_n;
-                     i < engine_ms.size(); ++i) eworst_sum += engine_ms[i];
-                const double elow1_ms =
-                    eworst_sum / static_cast<double>(worst_n);
-                const double engine_low1_fps =
-                    elow1_ms > 0.0 ? 1000.0 / elow1_ms : 0.0;
+                const core::FrameStats fs = core::compute_frame_stats(
+                    bench_samples, bench_cpu_samples);
+                const std::size_t n = fs.frames;
+                const double avg = fs.avg_ms, p50 = fs.p50_ms;
+                const double p99 = fs.p99_ms, mn = fs.min_ms, mx = fs.max_ms;
+                const double stddev = fs.stddev_ms;
+                const double low1_fps = fs.low1_fps;
+                const std::size_t over_budget = fs.over_budget;
+                const double over_budget_pct = fs.over_budget_pct;
+                const std::size_t stalled = fs.descheduled_frames;
+                const double stolen_ms = fs.stolen_ms;
+                const double engine_low1_fps = fs.engine_low1_fps;
                 // Peak RSS. ru_maxrss is bytes on macOS, kilobytes on Linux.
                 struct rusage ru{};
                 getrusage(RUSAGE_SELF, &ru);
