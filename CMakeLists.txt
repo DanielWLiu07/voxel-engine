@@ -96,6 +96,7 @@ endif()
 # --- App ----------------------------------------------------------------------
 add_executable(voxel_engine
   src/main.cpp
+  src/core/cli_options.cpp
   src/core/frame_stats.cpp
   src/core/input.cpp
   src/core/thread_pool.cpp
