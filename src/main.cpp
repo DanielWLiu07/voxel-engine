@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
+#include "core/cli_options.h"
 #include "core/cpu_time.h"
 #include "core/frame_stats.h"
 #include "core/input.h"
@@ -495,251 +496,41 @@ OrbitPose orbit_pose_at(int frame, int total,
 }  // namespace
 
 int main(int argc, char** argv) {
-    // --bench (CPU mesher + cull bench) returns early.
-    // --bench-frame N (GL frame-time bench) opens a hidden window, locks the
-    // camera to a fixed pose, runs N frames vsync-off, prints a stable
-    // BENCH_FRAME line and exits. Same renderer the gameplay uses.
-    int bench_frames = 0;
-    bool bench_pass_breakdown = false;
-    bool bench_io = false;
-    // --bench-frame N --orbit sweeps the camera around the full orbit path
-    // while sampling, so the frame-time percentiles cover a moving camera
-    // (and the chunk streaming its motion triggers) instead of one static
-    // pose. A more representative number than any single vantage point.
-    bool bench_orbit = false;
-    std::string_view bench_pose = "center";
-    glm::vec3 orbit_center{-10.0f, 45.0f, -10.0f};
-    // --seed N picks the terrain seed for the interactive, capture, and
-    // frame-bench world, so the greedy and cull numbers can be checked
-    // against different maps and clips vary. The CPU --bench keeps its own
-    // fixed seed so the CI-gated ratios stay reproducible.
-    std::uint32_t terrain_seed = 1337;
-    // --radius N sets the stream/draw radius in chunks for the interactive,
-    // capture, and frame-bench world, so draw distance and the scaling
-    // table are runtime choices rather than a recompile. The CPU --bench
-    // keeps its own fixed radius so the CI-gated cull ratios do not move.
-    int stream_radius = kStreamRadius;
-    // --screenshot-after N: render until the world is loaded plus N settle
-    // frames, save the scene (pre-HUD) to a fixed filename, exit. Drives
-    // visual regression checks from scripts; pairs with --no-occlusion for
-    // pixel A/B of the occlusion culler.
-    int shot_after = 0;
-    std::string shot_file;
-    // --load DIR: boot straight into a saved world (RLE snapshot on disk)
-    // instead of generating fresh terrain, then stream normally from there.
-    std::string load_path;
-    // --save DIR: generate the world, write it to DIR as an RLE snapshot,
-    // then exit. A headless counterpart to F5 so saves are scriptable (and
-    // can seed --load).
-    std::string save_path;
-    // --wireframe: start with the wireframe terrain pass on (G still toggles
-    // it). Lets a headless --screenshot-after capture the greedy mesh for docs.
-    bool start_wireframe = false;
-    // --bench-edit N: after the world loads, run N deterministic block edits
-    // (break + restore pairs underground) and print the BENCH_EDIT latency
-    // distribution of the synchronous edit-remesh path, then exit.
-    int bench_edit = 0;
-    // --validate: after the world loads, read every chunk's vertex/index
-    // buffers back off the GPU and check each triangle is an axis-aligned
-    // face backed by a solid block, print a VALIDATE line, exit nonzero on
-    // offenders. Validates what the GPU will draw, not what the CPU built.
-    bool validate_mode = false;
-    // --verify-edit-persistence: after the world loads, edit a block, walk
-    // the stream window far enough away that the edited chunk evicts, walk
-    // back, and check the edit survived (stash -> restore round trip).
-    // Prints one EDIT_PERSIST line; exits nonzero if the edit was lost.
-    bool verify_edit_persistence = false;
-    // --threads N: pin the worker pool to exactly N threads instead of the
-    // cores-1 default. Exists so the parallel-efficiency claim is measurable:
-    // a --save sweep over N gives chunks/sec at each pool size (see
-    // scripts/bench_scaling.sh). 0 means use the default.
-    int thread_override = 0;
-    // --capture-orbit N: after the world loads and settles, fly one full
-    // fixed-step circle around the scene over N frames, saving each frame
-    // to ./capture/frame_NNNN.png, then exit. --capture-cycle N holds the
-    // camera still instead and runs one full day of time-of-day across the
-    // N frames. scripts/capture_clip.sh assembles either into the README
-    // clips. Fixed per-frame stepping (not dt) keeps the output smooth
-    // regardless of render hitches, and one full period (circle or day)
-    // makes the assembled loop seamless.
-    int orbit_frames = 0;
-    int cycle_frames = 0;
-    bool no_occlusion = false;
-    glm::vec3 pose_at{};
-    float pose_at_yaw = 0.0f, pose_at_pitch = 0.0f;
-    bool have_pose_at = false;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-        if (arg == "--help" || arg == "-h") {
-            std::printf(
-                "voxel_engine - desktop voxel engine, C++20 / OpenGL 4.1\n"
-                "\n"
-                "Usage:\n"
-                "  voxel_engine                          launch the gameplay window\n"
-                "  voxel_engine --bench                  CPU mesher + cull bench (no GL window)\n"
-                "  voxel_engine --bench-frame N          run N vsync-off frames, print BENCH_FRAME\n"
-                "  voxel_engine --bench-frame N --pose P bench at named pose (center, ground, high, cave)\n"
-                "  voxel_engine --bench-frame N --orbit  bench over a moving camera orbit, not a pose\n"
-                "  voxel_engine --seed N                 terrain seed for play/capture/frame bench\n"
-                "  voxel_engine --radius N               stream/draw radius in chunks (default 12)\n"
-                "  voxel_engine --load DIR               boot from a saved world (RLE snapshot) instead of generating\n"
-                "  voxel_engine --save DIR               generate the world, write it to DIR, then exit\n"
-                "  voxel_engine --wireframe              start with wireframe terrain (G toggles at runtime)\n"
-                "  voxel_engine --threads N              worker pool size, 1-64 (default: cores-1, min 2)\n"
-                "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
-                "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
-                "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
-                "  voxel_engine --bench-frame N --pass-breakdown\n"
-                "                                        wall time per render pass (glFinish-bracketed)\n"
-                "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
-                "  voxel_engine --screenshot-after N     load world, settle N frames, save PNG, exit\n"
-                "  voxel_engine --pose-at x,y,z,yaw,pitch  exact camera placement for shots and\n"
-                "                                        benches (overrides --pose); the water/\n"
-                "                                        lake README shot documents an example\n"
-                "  voxel_engine --shot-file NAME         filename for --screenshot-after (in ./screenshots)\n"
-                "  voxel_engine --orbit-center x,z[,y]   move the orbit/capture circle (default\n"
-                "                                        spawn; the lake sits at 288,-400,30)\n"
-                "  voxel_engine --capture-orbit N        orbit the scene over N frames, save each\n"
-                "                                        to ./capture, exit (README clip source)\n"
-                "  voxel_engine --capture-cycle N        fixed pose, one day/night cycle over N\n"
-                "                                        frames, save each to ./capture, exit\n"
-                "  voxel_engine --no-occlusion           start with occlusion culling disabled\n"
-                "  voxel_engine --help                   this text\n"
-                "\n"
-                "See README.md for the reproducible perf tables and CI gates.\n");
-            return EXIT_SUCCESS;
-        }
-        if (arg == "--bench") return run_bench();
-        if (arg == "--bench-frame" && i + 1 < argc) {
-            bench_frames = std::atoi(argv[i + 1]);
-            ++i;
-        }
-        if (arg == "--pass-breakdown") bench_pass_breakdown = true;
-        if (arg == "--orbit") bench_orbit = true;
-        if (arg == "--seed" && i + 1 < argc) {
-            terrain_seed = static_cast<std::uint32_t>(
-                std::strtoul(argv[i + 1], nullptr, 10));
-            ++i;
-        }
-        if (arg == "--radius" && i + 1 < argc) {
-            // Parse as long and range-check before narrowing, so a value
-            // past int range is rejected rather than silently truncated
-            // into the valid band (atoi would wrap 2^32+12 to 12). The
-            // out-of-band sentinel 0 is caught by the bound check below.
-            const long r = std::strtol(argv[i + 1], nullptr, 10);
-            stream_radius = (r >= 1 && r <= 40) ? static_cast<int>(r) : 0;
-            ++i;
-        }
-        if (arg == "--bench-io") bench_io = true;
-        if (arg == "--pose" && i + 1 < argc) {
-            bench_pose = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--screenshot-after" && i + 1 < argc) {
-            shot_after = std::atoi(argv[i + 1]);
-            ++i;
-        }
-        if (arg == "--shot-file" && i + 1 < argc) {
-            shot_file = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--load" && i + 1 < argc) {
-            load_path = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--save" && i + 1 < argc) {
-            save_path = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--wireframe") start_wireframe = true;
-        if (arg == "--bench-edit" && i + 1 < argc) {
-            bench_edit = std::atoi(argv[i + 1]);
-            ++i;
-        }
-        if (arg == "--validate") validate_mode = true;
-        if (arg == "--verify-edit-persistence") verify_edit_persistence = true;
-        if (arg == "--threads" && i + 1 < argc) {
-            // Same strtol-then-range-check pattern as --radius: reject junk
-            // and out-of-band values via the 0 sentinel checked below.
-            const long t = std::strtol(argv[i + 1], nullptr, 10);
-            thread_override = (t >= 1 && t <= 64) ? static_cast<int>(t) : -1;
-            ++i;
-        }
-        if (arg == "--capture-orbit" && i + 1 < argc) {
-            orbit_frames = std::atoi(argv[i + 1]);
-            ++i;
-        }
-        if (arg == "--capture-cycle" && i + 1 < argc) {
-            cycle_frames = std::atoi(argv[i + 1]);
-            ++i;
-        }
-        if (arg == "--no-occlusion") no_occlusion = true;
-        // Free-position pose for investigating spots found in screenshots:
-        if (arg == "--orbit-center" && i + 1 < argc) {
-            float x = 0, z = 0, look_y = 45.0f;
-            const int got = std::sscanf(argv[i + 1], "%f,%f,%f", &x, &z, &look_y);
-            if (got < 2) {
-                std::fprintf(stderr, "--orbit-center expects x,z[,look_y]\n");
-                return EXIT_FAILURE;
-            }
-            orbit_center = {x, look_y, z};
-            ++i;
-            continue;
-        }
-        // --pose-at x,y,z,yaw,pitch (overrides --pose).
-        if (arg == "--pose-at" && i + 1 < argc) {
-            float v[5]{};
-            if (std::sscanf(argv[i + 1], "%f,%f,%f,%f,%f",
-                            &v[0], &v[1], &v[2], &v[3], &v[4]) == 5) {
-                pose_at = {v[0], v[1], v[2]};
-                pose_at_yaw = v[3];
-                pose_at_pitch = v[4];
-                have_pose_at = true;
-            } else {
-                std::fprintf(stderr, "--pose-at expects x,y,z,yaw,pitch\n");
-                return EXIT_FAILURE;
-            }
-            ++i;
-        }
-    }
+    int cli_exit = 0;
+    const auto parsed = core::parse_cli(argc, argv, kStreamRadius, cli_exit);
+    if (!parsed) return cli_exit;
+    const core::CliOptions& opt = *parsed;
+    if (opt.run_mesher_bench) return run_bench();
 
-    // The two capture modes are mutually exclusive and need a positive
-    // frame count. Rejecting here keeps the render loop's guards simple
-    // and avoids the soft-lock a negative atoi would otherwise cause: the
-    // input-enable and capture-enable checks would disagree, freezing the
-    // camera with no capture and no way out.
-    if (orbit_frames != 0 && cycle_frames != 0) {
-        std::fprintf(stderr,
-                     "--capture-orbit and --capture-cycle are exclusive\n");
-        return EXIT_FAILURE;
-    }
-    if (orbit_frames < 0 || cycle_frames < 0) {
-        std::fprintf(stderr, "capture frame count must be positive\n");
-        return EXIT_FAILURE;
-    }
-    // Bound the frame counts so an absurd value cannot make the sample
-    // reserve throw bad_alloc and abort. 10 million frames is already far
-    // past any real bench or capture (days of frames).
-    constexpr int kMaxFrames = 10'000'000;
-    if (bench_frames > kMaxFrames || orbit_frames > kMaxFrames ||
-        cycle_frames > kMaxFrames) {
-        std::fprintf(stderr, "frame count too large (max %d)\n", kMaxFrames);
-        return EXIT_FAILURE;
-    }
-    // --orbit only means anything for the frame bench; label the run so its
-    // BENCH_FRAME line is not mistaken for a static pose.
-    if (bench_orbit && bench_frames > 0) bench_pose = "orbit";
-    // Bound the radius: below 1 there is no world, and a huge value would
-    // allocate an enormous chunk grid. 40 chunks each way is 81x81 = 6561
-    // chunks, already well past a comfortable draw distance.
-    if (stream_radius < 1 || stream_radius > 40) {
-        std::fprintf(stderr, "--radius must be between 1 and 40\n");
-        return EXIT_FAILURE;
-    }
-    if (thread_override < 0) {
-        std::fprintf(stderr, "--threads must be between 1 and 64\n");
-        return EXIT_FAILURE;
-    }
+    // Unpacked into the names the rest of main already uses. Keeping the
+    // read sites unchanged is the point of doing it this way: the parsing
+    // moved, the thousand lines below it did not, so the diff shows a move
+    // rather than a rewrite of the render loop.
+    const int bench_frames = opt.bench_frames;
+    const bool bench_pass_breakdown = opt.bench_pass_breakdown;
+    const bool bench_io = opt.bench_io;
+    const bool bench_orbit = opt.bench_orbit;
+    std::string_view bench_pose = opt.bench_pose;
+    const glm::vec3 orbit_center = opt.orbit_center;
+    const std::uint32_t terrain_seed = opt.terrain_seed;
+    const int stream_radius = opt.stream_radius;
+    int shot_after = opt.shot_after;  // capture modes retarget this
+    const std::string shot_file = opt.shot_file;
+    const std::string load_path = opt.load_path;
+    const std::string save_path = opt.save_path;
+    const bool start_wireframe = opt.start_wireframe;
+    const int bench_edit = opt.bench_edit;
+    const bool validate_mode = opt.validate_mode;
+    const bool verify_edit_persistence = opt.verify_edit_persistence;
+    const int thread_override = opt.thread_override;
+    const int orbit_frames = opt.orbit_frames;
+    const int cycle_frames = opt.cycle_frames;
+    const bool no_occlusion = opt.no_occlusion;
+    const glm::vec3 pose_at = opt.pose_at;
+    const float pose_at_yaw = opt.pose_at_yaw;
+    const float pose_at_pitch = opt.pose_at_pitch;
+    const bool have_pose_at = opt.have_pose_at;
+
 
     glfwSetErrorCallback(glfw_error);
     if (!glfwInit()) {
