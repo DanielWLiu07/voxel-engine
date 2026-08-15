@@ -439,7 +439,7 @@ Tooling
 - Worker-pool chunk streaming with main-thread-only GPU upload. Ships a
   ThreadSanitizer-clean lock-free MPMC queue (`core/mpmc_queue.h`) benchmarked
   against the mutex pool; the live path stays mutex-based because the queue is
-  never the bottleneck at chunk-job granularity (see [`DESIGN.md`](DESIGN.md)).
+  never the bottleneck at chunk-job granularity (see [`docs/design.md`](docs/design.md)).
   Concurrency + logic are checked under TSan / ASan / UBSan in CI.
 - Day/night cycle with sun arc and palette ramp:
 
@@ -483,7 +483,7 @@ passes from `gfx/` and `world/`. `game/` is the only layer that coordinates
 player input with world state. `ui/` is the debug HUD. Chunk generation and
 meshing run on a worker pool; every OpenGL call stays on the main thread.
 
-[`DESIGN.md`](DESIGN.md) covers the threading model, the lock-free-vs-mutex
+[`docs/design.md`](docs/design.md) covers the threading model, the lock-free-vs-mutex
 queue decision, and the measurement methodology in more detail.
 
 ```

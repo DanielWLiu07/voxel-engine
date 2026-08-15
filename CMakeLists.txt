@@ -96,6 +96,7 @@ endif()
 # --- App ----------------------------------------------------------------------
 add_executable(voxel_engine
   src/main.cpp
+  src/bench/mesher_bench.cpp
   src/core/cli_options.cpp
   src/core/frame_stats.cpp
   src/core/input.cpp
@@ -208,7 +209,7 @@ endif()
 # Standalone, header-only queue, no GL. Built in Release for honest numbers.
 option(VOXEL_BUILD_BENCH "Build standalone microbenchmarks" ON)
 if(VOXEL_BUILD_BENCH)
-  add_executable(queue_bench bench/queue_bench.cpp)
+  add_executable(queue_bench src/bench/queue_bench.cpp)
   target_include_directories(queue_bench PRIVATE src)
   find_package(Threads REQUIRED)
   target_link_libraries(queue_bench PRIVATE Threads::Threads)
