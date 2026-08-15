@@ -43,7 +43,7 @@ narrow: workers never touch GL, the main thread never meshes.
 The streaming path looks like an obvious candidate for a lock-free queue, and
 the engine ships one (`core/mpmc_queue.h`, a Vyukov bounded MPMC queue with a
 concurrency stress test). I benchmarked it against the mutex pool first
-(`bench/queue_bench`, output in `docs/bench/queue_bench.txt`):
+(`src/bench/queue_bench.cpp`, output in `docs/bench/queue_bench.txt`):
 
 - Under contention at fine granularity the lock-free queue beats a
   `std::mutex + std::queue` pool by 2-5x.
