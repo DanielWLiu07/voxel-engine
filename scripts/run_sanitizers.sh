@@ -2,13 +2,13 @@
 #
 # TSan over the concurrency tests, then ASan+UBSan over the full suite.
 # Any sanitizer hit fails the script. UBSan suppresses only FastNoiseLite's
-# intentional hash overflow (tools/sanitizer/ubsan_suppressions.txt).
+# intentional hash overflow (scripts/sanitizer/ubsan_suppressions.txt).
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-SUPP="$REPO_ROOT/tools/sanitizer/ubsan_suppressions.txt"
+SUPP="$REPO_ROOT/scripts/sanitizer/ubsan_suppressions.txt"
 
 echo "==== ThreadSanitizer: concurrency primitives ===="
 cmake -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVOXEL_BUILD_BENCH=OFF \
