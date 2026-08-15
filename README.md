@@ -41,6 +41,16 @@ game shows the credit at boot and in the HUD, and every tile's model,
 prompt, and seed are committed in [`TEXTURES.md`](TEXTURES.md) and
 `textures/MANIFEST.toml`.
 
+**Contents:** [Build](#build) - [Measured performance](#measured-performance)
+- [What's in here](#whats-in-here) - [Architecture](#architecture)
+- [Controls](#controls)
+
+The performance section is the long one, and it is meant to be skimmed by
+heading: [the hardware-independent
+numbers](#the-numbers-that-do-not-depend-on-the-machine) first, then
+[frame cost](#frame-cost-on-an-m4), [scaling](#scaling-with-world-size),
+[memory](#where-the-gpu-memory-went), and [culling](#culling-measured).
+
 ## Build
 
 ```
@@ -64,6 +74,8 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
+### The numbers that do not depend on the machine
+
 The numbers worth reading first are the ones that do not depend on the
 machine. A frame rate is a property of this laptop as much as of this
 engine; a ratio and a byte count are properties of the engine alone, and
@@ -78,6 +90,8 @@ they reproduce exactly on any GPU:
 | Chunk serialization, RLE vs raw | 39.06 MB to 0.67 MB, **58x** |
 | Sub-chunks drawn vs loaded, underground | up to **70x fewer** |
 | Chunk pipeline scaling on 9 workers | **8.4x** parallel efficiency |
+
+### Frame cost, on an M4
 
 Those hold whatever you run this on. The frame numbers below are what
 they buy on one specific machine, and are quoted against the 60 Hz frame
@@ -124,6 +138,14 @@ scripts/run_sanitizers.sh                  # TSan (concurrency) + ASan/UBSan (lo
 scripts/audit.sh                           # the whole battery above in one command
 ```
 
+### Full measurement table
+
+Every claim in this README in one place, folded because it is a
+reference rather than something to read top to bottom.
+
+<details>
+<summary>All measured figures</summary>
+
 | Metric | Value |
 | --- | --- |
 | Greedy meshing, contiguous Perlin chunk | 18.1x fewer quads vs naive (0.9 ms build), GPU buffer 150.7 KB -> 8.3 KB |
@@ -147,6 +169,10 @@ scripts/audit.sh                           # the whole battery above in one comm
 | Edit persistence (`--verify-edit-persistence`) | `stashed=1 restored=1 survived=1`: a block edit survives its chunk streaming out and back in (modified chunks are RLE-stashed on eviction instead of regenerated; saves include the stash) |
 | Persistence contract (`scripts/verify_persistence.sh`) | loads a saved world twice: with the manifest seed only the edited chunk stashes (`stashed=1`); with a different seed all 169 loaded chunks are conservatively preserved (`stashed=169`) and the edit still survives |
 
+</details>
+
+### What the greedy ratio measures
+
 **What the greedy ratio does and does not include.** The mesher is
 chunk-local: it treats anything outside the chunk as air
 (`Chunk::get_or_air`), so a chunk emits its full side walls even where the
@@ -168,6 +194,8 @@ chunk cannot be meshed until its neighbours exist) and re-meshes
 neighbours on every edit at a chunk boundary. It is the clearest
 remaining win in the renderer, worth about 17% of resident quads with
 caves on, and it is listed here rather than left to be discovered.
+
+### Scaling with world size
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
 (section/triangle counts are exact at current HEAD; the ms columns are
@@ -198,6 +226,8 @@ that lost at least half their wall time off-CPU, `stolen_ms` totals it,
 and `engine_low1_fps` recomputes the worst 1% charging those frames only
 the CPU time they actually used.
 
+### Frame jitter: the engine, or the machine
+
 Three 720-frame runs at radius 12 on a machine at load 6.5:
 
 | Run | over_budget | descheduled | stolen | low1_fps | engine_low1_fps |
@@ -223,11 +253,15 @@ the per-chunk mesh and block data. `BENCH_FRAME` also reports
 `gpu_buffers_mb`, the resident mesh bytes (per-chunk vertex buffers plus
 one shared quad index buffer), and it shows live in the HUD's perf panel.
 
+### Where the GPU memory went
+
 That footprint is also computed headlessly by `--bench`, which is what CI
 gates. `World::apply_sections` buckets one chunk-wide greedy mesh into
-sections without re-meshing, so summing the meshes for a radius reproduces
-`resident_gpu_bytes()` exactly - no GL context, no window, deterministic
-for a given seed. Each row adds one optimization to the row above it, so
+sections without re-meshing, so summing the meshes for a radius gives the
+vertex bytes the engine uploads - no GL context, no window, deterministic
+for a given seed. The shared index buffer is modelled on
+`QuadIndexBuffer::bind_for`'s own 1.5x growth policy rather than assumed
+tight, and is a fraction of a percent of the total either way. Each row adds one optimization to the row above it, so
 the cost of dropping any single one is the gap between two adjacent rows:
 
 | Radius 12, 625 chunks | Quads | GPU mesh |
@@ -273,6 +307,8 @@ The wireframe view (`--wireframe`, or `G` at runtime) shows the merge
 directly: flat spans render as a few large quads rather than one per block
 face. This shot is `--wireframe --pose ground --screenshot-after 40`.
 
+### Culling, measured
+
 The frustum cull rows come from `--bench`'s deterministic pose (camera at
 (0, 80, 0), yaw -90, pitch -15, 70 deg FOV, 16:9). The chunk row counts
 loaded chunks that survive the per-chunk tight AABB test. The section rows
@@ -315,6 +351,8 @@ prints one stable summary line. p99 reflects occasional heavy frames
 (cascade refresh, chunk stream events). Avg is the steady-state
 gameplay number at this pose.
 
+### Worker-pool scaling
+
 Worker-pool scaling (`scripts/bench_scaling.sh`, radius 12, median of 3
 runs per point): the `--threads N` flag pins the pool size, and the
 headless `--save` path runs the exact generate + greedy-mesh + upload
@@ -339,6 +377,8 @@ against). Run-to-run swing widens with worker count (scheduler placement
 across the M4's P/E cores, thermal state); hence medians. The
 worker-busy ratio (worker CPU ms over wall ms) is the number the 8.4x
 headline reports, and both lines print in every sweep row.
+
+### Pose sensitivity
 
 Frame time across three named poses (`--bench-frame 300 --pose <name>`),
 radius 12, M4:
@@ -374,6 +414,8 @@ motion. Because the orbit draws a different triangle count every frame,
 `tris_per_sec` divides the window's mean triangle count (`avg_tris`) by
 its mean frame time rather than scaling one arbitrary frame's count; for
 a static pose the two are identical.
+
+### Where the frame time goes
 
 Per-pass breakdown at radius 12, from `--bench-frame 300 --pass-breakdown`
 (glFinish bracketing makes the per-pass numbers real GPU wall time at the
@@ -452,6 +494,38 @@ Tooling
 - Tracy profiler instrumentation behind `-DVOXEL_USE_TRACY=ON`.
 - F12 to PNG screenshot.
 
+## Architecture
+
+Layered, no globals. `gfx/` is a generic OpenGL wrapper that doesn't know
+about voxels. `world/` owns voxel data and meshing. `render/` composes draw
+passes from `gfx/` and `world/`. `game/` is the only layer that coordinates
+player input with world state. `ui/` is the debug HUD. Chunk generation and
+meshing run on a worker pool; every OpenGL call stays on the main thread.
+
+[`docs/design.md`](docs/design.md) covers the threading model, the lock-free-vs-mutex
+queue decision, and the measurement methodology in more detail.
+
+```
+src/
+  bench/   headless mesher / cull / memory benchmark, standalone queue bench
+  core/    window, input, thread pool
+  gfx/     shader, mesh, camera, frustum, CSM, post-process, water, atlas
+  world/   chunk, terrain gen, greedy mesher, world container, streaming
+  render/  lighting, draw passes (shadow, sky, terrain, water)
+  game/    player, AABB physics, block interaction
+  ui/      debug HUD
+  main.cpp
+shaders/      GLSL 4.10 core
+third_party/  glad, stb, FastNoiseLite (vendored)
+scripts/      benchmark sweeps, sanitizer runs, the audit battery
+docs/         design notes, texture atlas, committed bench artifacts
+tests/        world + queue unit tests
+```
+
+Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD
+(GL 4.1 core loader), stb_image, stb_image_write, FastNoiseLite. Optional:
+Tracy.
+
 ## Controls
 
 | Key | Action |
@@ -474,31 +548,3 @@ Tooling
 | `[` / `]` | Step time of day |
 | V | Toggle vsync |
 | Esc | Quit |
-
-## Architecture
-
-Layered, no globals. `gfx/` is a generic OpenGL wrapper that doesn't know
-about voxels. `world/` owns voxel data and meshing. `render/` composes draw
-passes from `gfx/` and `world/`. `game/` is the only layer that coordinates
-player input with world state. `ui/` is the debug HUD. Chunk generation and
-meshing run on a worker pool; every OpenGL call stays on the main thread.
-
-[`docs/design.md`](docs/design.md) covers the threading model, the lock-free-vs-mutex
-queue decision, and the measurement methodology in more detail.
-
-```
-src/
-  core/    window, input, thread pool
-  gfx/     shader, mesh, camera, frustum, CSM, post-process, water, atlas
-  world/   chunk, terrain gen, greedy mesher, world container, streaming
-  render/  lighting, draw passes (shadow, sky, terrain, water)
-  game/    player, AABB physics, block interaction
-  ui/      debug HUD
-  main.cpp
-shaders/   GLSL 4.10 core
-third_party/  glad, stb, FastNoiseLite (vendored)
-```
-
-Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD
-(GL 4.1 core loader), stb_image, stb_image_write, FastNoiseLite. Optional:
-Tracy.
