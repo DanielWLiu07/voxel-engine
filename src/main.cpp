@@ -178,6 +178,14 @@ int run_bench() {
     section_bounds.reserve(total);
     vis_arrays.reserve(total);
     int total_sections_nonempty = 0;
+    // Whole-world GPU mesh footprint, accumulated over the same chunks the
+    // cull bench generates. World::apply_sections buckets one chunk-wide
+    // greedy mesh into sections without re-meshing, so the vertices summed
+    // here are exactly the vertices the engine uploads - no GL context
+    // needed to get the number that matters.
+    std::size_t world_greedy_quads = 0;
+    std::size_t world_naive_quads  = 0;
+    std::size_t world_max_quads    = 0;  // sizes the one shared index buffer
     // Cave pose for the occlusion bench: first 2-tall air pocket with a
     // solid roof and floor, scanned in fixed order near the origin so the
     // pose is deterministic for a given seed.
@@ -195,6 +203,14 @@ int run_bench() {
                                    static_cast<float>(world::kChunkSizeY),
                                    oz + world::kChunkSizeZ}});
             tight_aabbs.push_back(world::make_chunk_aabb({cx, cz}, c));
+
+            const auto greedy = world::build_chunk_mesh_greedy(c);
+            const auto naive  = world::build_chunk_mesh_naive(c);
+            const std::size_t gq = greedy.vertices.size() / 4;
+            world_greedy_quads += gq;
+            world_naive_quads  += naive.vertices.size() / 4;
+            world_max_quads = std::max(world_max_quads, gq);
+
             auto secs = world::compute_section_bounds({cx, cz}, c);
             for (const auto& s : secs) if (s.has_mesh) ++total_sections_nonempty;
             section_bounds.push_back(std::move(secs));
@@ -356,6 +372,55 @@ int run_bench() {
         std::printf("  cave pose                : n/a (no air pocket found near origin)\n");
     }
 
+    // ---- Whole-world GPU mesh footprint --------------------------------
+    // The README's headline memory figure used to be readable only off the
+    // debug HUD of a running window, which made it the one number in the
+    // memory story that CI could not check and a reader could not
+    // reproduce. It is pure arithmetic over the meshes, so compute it here
+    // with the rest of the headless bench.
+    //
+    // Each row adds one optimization to the row above it, so the cost of
+    // dropping any single one is the difference between two adjacent rows.
+    constexpr std::size_t kLegacyVertexBytes = 40;  // the pre-packing float layout
+    constexpr std::size_t kIndexBytesPerQuad = 6 * sizeof(std::uint32_t);
+    const std::size_t packed_vertex_bytes = sizeof(gfx::VertexPacked);
+
+    // The shared buffer is sized by QuadIndexBuffer::bind_for, which grows
+    // to 1.5x the request so the next slightly-bigger chunk doesn't rebuild
+    // the pattern. Applying that policy to the largest chunk mesh gives the
+    // capacity the engine settles at, for any upload order in which the
+    // largest chunk is not the very first one to arrive.
+    const std::size_t shared_index_quads =
+        std::max(world_max_quads + world_max_quads / 2, std::size_t{1024});
+
+    auto mb = [](std::size_t bytes) { return bytes / (1024.0 * 1024.0); };
+    const double naive_40_mb = mb(world_naive_quads * 4 * kLegacyVertexBytes +
+                                  world_naive_quads * kIndexBytesPerQuad);
+    const double greedy_40_mb = mb(world_greedy_quads * 4 * kLegacyVertexBytes +
+                                   world_greedy_quads * kIndexBytesPerQuad);
+    const double greedy_packed_mb = mb(world_greedy_quads * 4 * packed_vertex_bytes +
+                                       world_greedy_quads * kIndexBytesPerQuad);
+    const double shipped_mb = mb(world_greedy_quads * 4 * packed_vertex_bytes +
+                                 shared_index_quads * kIndexBytesPerQuad);
+
+    std::printf("\n==== whole-world GPU mesh footprint (radius %d, %d chunks) ====\n",
+                kRadius, total);
+    std::printf("(vertex bytes + index bytes; row 4 is what the engine holds "
+                "resident, computed with no GL context)\n");
+    std::printf("  1. naive faces, %zu B vertex, per-chunk index buffer : %9zu quads  %8.1f MB\n",
+                kLegacyVertexBytes, world_naive_quads, naive_40_mb);
+    std::printf("  2. + greedy meshing                                  : %9zu quads  %8.1f MB\n",
+                world_greedy_quads, greedy_40_mb);
+    std::printf("  3. + %zu B packed vertex                              : %9zu quads  %8.1f MB\n",
+                packed_vertex_bytes, world_greedy_quads, greedy_packed_mb);
+    std::printf("  4. + one shared quad index buffer  <- shipped        : %9zu quads  %8.1f MB\n",
+                world_greedy_quads, shipped_mb);
+    std::printf("  greedy %.1fx  |  packing %.2fx  |  shared index %.2fx  |  all three %.1fx\n",
+                greedy_40_mb > 0.0 ? naive_40_mb / greedy_40_mb : 0.0,
+                greedy_packed_mb > 0.0 ? greedy_40_mb / greedy_packed_mb : 0.0,
+                shipped_mb > 0.0 ? greedy_packed_mb / shipped_mb : 0.0,
+                shipped_mb > 0.0 ? naive_40_mb / shipped_mb : 0.0);
+
     // Stable, machine-readable summary line so CI can gate the cull ratios
     // without fishing through the prose. Whitespace-separated key=value
     // pairs after a fixed prefix.
@@ -364,12 +429,17 @@ int run_bench() {
                 " section_nonempty=%.2f"
                 " section_total=%.2f"
                 " occl_surface=%.2f"
-                " occl_cave=%.2f\n",
+                " occl_cave=%.2f"
+                " vertex_bytes=%zu"
+                " world_mesh_mb=%.2f"
+                " world_mesh_prepack_mb=%.2f"
+                " world_mesh_naive_mb=%.2f\n",
                 ratio(tight_fartight, total),
                 ratio(sections_drawn, total_sections_nonempty),
                 ratio(sections_drawn, total * world::kSectionsPerChunk),
                 surf_occl > 0 ? double(surf_frustum) / surf_occl : 0.0,
-                (cave_found && cave_occl > 0) ? double(cave_frustum) / cave_occl : 0.0);
+                (cave_found && cave_occl > 0) ? double(cave_frustum) / cave_occl : 0.0,
+                packed_vertex_bytes, shipped_mb, greedy_packed_mb, naive_40_mb);
     return EXIT_SUCCESS;
 }
 

@@ -73,7 +73,7 @@ they reproduce exactly on any GPU:
 | :--- | ---: |
 | Greedy meshing, triangles vs naive per-face | **18.1x fewer** (CI-gated at >=15x) |
 | Vertex format, packed vs float | 40 B to **12 B**, 3.3x |
-| Whole-world GPU mesh at radius 12 | 48 MB to **12.5 MB** |
+| Whole-world GPU mesh at radius 12, all three wins | 369.6 MB to **12.5 MB**, 29.5x |
 | Index data per chunk, one shared quad EBO | **zero** |
 | Chunk serialization, RLE vs raw | 39.06 MB to 0.67 MB, **58x** |
 | Sub-chunks drawn vs loaded, underground | up to **70x fewer** |
@@ -221,11 +221,37 @@ quadruples. Peak RSS scales sub-linearly with chunk count because the
 worker pool, FBOs, and post-process chain are constant cost on top of
 the per-chunk mesh and block data. `BENCH_FRAME` also reports
 `gpu_buffers_mb`, the resident mesh bytes (per-chunk vertex buffers plus
-one shared quad index buffer): at radius 12 the 625 chunks hold 12.5 MB
-of GPU mesh buffers under the RSS - 48 MB before the 12-byte packed
-vertex format, 18.8 MB before per-chunk index buffers were replaced by
-the shared quad pattern. Face merging, vertex packing, and index sharing
-each took a measured bite. It also shows live in the HUD's perf panel.
+one shared quad index buffer), and it shows live in the HUD's perf panel.
+
+That footprint is also computed headlessly by `--bench`, which is what CI
+gates. `World::apply_sections` buckets one chunk-wide greedy mesh into
+sections without re-meshing, so summing the meshes for a radius reproduces
+`resident_gpu_bytes()` exactly - no GL context, no window, deterministic
+for a given seed. Each row adds one optimization to the row above it, so
+the cost of dropping any single one is the gap between two adjacent rows:
+
+| Radius 12, 625 chunks | Quads | GPU mesh |
+| :--- | ---: | ---: |
+| naive faces, 40 B vertex, per-chunk index buffer | 2,106,056 | 369.6 MB |
+| + greedy meshing | 273,554 | 48.0 MB |
+| + 12-byte packed vertex | 273,554 | 18.8 MB |
+| + one shared quad index buffer (shipped) | 273,554 | **12.5 MB** |
+
+Face merging is worth 7.7x here, vertex packing 2.56x, index sharing
+1.50x; together 29.5x. Computing the chain is what showed the "before"
+number quoted here until now was wrong: 48 MB is row 2, which already has
+greedy meshing applied, so calling 48 to 12.5 MB the result of all three
+wins credited face merging twice. The span that covers three wins starts
+at 369.6 MB. The greedy factor is 7.7x
+rather than the headline 18.1x because this is caves-on gameplay terrain
+across 625 chunks; the 18.1x is the contiguous single-chunk case the CI
+gate uses. That the two paths agree with the mesher bench's caves-on 7.8x
+is a useful cross-check, since they share no code.
+
+`--bench` emits `world_mesh_mb` on the `BENCH_SUMMARY` line and CI bounds
+it from both sides: a ceiling catches a fatter vertex or a reintroduced
+per-chunk index buffer, a floor catches a mesher that regressed into
+emitting nothing.
 
 Block edits (place/break) remesh the whole 16x256x16 chunk synchronously
 rather than patching the mesh, because greedy meshing is fast enough to

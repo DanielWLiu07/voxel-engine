@@ -65,8 +65,9 @@ jobs:
           SECTION_NONEMPTY=$(echo "$SUMMARY" | grep -oE 'section_nonempty=[0-9]+\.[0-9]+' | cut -d= -f2)
           SECTION_TOTAL=$(echo "$SUMMARY"    | grep -oE 'section_total=[0-9]+\.[0-9]+'    | cut -d= -f2)
           OCCL_CAVE=$(echo "$SUMMARY"        | grep -oE 'occl_cave=[0-9]+\.[0-9]+'        | cut -d= -f2)
+          WORLD_MESH=$(echo "$SUMMARY"       | grep -oE 'world_mesh_mb=[0-9]+\.[0-9]+'   | cut -d= -f2)
 
-          echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x  occl_cave=${OCCL_CAVE}x"
+          echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x  occl_cave=${OCCL_CAVE}x  world_mesh=${WORLD_MESH}MB"
 
           # Thresholds carry ~10% slack below current measurements (M4 18.1 / 2.96 / 3.09 / 12.35).
           # If GH-hosted runners drift further, raise the slack rather than tightening the code.
@@ -74,6 +75,12 @@ jobs:
               awk -v name="$1" -v val="$2" -v min="$3" \
                 'BEGIN { if (val+0 < min+0) { printf "%s = %s below threshold %s\n", name, val, min; exit 1 }
                          else                 { printf "%s = %s OK (>= %s)\n",        name, val, min } }'
+          }
+          # A memory figure regresses upward, so it needs the opposite test.
+          gate_max() {
+              awk -v name="$1" -v val="$2" -v max="$3" \
+                'BEGIN { if (val+0 > max+0) { printf "%s = %s above ceiling %s\n", name, val, max; exit 1 }
+                         else                 { printf "%s = %s OK (<= %s)\n",       name, val, max } }'
           }
           gate greedy            "$GREEDY"           15.0
           gate chunk_tight       "$CHUNK_TIGHT"       2.7
@@ -83,6 +90,14 @@ jobs:
           # sections) so the ratio is sensitive to mesher/terrain tweaks.
           # Gate loosely: the claim is "order of magnitude underground".
           gate occl_cave         "$OCCL_CAVE"        10.0
+          # Whole-world GPU mesh bytes at radius 12: the README's headline
+          # memory number. Deterministic (same seed, same terrain, pure
+          # arithmetic over the meshes), so the bounds are tight. The
+          # ceiling catches a fatter vertex or a reintroduced per-chunk
+          # index buffer; the floor catches a mesher that regressed into
+          # emitting nothing, which a ceiling alone would happily pass.
+          gate_max world_mesh_mb "$WORLD_MESH"       13.0
+          gate     world_mesh_mb "$WORLD_MESH"       12.0
 
   sanitizers:
     name: sanitizers (TSan + ASan/UBSan)
