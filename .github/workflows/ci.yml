@@ -50,17 +50,15 @@ jobs:
           OUTPUT=$(./build/voxel_engine --bench)
           echo "$OUTPUT"
 
-          # Greedy meshing ratio (contiguous chunk, first 'NN.NNx fewer quads' line).
-          GREEDY=$(echo "$OUTPUT" | grep -oE '[0-9]+\.[0-9]+x fewer quads' | head -1 | grep -oE '[0-9]+\.[0-9]+')
-          if [ -z "$GREEDY" ]; then
-            echo "Failed to parse greedy ratio from --bench output"; exit 1
-          fi
-
-          # Cull ratios from the stable BENCH_SUMMARY line.
+          # Every gated figure comes off the stable BENCH_SUMMARY line. The
+          # greedy ratio used to be scraped out of a prose line instead
+          # ('NN.NNx fewer quads'), which tied the gate to the wording of a
+          # human-readable report; run_mesher_bench returns it now.
           SUMMARY=$(echo "$OUTPUT" | grep '^BENCH_SUMMARY ' | head -1)
           if [ -z "$SUMMARY" ]; then
             echo "Failed to find BENCH_SUMMARY line in --bench output"; exit 1
           fi
+          GREEDY=$(echo "$SUMMARY"           | grep -oE 'greedy=[0-9]+\.[0-9]+'           | cut -d= -f2)
           CHUNK_TIGHT=$(echo "$SUMMARY"      | grep -oE 'chunk_tight=[0-9]+\.[0-9]+'      | cut -d= -f2)
           SECTION_NONEMPTY=$(echo "$SUMMARY" | grep -oE 'section_nonempty=[0-9]+\.[0-9]+' | cut -d= -f2)
           SECTION_TOTAL=$(echo "$SUMMARY"    | grep -oE 'section_total=[0-9]+\.[0-9]+'    | cut -d= -f2)
