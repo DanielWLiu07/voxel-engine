@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
+#include "bench/frame_report.h"
 #include "bench/mesher_bench.h"
 #include "core/cli_options.h"
 #include "core/cpu_time.h"
@@ -9,6 +10,7 @@
 #include "core/input.h"
 #include "core/profiler.h"
 #include "core/thread_pool.h"
+#include "core/window.h"
 #include "game/player.h"
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
@@ -37,7 +39,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string_view>
-#include <sys/resource.h>
 #include <thread>
 #include <vector>
 
@@ -84,14 +85,6 @@ void print_io_report(const char* verb, int chunks, double ms,
                 secs > 0.0 ? mb_disk / secs : 0.0,
                 secs > 0.0 ? mb_raw  / secs : 0.0,
                 ok ? "ok" : "ERRORS");
-}
-
-void glfw_error(int code, const char* desc) {
-    std::fprintf(stderr, "[glfw] error %d: %s\n", code, desc);
-}
-
-void framebuffer_resize(GLFWwindow*, int w, int h) {
-    glViewport(0, 0, w, h);
 }
 
 fs::path find_asset_root(const char* argv0) {
@@ -262,30 +255,19 @@ int main(int argc, char** argv) {
     const bool have_pose_at = opt.have_pose_at;
 
 
-    glfwSetErrorCallback(glfw_error);
-    if (!glfwInit()) {
-        std::fprintf(stderr, "glfwInit failed\n");
-        return EXIT_FAILURE;
-    }
-
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-    glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
-    glfwWindowHint(GLFW_SAMPLES, 2);
-    if (bench_frames > 0 || bench_io || bench_edit > 0 || validate_mode ||
-        verify_edit_persistence || !save_path.empty())
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "voxel_engine", nullptr, nullptr);
-    if (!window) {
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-    glfwMakeContextCurrent(window);
+    // Declared before every GL-owning object below (shaders, world, FBOs,
+    // meshes) so it destructs after them: their glDelete* calls must run
+    // while the context is still current. That ordering is why this is a
+    // named local at the top of main rather than something tucked inside a
+    // setup helper.
+    const bool headless = bench_frames > 0 || bench_io || bench_edit > 0 ||
+                          validate_mode || verify_edit_persistence ||
+                          !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
-    glfwSwapInterval(vsync_enabled ? 1 : 0);
+    auto win = core::Window::create({.visible = !headless,
+                                     .vsync   = vsync_enabled});
+    if (!win) return EXIT_FAILURE;
+    GLFWwindow* window = win->handle();
     // Section-graph occlusion culling (O to toggle). On by default; the
     // frustum-only path stays one keypress away (or --no-occlusion) for
     // A/B comparison.
@@ -294,29 +276,12 @@ int main(int argc, char** argv) {
     // show as a few large quads where a naive mesher would draw one per block.
     bool wireframe = start_wireframe;
 
-    int version = gladLoadGL(glfwGetProcAddress);
-    if (version == 0) {
-        std::fprintf(stderr, "gladLoadGL failed\n");
-        return EXIT_FAILURE;
-    }
-    // Owns window + GLFW teardown from here on. Declared BEFORE every
-    // GL-owning object (shaders, world, FBOs, meshes) so it destructs
-    // after them: their glDelete* calls must run while the context is
-    // still current. Destroying GL objects after glfwTerminate() is
-    // undefined behavior that macOS happens to forgive and other drivers
-    // do not - and it also lets every early return below just return.
-    struct WindowGuard {
-        GLFWwindow* window;
-        ~WindowGuard() { glfwDestroyWindow(window); glfwTerminate(); }
-    } window_guard{window};
     std::printf("GL %d.%d  |  vendor=%s  |  renderer=%s\n",
-                GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version),
+                win->gl_version_major(), win->gl_version_minor(),
                 glGetString(GL_VENDOR), glGetString(GL_RENDERER));
 
-    glfwSetFramebufferSizeCallback(window, framebuffer_resize);
     int fb_w, fb_h;
     glfwGetFramebufferSize(window, &fb_w, &fb_h);
-    glViewport(0, 0, fb_w, fb_h);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
@@ -558,16 +523,15 @@ int main(int argc, char** argv) {
     // the trade-off is that the per-frame sync stalls inflate the frame-level
     // avg_ms heavily (~2.7x measured at radius 12) - never quote avg_ms from
     // this mode as frame time; use plain --bench-frame for that.
-    std::vector<double> pass_ms_shadow, pass_ms_sky, pass_ms_terrain,
-                        pass_ms_water,  pass_ms_postfx;
+    bench::PassSamples pass_ms;
     if (bench_pass_breakdown) {
         const std::size_t reserve_n = bench_frames > 0
             ? static_cast<std::size_t>(bench_frames) : 1024;
-        pass_ms_shadow.reserve(reserve_n);
-        pass_ms_sky.reserve(reserve_n);
-        pass_ms_terrain.reserve(reserve_n);
-        pass_ms_water.reserve(reserve_n);
-        pass_ms_postfx.reserve(reserve_n);
+        pass_ms.shadow.reserve(reserve_n);
+        pass_ms.sky.reserve(reserve_n);
+        pass_ms.terrain.reserve(reserve_n);
+        pass_ms.water.reserve(reserve_n);
+        pass_ms.postfx.reserve(reserve_n);
     }
     std::chrono::steady_clock::time_point pass_t0{};
     auto pass_start = [&](void) {
@@ -610,7 +574,7 @@ int main(int argc, char** argv) {
         }
         if (input.key_pressed(GLFW_KEY_V)) {
             vsync_enabled = !vsync_enabled;
-            glfwSwapInterval(vsync_enabled ? 1 : 0);
+            win->set_vsync(vsync_enabled);
             std::printf("[gfx] vsync %s\n", vsync_enabled ? "on" : "off");
         }
         if (input.key_pressed(GLFW_KEY_G)) {
@@ -909,7 +873,7 @@ int main(int argc, char** argv) {
         pass_start();
         render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light,
                                  shadow_cascade_mask);
-        pass_end(pass_ms_shadow);
+        pass_end(pass_ms.shadow);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, block_atlas);
@@ -918,7 +882,7 @@ int main(int argc, char** argv) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         pass_start();
         render::draw_sky(sky_shader, sky_vao, fv, light);
-        pass_end(pass_ms_sky);
+        pass_end(pass_ms.sky);
         pass_start();
         // Wireframe wraps only the terrain color pass; the shadow depth pass
         // is already done and the sky, water, and post-process fullscreen
@@ -928,11 +892,11 @@ int main(int argc, char** argv) {
                                           kBlockPalette, view_frustum,
                                           occlusion_cull_enabled);
         if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        pass_end(pass_ms_terrain);
+        pass_end(pass_ms.terrain);
         pass_start();
         render::draw_water(water_shader, water, fv, light,
                            static_cast<float>(world::kSeaLevel));
-        pass_end(pass_ms_water);
+        pass_end(pass_ms.water);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.
@@ -952,7 +916,7 @@ int main(int argc, char** argv) {
                                      /*threshold*/ 1.0f,
                                      /*intensity*/ 0.7f,
                                      /*exposure*/  1.0f);
-        pass_end(pass_ms_postfx);
+        pass_end(pass_ms.postfx);
 
         // Scripted clip capture: save the frame just rendered (pre-HUD),
         // one PNG per step after a settle period for streaming and shadows.
@@ -1178,75 +1142,20 @@ int main(int argc, char** argv) {
             if (static_cast<int>(bench_samples.size()) >= bench_frames) {
                 const core::FrameStats fs = core::compute_frame_stats(
                     bench_samples, bench_cpu_samples);
-                const std::size_t n = fs.frames;
-                const double avg = fs.avg_ms, p50 = fs.p50_ms;
-                const double p99 = fs.p99_ms, mn = fs.min_ms, mx = fs.max_ms;
-                const double stddev = fs.stddev_ms;
-                const double low1_fps = fs.low1_fps;
-                const std::size_t over_budget = fs.over_budget;
-                const double over_budget_pct = fs.over_budget_pct;
-                const std::size_t stalled = fs.descheduled_frames;
-                const double stolen_ms = fs.stolen_ms;
-                const double engine_low1_fps = fs.engine_low1_fps;
-                // Peak RSS. ru_maxrss is bytes on macOS, kilobytes on Linux.
-                struct rusage ru{};
-                getrusage(RUSAGE_SELF, &ru);
-#ifdef __APPLE__
-                const double peak_mb = static_cast<double>(ru.ru_maxrss) / (1024.0 * 1024.0);
-#else
-                const double peak_mb = static_cast<double>(ru.ru_maxrss) / 1024.0;
-#endif
-                // GPU mesh footprint: vertex + index bytes resident across all
-                // chunks, the VRAM analogue of the RSS above.
-                const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
-                                      / (1024.0 * 1024.0);
-                // Mean triangles per sampled frame, and throughput from the
-                // whole window (mean tris / mean frame time). For a static
-                // pose avg_tris equals the per-frame count; for the orbit it
-                // is the honest average the last frame alone cannot give.
-                const double avg_tris = bench_tris_sum / static_cast<double>(n);
-                const double tris_per_sec = (avg > 0.0)
-                    ? avg_tris * 1000.0 / avg
-                    : 0.0;
 
-                std::printf("\nBENCH_FRAME"
-                            " radius=%d pose=%.*s chunks=%d frames=%zu"
-                            " avg_ms=%.2f p50_ms=%.2f p99_ms=%.2f"
-                            " min_ms=%.2f max_ms=%.2f stddev_ms=%.2f avg_fps=%.1f"
-                            " drawn_chunks=%d drawn_sections=%d tris=%zu"
-                            " avg_tris=%.0f tris_per_sec=%.0f peak_rss_mb=%.1f"
-                            " gpu_buffers_mb=%.1f low1_fps=%.1f"
-                            " over_budget=%zu over_budget_pct=%.1f"
-                            " descheduled_frames=%zu stolen_ms=%.1f"
-                            " engine_low1_fps=%.1f\n",
-                            stream_radius,
-                            static_cast<int>(bench_pose.size()), bench_pose.data(),
-                            total_chunks, n,
-                            avg, p50, p99, mn, mx, stddev,
-                            (avg > 0.0 ? 1000.0 / avg : 0.0),
-                            last_stats.chunks_drawn,
-                            last_stats.sections_drawn,
-                            last_stats.triangles_drawn,
-                            avg_tris, tris_per_sec, peak_mb, gpu_mb,
-                            low1_fps, over_budget, over_budget_pct,
-                            stalled, stolen_ms, engine_low1_fps);
-                if (bench_pass_breakdown && !pass_ms_shadow.empty()) {
-                    auto mean = [](const std::vector<double>& v) {
-                        double s = 0.0; for (double x : v) s += x;
-                        return v.empty() ? 0.0 : s / static_cast<double>(v.size());
-                    };
-                    const double s_sh = mean(pass_ms_shadow);
-                    const double s_sk = mean(pass_ms_sky);
-                    const double s_te = mean(pass_ms_terrain);
-                    const double s_wa = mean(pass_ms_water);
-                    const double s_pf = mean(pass_ms_postfx);
-                    std::printf("PASS_BREAKDOWN frames=%zu"
-                                " shadow=%.2f sky=%.2f terrain=%.2f"
-                                " water=%.2f postfx=%.2f sum_passes=%.2f\n",
-                                pass_ms_shadow.size(),
-                                s_sh, s_sk, s_te, s_wa, s_pf,
-                                s_sh + s_sk + s_te + s_wa + s_pf);
-                }
+                bench::print_frame_report({
+                    .stream_radius   = stream_radius,
+                    .pose            = bench_pose,
+                    .total_chunks    = total_chunks,
+                    .stats           = fs,
+                    .triangles_sum   = bench_tris_sum,
+                    .chunks_drawn    = last_stats.chunks_drawn,
+                    .sections_drawn  = last_stats.sections_drawn,
+                    .triangles_drawn = last_stats.triangles_drawn,
+                    .gpu_buffers_mb  = static_cast<double>(wrld.resident_gpu_bytes())
+                                       / (1024.0 * 1024.0),
+                });
+                if (bench_pass_breakdown) bench::print_pass_breakdown(pass_ms);
                 std::fflush(stdout);
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }

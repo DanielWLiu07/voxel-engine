@@ -22,58 +22,78 @@
 
 namespace bench {
 
-int run_mesher_bench(int stream_radius) {
-    constexpr int kRuns = 25;
+namespace {
 
-    auto bench_one = [&](bool caves, const char* label) {
-        world::TerrainGen terrain(1337);
-        terrain.set_caves_enabled(caves);
-        world::Chunk chunk;
-        terrain.fill_chunk(0, 0, chunk);
+// Greedy meshing against the naive one-quad-per-face baseline, on a
+// single chunk. Self-contained: it generates its own terrain and
+// shares no state with the cull or footprint benchmarks below.
+//
+// Returns the contiguous-terrain quad ratio, which is the figure the
+// CI gate reads. It used to be scraped back out of the printed prose.
+double bench_greedy_vs_naive() {
+    double ci_gate_ratio = 0.0;
+constexpr int kRuns = 25;
 
-        double naive_total = 0.0, greedy_total = 0.0;
-        world::ChunkMeshData last_naive, last_greedy;
-        for (int i = 0; i < kRuns; ++i) {
-            last_naive  = world::build_chunk_mesh_naive(chunk);
-            last_greedy = world::build_chunk_mesh_greedy(chunk);
-            naive_total  += last_naive.build_ms;
-            greedy_total += last_greedy.build_ms;
-        }
-        std::size_t naive_tris  = static_cast<std::size_t>(last_naive.quad_count) * 2;
-        std::size_t greedy_tris = static_cast<std::size_t>(last_greedy.quad_count) * 2;
+auto bench_one = [&](bool caves, const char* label) {
+    world::TerrainGen terrain(1337);
+    terrain.set_caves_enabled(caves);
+    world::Chunk chunk;
+    terrain.fill_chunk(0, 0, chunk);
 
-        std::printf("---- %s ----\n", label);
-        std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
-                    last_naive.quad_count, naive_tris, naive_total / kRuns);
-        std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
-                    last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
-        // GPU buffer footprint: the merged mesh uploads fewer vertices, so
-        // the triangle win is a memory win too. Vertex bytes only - the
-        // quad index pattern is one shared buffer engine-wide, not a
-        // per-chunk cost.
-        auto vram_kb = [](const world::ChunkMeshData& m) {
-            return m.vertices.size() * sizeof(gfx::VertexPacked) / 1024.0;
-        };
-        const double naive_kb = vram_kb(last_naive);
-        const double greedy_kb = vram_kb(last_greedy);
-        std::printf("vram  : naive=%6.1f KB  greedy=%6.1f KB\n",
-                    naive_kb, greedy_kb);
-        if (last_greedy.quad_count > 0 && greedy_tris > 0) {
-            std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris"
-                        "  |  %.1fx less vram\n",
-                        static_cast<double>(last_naive.quad_count)  / last_greedy.quad_count,
-                        static_cast<double>(naive_tris)             / greedy_tris,
-                        greedy_kb > 0.0 ? naive_kb / greedy_kb : 0.0);
-        }
+    double naive_total = 0.0, greedy_total = 0.0;
+    world::ChunkMeshData last_naive, last_greedy;
+    for (int i = 0; i < kRuns; ++i) {
+        last_naive  = world::build_chunk_mesh_naive(chunk);
+        last_greedy = world::build_chunk_mesh_greedy(chunk);
+        naive_total  += last_naive.build_ms;
+        greedy_total += last_greedy.build_ms;
+    }
+    std::size_t naive_tris  = static_cast<std::size_t>(last_naive.quad_count) * 2;
+    std::size_t greedy_tris = static_cast<std::size_t>(last_greedy.quad_count) * 2;
+
+    std::printf("---- %s ----\n", label);
+    std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                last_naive.quad_count, naive_tris, naive_total / kRuns);
+    std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
+    // GPU buffer footprint: the merged mesh uploads fewer vertices, so
+    // the triangle win is a memory win too. Vertex bytes only - the
+    // quad index pattern is one shared buffer engine-wide, not a
+    // per-chunk cost.
+    auto vram_kb = [](const world::ChunkMeshData& m) {
+        return m.vertices.size() * sizeof(gfx::VertexPacked) / 1024.0;
     };
+    const double naive_kb = vram_kb(last_naive);
+    const double greedy_kb = vram_kb(last_greedy);
+    std::printf("vram  : naive=%6.1f KB  greedy=%6.1f KB\n",
+                naive_kb, greedy_kb);
+    if (last_greedy.quad_count > 0 && greedy_tris > 0) {
+        const double quad_ratio =
+            static_cast<double>(last_naive.quad_count) / last_greedy.quad_count;
+        if (!caves) ci_gate_ratio = quad_ratio;
+        std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris"
+                    "  |  %.1fx less vram\n",
+                    quad_ratio,
+                    static_cast<double>(naive_tris)             / greedy_tris,
+                    greedy_kb > 0.0 ? naive_kb / greedy_kb : 0.0);
+    }
+};
 
-    std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0) ====\n", kRuns);
-    // Caves-off measures the greedy algorithm against contiguous terrain
-    // - this is what the CI gate checks. Caves-on is the realistic
-    // gameplay path; lower ratio is expected because caves break up
-    // mergeable face runs.
-    bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
-    bench_one(/*caves=*/true,  "with caves (gameplay terrain)");
+std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0) ====\n", kRuns);
+// Caves-off measures the greedy algorithm against contiguous terrain
+// - this is what the CI gate checks. Caves-on is the realistic
+// gameplay path; lower ratio is expected because caves break up
+// mergeable face runs.
+bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
+bench_one(/*caves=*/true,  "with caves (gameplay terrain)");
+    return ci_gate_ratio;
+}
+
+}  // namespace
+
+int run_mesher_bench(int stream_radius) {
+    const double greedy_ratio = bench_greedy_vs_naive();
+
 
     // ---- Frustum cull benchmark ---------------------------------------
     // CPU-only, deterministic. Generates a 25x25 chunk grid and counts how
@@ -345,6 +365,7 @@ int run_mesher_bench(int stream_radius) {
     // without fishing through the prose. Whitespace-separated key=value
     // pairs after a fixed prefix.
     std::printf("\nBENCH_SUMMARY"
+                " greedy=%.2f"
                 " chunk_tight=%.2f"
                 " section_nonempty=%.2f"
                 " section_total=%.2f"
@@ -354,6 +375,7 @@ int run_mesher_bench(int stream_radius) {
                 " world_mesh_mb=%.2f"
                 " world_mesh_prepack_mb=%.2f"
                 " world_mesh_naive_mb=%.2f\n",
+                greedy_ratio,
                 ratio(tight_fartight, total),
                 ratio(sections_drawn, total_sections_nonempty),
                 ratio(sections_drawn, total * world::kSectionsPerChunk),
