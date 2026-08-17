@@ -938,6 +938,106 @@ void test_frame_stats_empty_is_safe() {
     EXPECT(s.low1_fps == 0.0, "no samples reports no rate");
 }
 
+
+// ---- Cross-chunk face culling -------------------------------------------
+//
+// A chunk meshed on its own treats everything outside it as air, so every
+// face on its four vertical boundaries is emitted even where the
+// neighbouring chunk has solid rock pressed against it. Those faces can
+// never be seen by any camera, and they were being uploaded, drawn, and
+// counted as merged geometry.
+//
+// The direction of the error matters and is asserted separately below: a
+// missing neighbour must still emit the face. Culling one that might be
+// visible is a hole in the world; emitting one that is hidden costs a
+// wasted quad.
+
+static world::Chunk solid_chunk() {
+    world::Chunk c;
+    for (int y = 0; y < 8; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x)
+                c.set(x, y, z, world::BlockId::Stone);
+    return c;
+}
+
+static void test_sampler_reads_across_the_boundary() {
+    world::Chunk self = solid_chunk();
+    world::Chunk east;                       // all air
+    world::NeighborChunks n{.pos_x = &east};
+
+    // x == world::kChunkSizeX is the first column of the +X neighbour.
+    EXPECT(world::sample_with_neighbors(self, n, world::kChunkSizeX, 0, 0) == world::BlockId::Air,
+           "sampler reads the neighbour, which is air here");
+
+    east.set(0, 0, 0, world::BlockId::Stone);
+    EXPECT(world::sample_with_neighbors(self, n, world::kChunkSizeX, 0, 0) == world::BlockId::Stone,
+           "sampler sees the neighbour's block");
+
+    // Without the link the same lookup is air: that is the old behaviour,
+    // and it is what makes the boundary faces appear.
+    EXPECT(world::sample_with_neighbors(self, {}, world::kChunkSizeX, 0, 0) == world::BlockId::Air,
+           "no neighbour link reads as air");
+
+    // Out of the world vertically is always air, neighbours or not.
+    EXPECT(world::sample_with_neighbors(self, n, 0, -1, 0) == world::BlockId::Air,
+           "below the world is air");
+    EXPECT(world::sample_with_neighbors(self, n, 0, world::kChunkSizeY, 0) == world::BlockId::Air,
+           "above the world is air");
+}
+
+static void test_neighbor_culls_the_shared_boundary() {
+    world::Chunk self = solid_chunk();
+    world::Chunk east = solid_chunk();
+
+    const auto alone = world::build_chunk_mesh_greedy(self);
+    const auto with_east =
+        world::build_chunk_mesh_greedy(self, world::NeighborChunks{.pos_x = &east});
+
+    // The +X wall is 16 wide by 8 tall and merges into one quad, so
+    // exactly one quad should disappear.
+    EXPECT(with_east.quad_count == alone.quad_count - 1,
+           "the hidden +X wall is no longer emitted");
+    EXPECT(with_east.quad_count > 0, "the rest of the mesh survives");
+
+    // Same for the naive mesher, where the wall is 128 separate faces.
+    const auto n_alone = world::build_chunk_mesh_naive(self);
+    const auto n_east =
+        world::build_chunk_mesh_naive(self, world::NeighborChunks{.pos_x = &east});
+    EXPECT(n_east.quad_count == n_alone.quad_count - world::kChunkSizeZ * 8,
+           "naive mesher drops every face of the hidden wall");
+}
+
+static void test_a_gap_in_the_neighbor_keeps_the_face() {
+    world::Chunk self = solid_chunk();
+    world::Chunk east = solid_chunk();
+    // Dig one block out of the neighbour's touching column. That block is
+    // now visible through the gap, so its face must survive.
+    east.set(0, 4, 5, world::BlockId::Air);
+
+    const world::NeighborChunks n{.pos_x = &east};
+    const auto meshed = world::build_chunk_mesh_naive(self, n);
+    const auto sealed = world::build_chunk_mesh_naive(self, world::NeighborChunks{});
+
+    // One face on the wall is still visible, so exactly one fewer face is
+    // culled than in the fully sealed case.
+    EXPECT(meshed.quad_count == sealed.quad_count - (world::kChunkSizeZ * 8 - 1),
+           "the face facing the gap is still emitted");
+}
+
+static void test_missing_neighbor_never_culls() {
+    world::Chunk self = solid_chunk();
+    // No links at all: identical to the pre-neighbour behaviour, which is
+    // the conservative direction. A regression that culled here would open
+    // holes at the edge of the loaded world.
+    const auto a = world::build_chunk_mesh_greedy(self);
+    const auto b = world::build_chunk_mesh_greedy(self, world::NeighborChunks{});
+    EXPECT(a.quad_count == b.quad_count,
+           "an empty neighbour set meshes exactly as before");
+    EXPECT(!world::NeighborChunks{}.any(), "an empty neighbour set reports empty");
+}
+
+
 int main() {
     std::printf("voxel_tests: running...\n");
     test_aabb_empty_chunk();
@@ -978,6 +1078,10 @@ int main() {
     test_atomic_write_creates_then_replaces();
     test_atomic_write_consumes_a_stale_tmp();
     test_atomic_write_missing_dir_fails_cleanly();
+    test_sampler_reads_across_the_boundary();
+    test_neighbor_culls_the_shared_boundary();
+    test_a_gap_in_the_neighbor_keeps_the_face();
+    test_missing_neighbor_never_culls();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");
