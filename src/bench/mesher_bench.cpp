@@ -31,61 +31,95 @@ namespace {
 // Returns the contiguous-terrain quad ratio, which is the figure the
 // CI gate reads. It used to be scraped back out of the printed prose.
 double bench_greedy_vs_naive() {
+    constexpr int kRuns = 25;
     double ci_gate_ratio = 0.0;
-constexpr int kRuns = 25;
 
-auto bench_one = [&](bool caves, const char* label) {
-    world::TerrainGen terrain(1337);
-    terrain.set_caves_enabled(caves);
-    world::Chunk chunk;
-    terrain.fill_chunk(0, 0, chunk);
+    auto bench_one = [&](bool caves, const char* label) {
+        world::TerrainGen terrain(1337);
+        terrain.set_caves_enabled(caves);
+        world::Chunk chunk;
+        terrain.fill_chunk(0, 0, chunk);
 
-    double naive_total = 0.0, greedy_total = 0.0;
-    world::ChunkMeshData last_naive, last_greedy;
-    for (int i = 0; i < kRuns; ++i) {
-        last_naive  = world::build_chunk_mesh_naive(chunk);
-        last_greedy = world::build_chunk_mesh_greedy(chunk);
-        naive_total  += last_naive.build_ms;
-        greedy_total += last_greedy.build_ms;
-    }
-    std::size_t naive_tris  = static_cast<std::size_t>(last_naive.quad_count) * 2;
-    std::size_t greedy_tris = static_cast<std::size_t>(last_greedy.quad_count) * 2;
+        // The four chunks that actually sit against this one.
+        //
+        // Meshing without them treats the chunk's vertical boundaries as
+        // open air, so a face is emitted along all four of them even where
+        // the neighbour has solid rock pressed against it. Both meshers do
+        // that work, but the naive baseline does far more of it - it emits
+        // one face per block where the greedy mesher merges the whole wall
+        // into a rectangle or two - so the ratio between them counts
+        // geometry no camera can ever reach. That is what this pass
+        // removes.
+        world::Chunk west, east, north, south;
+        terrain.fill_chunk(-1,  0, west);
+        terrain.fill_chunk( 1,  0, east);
+        terrain.fill_chunk( 0, -1, north);
+        terrain.fill_chunk( 0,  1, south);
+        const world::NeighborChunks nbrs{.neg_x = &west,  .pos_x = &east,
+                                         .neg_z = &north, .pos_z = &south};
 
-    std::printf("---- %s ----\n", label);
-    std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
-                last_naive.quad_count, naive_tris, naive_total / kRuns);
-    std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
-                last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
-    // GPU buffer footprint: the merged mesh uploads fewer vertices, so
-    // the triangle win is a memory win too. Vertex bytes only - the
-    // quad index pattern is one shared buffer engine-wide, not a
-    // per-chunk cost.
-    auto vram_kb = [](const world::ChunkMeshData& m) {
-        return m.vertices.size() * sizeof(gfx::VertexPacked) / 1024.0;
+        double naive_total = 0.0, greedy_total = 0.0;
+        world::ChunkMeshData last_naive, last_greedy;
+        for (int i = 0; i < kRuns; ++i) {
+            last_naive  = world::build_chunk_mesh_naive(chunk, nbrs);
+            last_greedy = world::build_chunk_mesh_greedy(chunk, nbrs);
+            naive_total  += last_naive.build_ms;
+            greedy_total += last_greedy.build_ms;
+        }
+        const std::size_t naive_tris =
+            static_cast<std::size_t>(last_naive.quad_count) * 2;
+        const std::size_t greedy_tris =
+            static_cast<std::size_t>(last_greedy.quad_count) * 2;
+
+        // The old chunk-local figure, printed beside the real one rather
+        // than left in a README footnote.
+        const auto alone_naive  = world::build_chunk_mesh_naive(chunk);
+        const auto alone_greedy = world::build_chunk_mesh_greedy(chunk);
+
+        std::printf("---- %s ----\n", label);
+        std::printf("naive : quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                    last_naive.quad_count, naive_tris, naive_total / kRuns);
+        std::printf("greedy: quads=%6d  tris=%6zu  avg build=%6.3f ms\n",
+                    last_greedy.quad_count, greedy_tris, greedy_total / kRuns);
+        // GPU buffer footprint: the merged mesh uploads fewer vertices, so
+        // the triangle win is a memory win too. Vertex bytes only - the
+        // quad index pattern is one shared buffer engine-wide, not a
+        // per-chunk cost.
+        auto vram_kb = [](const world::ChunkMeshData& m) {
+            return m.vertices.size() * sizeof(gfx::VertexPacked) / 1024.0;
+        };
+        const double naive_kb = vram_kb(last_naive);
+        const double greedy_kb = vram_kb(last_greedy);
+        std::printf("vram  : naive=%6.1f KB  greedy=%6.1f KB\n",
+                    naive_kb, greedy_kb);
+        if (last_greedy.quad_count > 0 && greedy_tris > 0) {
+            const double quad_ratio =
+                static_cast<double>(last_naive.quad_count) / last_greedy.quad_count;
+            if (!caves) ci_gate_ratio = quad_ratio;
+            std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris"
+                        "  |  %.1fx less vram\n",
+                        quad_ratio,
+                        static_cast<double>(naive_tris)             / greedy_tris,
+                        greedy_kb > 0.0 ? naive_kb / greedy_kb : 0.0);
+        }
+        if (alone_greedy.quad_count > 0) {
+            std::printf("        (chunk-local, boundaries as open air: "
+                        "naive=%d greedy=%d, %.1fx - what this used to "
+                        "report)\n",
+                        alone_naive.quad_count, alone_greedy.quad_count,
+                        static_cast<double>(alone_naive.quad_count) /
+                            alone_greedy.quad_count);
+        }
     };
-    const double naive_kb = vram_kb(last_naive);
-    const double greedy_kb = vram_kb(last_greedy);
-    std::printf("vram  : naive=%6.1f KB  greedy=%6.1f KB\n",
-                naive_kb, greedy_kb);
-    if (last_greedy.quad_count > 0 && greedy_tris > 0) {
-        const double quad_ratio =
-            static_cast<double>(last_naive.quad_count) / last_greedy.quad_count;
-        if (!caves) ci_gate_ratio = quad_ratio;
-        std::printf("ratio : %.1fx fewer quads  |  %.1fx fewer tris"
-                    "  |  %.1fx less vram\n",
-                    quad_ratio,
-                    static_cast<double>(naive_tris)             / greedy_tris,
-                    greedy_kb > 0.0 ? naive_kb / greedy_kb : 0.0);
-    }
-};
 
-std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0) ====\n", kRuns);
-// Caves-off measures the greedy algorithm against contiguous terrain
-// - this is what the CI gate checks. Caves-on is the realistic
-// gameplay path; lower ratio is expected because caves break up
-// mergeable face runs.
-bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
-bench_one(/*caves=*/true,  "with caves (gameplay terrain)");
+    std::printf("==== chunk mesher benchmark (%d runs, Perlin terrain chunk 0,0,\n"
+                "     meshed against its four real neighbours) ====\n", kRuns);
+    // Caves-off measures the greedy algorithm against contiguous terrain
+    // - this is what the CI gate checks. Caves-on is the realistic
+    // gameplay path; lower ratio is expected because caves break up
+    // mergeable face runs.
+    bench_one(/*caves=*/false, "contiguous terrain (CI gate)");
+    bench_one(/*caves=*/true,  "with caves (gameplay terrain)");
     return ci_gate_ratio;
 }
 
@@ -126,6 +160,11 @@ int run_mesher_bench(int stream_radius) {
     std::size_t world_greedy_quads = 0;
     std::size_t world_naive_quads  = 0;
     std::size_t world_max_quads    = 0;  // sizes the one shared index buffer
+    // Every chunk is kept so a second pass can mesh each one against its
+    // real neighbours. 625 chunks is about 40 MB, which is a benchmark's
+    // business and not the engine's.
+    std::vector<world::Chunk> chunks;
+    chunks.reserve(static_cast<std::size_t>(total));
     // Cave pose for the occlusion bench: first 2-tall air pocket with a
     // solid roof and floor, scanned in fixed order near the origin so the
     // pose is deterministic for a given seed.
@@ -144,17 +183,12 @@ int run_mesher_bench(int stream_radius) {
                                    oz + world::kChunkSizeZ}});
             tight_aabbs.push_back(world::make_chunk_aabb({cx, cz}, c));
 
-            const auto greedy = world::build_chunk_mesh_greedy(c);
-            const auto naive  = world::build_chunk_mesh_naive(c);
-            const std::size_t gq = greedy.vertices.size() / 4;
-            world_greedy_quads += gq;
-            world_naive_quads  += naive.vertices.size() / 4;
-            world_max_quads = std::max(world_max_quads, gq);
-
             auto secs = world::compute_section_bounds({cx, cz}, c);
             for (const auto& s : secs) if (s.has_mesh) ++total_sections_nonempty;
             section_bounds.push_back(std::move(secs));
             vis_arrays.push_back(world::compute_section_visibility(c));
+
+            chunks.push_back(c);
 
             if (!cave_found && std::abs(cx) <= 2 && std::abs(cz) <= 2) {
                 for (int y = 10; y <= 40 && !cave_found; ++y) {
@@ -175,6 +209,44 @@ int run_mesher_bench(int stream_radius) {
             }
         }
     }
+    // Second pass: mesh every chunk twice, once alone and once against its
+    // real neighbours. The difference is the geometry the engine was
+    // building for faces that are buried against the next chunk along and
+    // can never be seen.
+    //
+    // Meshing alone is what the per-chunk ratio measures, and it flatters
+    // the mesher: a chunk's four vertical boundaries are treated as open
+    // air, so every face on them counts as "merged" work that the naive
+    // baseline also has to do. Counting only faces a camera can reach is
+    // the number that survives being asked "merged relative to what?".
+    std::size_t world_greedy_alone_quads = 0;
+    {
+        const auto at = [&](int cx, int cz) -> const world::Chunk* {
+            if (cx < -kRadius || cx > kRadius || cz < -kRadius || cz > kRadius)
+                return nullptr;
+            return &chunks[static_cast<std::size_t>((cz + kRadius) * side +
+                                                    (cx + kRadius))];
+        };
+        std::size_t i = 0;
+        for (int cz = -kRadius; cz <= kRadius; ++cz) {
+            for (int cx = -kRadius; cx <= kRadius; ++cx, ++i) {
+                const world::Chunk& c = chunks[i];
+                const world::NeighborChunks n{.neg_x = at(cx - 1, cz),
+                                              .pos_x = at(cx + 1, cz),
+                                              .neg_z = at(cx, cz - 1),
+                                              .pos_z = at(cx, cz + 1)};
+                const auto greedy = world::build_chunk_mesh_greedy(c, n);
+                const auto naive  = world::build_chunk_mesh_naive(c, n);
+                const std::size_t gq = greedy.vertices.size() / 4;
+                world_greedy_quads += gq;
+                world_naive_quads  += naive.vertices.size() / 4;
+                world_max_quads = std::max(world_max_quads, gq);
+                world_greedy_alone_quads +=
+                    world::build_chunk_mesh_greedy(c).vertices.size() / 4;
+            }
+        }
+    }
+
     auto gen_t1 = std::chrono::steady_clock::now();
     const double gen_ms = std::chrono::duration<double, std::milli>(gen_t1 - gen_t0).count();
 
@@ -345,15 +417,21 @@ int run_mesher_bench(int stream_radius) {
 
     std::printf("\n==== whole-world GPU mesh footprint (radius %d, %d chunks) ====\n",
                 kRadius, total);
-    std::printf("(vertex bytes + index bytes; row 4 is what the engine holds "
-                "resident, computed with no GL context)\n");
+    std::printf("(vertex bytes + index bytes, computed with no GL context)\n");
+    std::printf("NOTE: every chunk here is meshed against its four real "
+                "neighbours.\n"
+                "      World's streaming path does not pass neighbours yet, so "
+                "the running\n"
+                "      engine still uploads the chunk-local geometry. This is "
+                "the mesher's\n"
+                "      output, not yet the engine's resident footprint.\n");
     std::printf("  1. naive faces, %zu B vertex, per-chunk index buffer : %9zu quads  %8.1f MB\n",
                 kLegacyVertexBytes, world_naive_quads, naive_40_mb);
     std::printf("  2. + greedy meshing                                  : %9zu quads  %8.1f MB\n",
                 world_greedy_quads, greedy_40_mb);
     std::printf("  3. + %zu B packed vertex                              : %9zu quads  %8.1f MB\n",
                 packed_vertex_bytes, world_greedy_quads, greedy_packed_mb);
-    std::printf("  4. + one shared quad index buffer  <- shipped        : %9zu quads  %8.1f MB\n",
+    std::printf("  4. + one shared quad index buffer                     : %9zu quads  %8.1f MB\n",
                 world_greedy_quads, shipped_mb);
     std::printf("  greedy %.1fx  |  packing %.2fx  |  shared index %.2fx  |  all three %.1fx\n",
                 greedy_40_mb > 0.0 ? naive_40_mb / greedy_40_mb : 0.0,

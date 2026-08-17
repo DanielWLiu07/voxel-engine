@@ -69,7 +69,36 @@ inline int corner_ao(int side1, int side2, int corner) {
 
 }  // namespace
 
-ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk) {
+BlockId sample_with_neighbors(const Chunk& chunk, const NeighborChunks& n,
+                              int x, int y, int z) {
+    // Above and below the world is air; chunks span the full height.
+    if (y < 0 || y >= kChunkSizeY) return BlockId::Air;
+
+    const bool out_x = (x < 0 || x >= kChunkSizeX);
+    const bool out_z = (z < 0 || z >= kChunkSizeZ);
+    if (!out_x && !out_z) return chunk.get(x, y, z);
+
+    // Diagonally out of bounds needs the corner chunk, which is not
+    // tracked: only the four edge-adjacent neighbours are. This affects
+    // ambient-occlusion corner samples along the four vertical edges of a
+    // chunk and nothing else - face visibility is never diagonal, because
+    // a face's occluder is the cell directly across it. Reporting air
+    // there leaves those corners very slightly brighter than they would
+    // be with the corner chunk in hand; it cannot open a hole.
+    if (out_x && out_z) return BlockId::Air;
+
+    if (out_x) {
+        const Chunk* c = (x < 0) ? n.neg_x : n.pos_x;
+        if (c == nullptr) return BlockId::Air;
+        return c->get(x < 0 ? x + kChunkSizeX : x - kChunkSizeX, y, z);
+    }
+    const Chunk* c = (z < 0) ? n.neg_z : n.pos_z;
+    if (c == nullptr) return BlockId::Air;
+    return c->get(x, y, z < 0 ? z + kChunkSizeZ : z - kChunkSizeZ);
+}
+
+ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
+                                     const NeighborChunks& neighbors) {
     ZoneScopedN("mesh_naive");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
@@ -91,7 +120,8 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk) {
                     int nx = x + kNeighborOffsets[f][0];
                     int ny = y + kNeighborOffsets[f][1];
                     int nz = z + kNeighborOffsets[f][2];
-                    if (face_visible(self, chunk.get_or_air(nx, ny, nz))) {
+                    if (face_visible(self, sample_with_neighbors(
+                            chunk, neighbors, nx, ny, nz))) {
                         emit_quad(out, origin, f, kFaces[f], self);
                     }
                 }
@@ -130,6 +160,7 @@ namespace {
 // merger needs that does not vary within a slice.
 struct SliceContext {
     const Chunk& chunk;
+    const NeighborChunks& neighbors;
     int d;
     int u_axis;
     int v_axis;
@@ -186,7 +217,8 @@ void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
             auto sample_solid = [&](int sd, int su, int sv) -> int {
                 int xa, ya, za;
                 slice_coords(ctx.d, ctx.u_axis, ctx.v_axis, sd, su, sv, xa, ya, za);
-                return is_solid(ctx.chunk.get_or_air(xa, ya, za)) ? 1 : 0;
+                return is_solid(sample_with_neighbors(
+                    ctx.chunk, ctx.neighbors, xa, ya, za)) ? 1 : 0;
             };
             auto vertex_ao = [&](int du, int dv) {
                 const int U = u + du * w;
@@ -250,7 +282,8 @@ void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
 
 // Greedy mesh: sweep 6 (axis, dir) combos. Per slice, build a BlockId mask
 // then merge contiguous same-id cells into maximal rectangles.
-ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
+ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
+                                      const NeighborChunks& neighbors) {
     ZoneScopedN("mesh_greedy");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
@@ -290,8 +323,10 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
                     slice_coords(d, u_axis, v_axis, s - 1, u, v, xa, ya, za);
                     slice_coords(d, u_axis, v_axis, s,     u, v, xb, yb, zb);
 
-                    BlockId a = chunk.get_or_air(xa, ya, za);
-                    BlockId b = chunk.get_or_air(xb, yb, zb);
+                    BlockId a = sample_with_neighbors(chunk, neighbors,
+                                                      xa, ya, za);
+                    BlockId b = sample_with_neighbors(chunk, neighbors,
+                                                      xb, yb, zb);
 
                     const std::size_t idx = static_cast<std::size_t>(v * u_size + u);
                     if (face_visible(a, b)) mask_pos[idx] = static_cast<std::uint8_t>(a);
@@ -300,7 +335,7 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk) {
             }
 
 
-            const SliceContext ctx{chunk, d, u_axis, v_axis,
+            const SliceContext ctx{chunk, neighbors, d, u_axis, v_axis,
                                    u_size, v_size, s};
             emit_merged_quads(ctx, mask_pos, +1, out);
             emit_merged_quads(ctx, mask_neg, -1, out);

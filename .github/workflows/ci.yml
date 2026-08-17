@@ -67,7 +67,8 @@ jobs:
 
           echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x  occl_cave=${OCCL_CAVE}x  world_mesh=${WORLD_MESH}MB"
 
-          # Thresholds carry ~10% slack below current measurements (M4 18.1 / 2.96 / 3.09 / 12.35).
+          # Thresholds carry ~10% slack below current measurements
+          # (M4 5.2 greedy / 2.96 / 3.09 / 12.35).
           # If GH-hosted runners drift further, raise the slack rather than tightening the code.
           gate() {
               awk -v name="$1" -v val="$2" -v min="$3" \
@@ -80,7 +81,13 @@ jobs:
                 'BEGIN { if (val+0 > max+0) { printf "%s = %s above ceiling %s\n", name, val, max; exit 1 }
                          else                 { printf "%s = %s OK (<= %s)\n",       name, val, max } }'
           }
-          gate greedy            "$GREEDY"           15.0
+          # Counts only faces a camera can reach: the gate chunk is meshed against
+          # its four real neighbours, so faces buried against the next chunk are
+          # never emitted by either mesher. Measured 5.2x. The chunk-local
+          # figure this replaced was 18.1x, and most of that gap was the naive
+          # baseline emitting one face per block along boundaries the greedy
+          # mesher merged into a rectangle - work neither should have done.
+          gate greedy            "$GREEDY"            4.5
           gate chunk_tight       "$CHUNK_TIGHT"       2.7
           gate section_nonempty  "$SECTION_NONEMPTY"  2.8
           gate section_total     "$SECTION_TOTAL"    11.0
@@ -94,8 +101,8 @@ jobs:
           # ceiling catches a fatter vertex or a reintroduced per-chunk
           # index buffer; the floor catches a mesher that regressed into
           # emitting nothing, which a ceiling alone would happily pass.
-          gate_max world_mesh_mb "$WORLD_MESH"       13.0
-          gate     world_mesh_mb "$WORLD_MESH"       12.0
+          gate_max world_mesh_mb "$WORLD_MESH"       12.0
+          gate     world_mesh_mb "$WORLD_MESH"       10.5
 
   sanitizers:
     name: sanitizers (TSan + ASan/UBSan)
