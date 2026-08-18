@@ -53,7 +53,7 @@ step      "unit tests"          ctest --test-dir build --output-on-failure
 # the chunk-local one this used to check (18.1x) and a defensible one.
 grep_step "greedy ratio >= 4.5x" "[4-9]\.[0-9]x fewer quads|[1-9][0-9]\.[0-9]x fewer quads" \
           ./build/voxel_engine --bench
-grep_step "GPU mesh validation" "bad_triangles=0 ok"    ./build/voxel_engine --validate
+grep_step "GPU mesh validation" "bad_triangles=0 .* ok"    ./build/voxel_engine --validate
 grep_step "edit persistence"    "survived=1 ok"         ./build/voxel_engine --verify-edit-persistence
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "occlusion byte-identity"   ./scripts/verify_occlusion.sh

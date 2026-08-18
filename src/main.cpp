@@ -391,6 +391,18 @@ int main(int argc, char** argv) {
     }
 
     bool   initial_load_logged = false;
+    // Every chunk resident is not the same thing as the world being
+    // finished. Chunks meshed before their neighbours existed are still
+    // owed a re-mesh, and anything deterministic - a screenshot, a frame
+    // benchmark, a validation pass - has to wait for that queue to empty
+    // or it captures a world halfway through converging, which is both
+    // wrong and, worse, not reproducible.
+    //
+    // Kept separate from initial_load_logged on purpose: that milestone is
+    // what the chunks/sec figure measures, and folding a different cost
+    // into it would quietly change a published number.
+    bool   world_settled = false;
+    double settle_ms = 0.0;
     double initial_load_ms     = 0.0;
     world::ChunkCoord last_center{0, 0};
     int streamed_in_total  = 0;
@@ -535,13 +547,13 @@ int main(int argc, char** argv) {
     }
     std::chrono::steady_clock::time_point pass_t0{};
     auto pass_start = [&](void) {
-        if (bench_pass_breakdown && initial_load_logged) {
+        if (bench_pass_breakdown && world_settled) {
             glFinish();
             pass_t0 = std::chrono::steady_clock::now();
         }
     };
     auto pass_end = [&](std::vector<double>& acc) {
-        if (bench_pass_breakdown && initial_load_logged) {
+        if (bench_pass_breakdown && world_settled) {
             glFinish();
             acc.push_back(std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - pass_t0).count());
@@ -644,7 +656,7 @@ int main(int argc, char** argv) {
         // height, always looking at the scene center; the cycle parks at
         // the orbit's start pose and spends the frames on one full day of
         // time-of-day instead.
-        if ((orbit_frames > 0 || cycle_frames > 0) && initial_load_logged) {
+        if ((orbit_frames > 0 || cycle_frames > 0) && world_settled) {
             // Cycle parks at the orbit start (frame 0) and spends its
             // frames on time-of-day; orbit sweeps the full circle.
             const OrbitPose op = (orbit_frames > 0)
@@ -666,7 +678,7 @@ int main(int argc, char** argv) {
         // moves one step per sampled frame. Camera motion drives chunk
         // streaming, so this bench includes the upload cost a static pose
         // never pays.
-        if (bench_frames > 0 && bench_orbit && initial_load_logged) {
+        if (bench_frames > 0 && bench_orbit && world_settled) {
             const OrbitPose op = orbit_pose_at(
                 static_cast<int>(bench_samples.size()), bench_frames,
                 orbit_center);
@@ -685,6 +697,32 @@ int main(int argc, char** argv) {
             last_center = center;
         }
         wrld.drain_finished(16);
+        // Chunks meshed before their neighbours existed still carry the
+        // boundary faces those neighbours hide. Driven here rather than
+        // from update_streaming because it depends on chunks arriving, not
+        // on the camera moving.
+        // Held back until the initial load reports: re-mesh jobs share the
+        // pool with terrain jobs, and letting them compete would slow the
+        // load and change the chunks/sec figure that load measures. Once
+        // it has reported, drain hard until the world settles, then
+        // trickle so a chunk streaming in mid-play cannot spike a frame.
+        if (initial_load_logged) {
+            wrld.flush_pending_remeshes(pool, world_settled ? 4 : 64);
+        }
+        if (initial_load_logged && !world_settled &&
+            wrld.pending_async() == 0 && wrld.pending_remesh() == 0) {
+            world_settled = true;
+            settle_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - async_t0).count()
+                - initial_load_ms;
+            // Reported rather than folded into the load figure: this is
+            // what cross-chunk culling costs at startup, and hiding it
+            // inside chunks/sec would misstate both numbers.
+            std::printf("[world]   boundary re-mesh settle %.1f ms after "
+                        "load (chunks meshed before their neighbours "
+                        "existed)\n", settle_ms);
+        }
+
         if (!initial_load_logged && wrld.pending_async() == 0) {
             initial_load_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - async_t0).count();
@@ -922,7 +960,7 @@ int main(int argc, char** argv) {
         // one PNG per step after a settle period for streaming and shadows.
         const int capture_frames =
             (orbit_frames > 0) ? orbit_frames : cycle_frames;
-        if (capture_frames > 0 && initial_load_logged) {
+        if (capture_frames > 0 && world_settled) {
             constexpr int kCaptureSettleFrames = 90;
             if (capture_settle < kCaptureSettleFrames) {
                 ++capture_settle;
@@ -947,7 +985,7 @@ int main(int argc, char** argv) {
         // Headless --save: once the world has finished generating, write it
         // to disk and exit. The RLE snapshot is chunk data, so no settle
         // frames are needed -- the world is complete when streaming drained.
-        if (!save_path.empty() && initial_load_logged) {
+        if (!save_path.empty() && world_settled) {
             auto t0 = std::chrono::steady_clock::now();
             auto s = world::save_world(wrld, save_path, terrain_seed);
             const double ms = std::chrono::duration<double, std::milli>(
@@ -966,10 +1004,22 @@ int main(int argc, char** argv) {
         // back off the GPU, check each triangle against the voxel data, and
         // exit nonzero on offenders. Composes with --load to verify a saved
         // world and with --seed to spot-check other maps.
-        if (validate_mode && initial_load_logged) {
+        // Wait for a settled world: chunks meshed before their neighbours
+        // arrived are still owed a re-mesh, and validating (or measuring)
+        // mid-convergence reports the pre-culling footprint.
+        if (validate_mode && world_settled) {
             const int bad = wrld.debug_validate_gpu_meshes();
-            std::printf("\nVALIDATE chunks=%zu bad_triangles=%d %s\n",
-                        wrld.chunk_count(), bad, bad == 0 ? "ok" : "FAILED");
+            // The engine's own resident mesh footprint, printed here
+            // because this is the only headless mode that builds a real
+            // world on a real GPU. --bench computes the same figure from
+            // the mesher alone; the two agreeing is what says the
+            // streaming path is uploading what the mesher produces.
+            const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
+                                  / (1024.0 * 1024.0);
+            std::printf("\nVALIDATE chunks=%zu bad_triangles=%d "
+                        "gpu_mesh_mb=%.2f %s\n",
+                        wrld.chunk_count(), bad, gpu_mb,
+                        bad == 0 ? "ok" : "FAILED");
             if (bad > 0) {
                 return EXIT_FAILURE;
             }
@@ -982,7 +1032,7 @@ int main(int argc, char** argv) {
         // chunk evicts -> stash), recenter home (chunk restores from the
         // stash, not the terrain generator), then check the hole is still
         // there. All on the main thread, deterministic.
-        if (verify_edit_persistence && initial_load_logged) {
+        if (verify_edit_persistence && world_settled) {
             int ex = 0, ey = 0, ez = 0;
             world::BlockId prev = world::BlockId::Air;
             for (int probe = 0; probe < 4096 && prev == world::BlockId::Air;
@@ -1030,7 +1080,7 @@ int main(int argc, char** argv) {
         // section re-bucket + GL upload + visibility recompute), then print
         // one BENCH_EDIT distribution line and exit. Restoring the original
         // block keeps the world unchanged between pairs.
-        if (bench_edit > 0 && initial_load_logged) {
+        if (bench_edit > 0 && world_settled) {
             std::vector<double> edit_samples;
             edit_samples.reserve(static_cast<std::size_t>(bench_edit));
             int probe = 0;
@@ -1080,7 +1130,7 @@ int main(int argc, char** argv) {
         // Scripted screenshot: scene only (pre-HUD), after the world finished
         // loading plus shot_after settle frames. Fixed filename makes runs
         // pixel-diffable (occlusion on/off A/B).
-        if (shot_after > 0 && initial_load_logged && --shot_after == 0) {
+        if (shot_after > 0 && world_settled && --shot_after == 0) {
             if (std::getenv("VOXEL_VALIDATE")) wrld.debug_dump_visibility(view_frustum);
             const std::string path =
                 gfx::save_screenshot(fb_w, fb_h, "./screenshots", shot_file);
@@ -1129,7 +1179,7 @@ int main(int argc, char** argv) {
         ++frame_count;
         ++frame_index;
 
-        if (bench_frames > 0 && initial_load_logged) {
+        if (bench_frames > 0 && world_settled) {
             const double cpu_now = core::thread_cpu_ms();
             const double cpu_dt  = cpu_now - last_cpu_ms;
             last_cpu_ms = cpu_now;
