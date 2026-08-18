@@ -71,6 +71,12 @@ struct ChunkSlot {
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
     std::size_t gpu_bytes = 0;
+    // Which of the four horizontal neighbours were resident when this
+    // slot's mesh was built, as kNeighbor* bits. A chunk meshed before a
+    // neighbour arrived still carries the boundary faces that neighbour
+    // hides, so it has to be re-meshed once the neighbour lands; this is
+    // what says whether that is still owed.
+    std::uint8_t meshed_with = 0;
     // Set by set_block (and for chunks that came off disk rather than the
     // terrain generator). Streaming eviction stashes modified chunks so
     // walking away from an edit can never silently regenerate it.
@@ -226,6 +232,22 @@ public:
     int debug_validate_gpu_meshes() const;
 
     std::size_t chunk_count() const { return chunks_.size(); }
+    // Chunks still owed a re-mesh because a neighbour landed after them.
+    // A world with a nonzero count draws correctly but is still carrying
+    // boundary faces its neighbours hide, so anything measuring the
+    // resident footprint should wait for this to reach zero.
+    std::size_t pending_remesh() const { return dirty_meshes_.size(); }
+
+    // Issues up to max_jobs re-mesh jobs for chunks whose neighbours
+    // landed after they were meshed. Call every frame: this is driven by
+    // chunks arriving, not by the camera moving, so it must not hang off
+    // update_streaming - which only runs when the player crosses a chunk
+    // boundary and would leave a static camera never converging.
+    //
+    // Bounded per call so a settling world spreads the work over frames.
+    // Chunks on this queue draw correctly, they just draw faces their
+    // neighbour now hides, so being late costs nothing but bandwidth.
+    int flush_pending_remeshes(core::ThreadPool& pool, int max_jobs = 4);
     bool has_chunk(ChunkCoord c) const { return chunks_.count(c) != 0; }
 
     // Whether the resident chunk at c is preserve-marked (player edits or
@@ -286,6 +308,12 @@ public:
     }
 
 private:
+    // Neighbour identity bits for ChunkSlot::meshed_with.
+    static constexpr std::uint8_t kNeighborNegX = 1 << 0;
+    static constexpr std::uint8_t kNeighborPosX = 1 << 1;
+    static constexpr std::uint8_t kNeighborNegZ = 1 << 2;
+    static constexpr std::uint8_t kNeighborPosZ = 1 << 3;
+
     struct FinishedChunk {
         ChunkCoord      coord;
         Chunk           chunk;
@@ -304,7 +332,23 @@ private:
         // cannot reproduce); the built slot is marked player_modified so
         // eviction preserves it.
         bool            preserve_on_evict = false;
+        // Which neighbours the worker actually meshed against.
+        std::uint8_t    neighbor_mask = 0;
     };
+
+    // Copies the four boundary layers out of whatever neighbours are
+    // resident right now. Main thread only - it reads chunks_ - and the
+    // result is a snapshot, so a worker holding it is unaffected by
+    // anything the main thread does to those chunks afterwards.
+    NeighborPlanes neighbor_planes_for(ChunkCoord c,
+                                       std::uint8_t* out_mask) const;
+
+    // Chunks whose mesh predates one of their neighbours. Drained a few at
+    // a time so a settling world does not spike a frame.
+    std::vector<ChunkCoord> dirty_meshes_;
+    std::unordered_set<ChunkCoord, ChunkCoordHash> dirty_set_;
+    void mark_neighbors_dirty(ChunkCoord c);
+    void queue_remesh(ChunkCoord c);
 
     // Shared draw loop. reachable == nullptr means frustum-only; otherwise
     // a section draws only if some section its AABB vertically spans is in

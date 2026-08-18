@@ -964,15 +964,23 @@ static world::Chunk solid_chunk() {
 static void test_sampler_reads_across_the_boundary() {
     world::Chunk self = solid_chunk();
     world::Chunk east;                       // all air
-    world::NeighborChunks n{.pos_x = &east};
+    auto n = world::NeighborPlanes::from({.pos_x = &east});
 
     // x == world::kChunkSizeX is the first column of the +X neighbour.
     EXPECT(world::sample_with_neighbors(self, n, world::kChunkSizeX, 0, 0) == world::BlockId::Air,
            "sampler reads the neighbour, which is air here");
 
     east.set(0, 0, 0, world::BlockId::Stone);
+    // The planes are a snapshot, not a view. This is the property the
+    // whole threading story rests on: a worker meshing against them cannot
+    // be affected by the main thread mutating or evicting the chunk they
+    // came from, so it must NOT see this write.
+    EXPECT(world::sample_with_neighbors(self, n, world::kChunkSizeX, 0, 0) == world::BlockId::Air,
+           "a snapshot does not follow later writes to the chunk");
+
+    n = world::NeighborPlanes::from({.pos_x = &east});
     EXPECT(world::sample_with_neighbors(self, n, world::kChunkSizeX, 0, 0) == world::BlockId::Stone,
-           "sampler sees the neighbour's block");
+           "re-snapshotting sees the neighbour's block");
 
     // Without the link the same lookup is air: that is the old behaviour,
     // and it is what makes the boundary faces appear.
@@ -992,7 +1000,7 @@ static void test_neighbor_culls_the_shared_boundary() {
 
     const auto alone = world::build_chunk_mesh_greedy(self);
     const auto with_east =
-        world::build_chunk_mesh_greedy(self, world::NeighborChunks{.pos_x = &east});
+        world::build_chunk_mesh_greedy(self, world::NeighborPlanes::from({.pos_x = &east}));
 
     // The +X wall is 16 wide by 8 tall and merges into one quad, so
     // exactly one quad should disappear.
@@ -1003,7 +1011,7 @@ static void test_neighbor_culls_the_shared_boundary() {
     // Same for the naive mesher, where the wall is 128 separate faces.
     const auto n_alone = world::build_chunk_mesh_naive(self);
     const auto n_east =
-        world::build_chunk_mesh_naive(self, world::NeighborChunks{.pos_x = &east});
+        world::build_chunk_mesh_naive(self, world::NeighborPlanes::from({.pos_x = &east}));
     EXPECT(n_east.quad_count == n_alone.quad_count - world::kChunkSizeZ * 8,
            "naive mesher drops every face of the hidden wall");
 }
@@ -1015,9 +1023,9 @@ static void test_a_gap_in_the_neighbor_keeps_the_face() {
     // now visible through the gap, so its face must survive.
     east.set(0, 4, 5, world::BlockId::Air);
 
-    const world::NeighborChunks n{.pos_x = &east};
+    const auto n = world::NeighborPlanes::from({.pos_x = &east});
     const auto meshed = world::build_chunk_mesh_naive(self, n);
-    const auto sealed = world::build_chunk_mesh_naive(self, world::NeighborChunks{});
+    const auto sealed = world::build_chunk_mesh_naive(self, world::NeighborPlanes{});
 
     // One face on the wall is still visible, so exactly one fewer face is
     // culled than in the fully sealed case.
@@ -1031,10 +1039,92 @@ static void test_missing_neighbor_never_culls() {
     // the conservative direction. A regression that culled here would open
     // holes at the edge of the loaded world.
     const auto a = world::build_chunk_mesh_greedy(self);
-    const auto b = world::build_chunk_mesh_greedy(self, world::NeighborChunks{});
+    const auto b = world::build_chunk_mesh_greedy(self, world::NeighborPlanes{});
     EXPECT(a.quad_count == b.quad_count,
            "an empty neighbour set meshes exactly as before");
-    EXPECT(!world::NeighborChunks{}.any(), "an empty neighbour set reports empty");
+    EXPECT(!world::NeighborPlanes{}.any(), "an empty neighbour set reports empty");
+}
+
+
+
+// The invariant that makes cross-chunk culling safe, checked against real
+// terrain rather than a hand-built fixture: a boundary face is emitted if
+// and only if the block across it is not solid.
+//
+// One direction is the optimisation (a face hidden by the neighbour must
+// be gone) and the other is the correctness (a face with air across it
+// must survive). Getting the second wrong is a hole in the world, which is
+// the failure this whole feature risks and the one a screenshot test on a
+// single pose would probably miss.
+static void test_boundary_faces_match_the_neighbour_exactly() {
+    world::TerrainGen terrain(1337);
+    world::Chunk self, west, east, north, south;
+    terrain.fill_chunk(0, 0, self);
+    terrain.fill_chunk(-1, 0, west);
+    terrain.fill_chunk( 1, 0, east);
+    terrain.fill_chunk(0, -1, north);
+    terrain.fill_chunk(0,  1, south);
+
+    const auto planes = world::NeighborPlanes::from(
+        {.neg_x = &west, .pos_x = &east, .neg_z = &north, .pos_z = &south});
+    // Naive: one quad per face, no merging, so quads can be counted
+    // against block pairs directly.
+    const auto mesh = world::build_chunk_mesh_naive(self, planes);
+
+    // Count quads sitting on a given boundary plane with a given normal.
+    auto plane_quads = [&](int normal_idx, int axis, float coord) {
+        int n = 0;
+        for (std::size_t q = 0; q + 3 < mesh.vertices.size(); q += 4) {
+            const auto& v = mesh.vertices[q];
+            if (v.normal != normal_idx) continue;
+            const glm::vec3 p = v.pos();
+            if (p[axis] == coord) ++n;
+        }
+        return n;
+    };
+
+    struct Side {
+        const char* label;
+        int normal_idx;      // index into gfx::kPackedNormals
+        int axis;            // which coordinate the boundary plane fixes
+        float plane;         // its value at the outer face
+        const world::Chunk* other;
+        bool along_z;        // the boundary runs along z (X-facing sides)
+        int self_fixed;      // the self column touching the boundary
+        int other_fixed;     // the neighbour column touching it
+    };
+    const Side sides[] = {
+        {"+X", 0, 0, static_cast<float>(world::kChunkSizeX), &east,  true,
+         world::kChunkSizeX - 1, 0},
+        {"-X", 1, 0, 0.0f, &west, true, 0, world::kChunkSizeX - 1},
+        {"+Z", 4, 2, static_cast<float>(world::kChunkSizeZ), &south, false,
+         world::kChunkSizeZ - 1, 0},
+        {"-Z", 5, 2, 0.0f, &north, false, 0, world::kChunkSizeZ - 1},
+    };
+
+    int total_hidden = 0;
+    for (const auto& s : sides) {
+        int expect_visible = 0, hidden = 0;
+        for (int y = 0; y < world::kChunkSizeY; ++y) {
+            for (int t = 0; t < world::kChunkSizeX; ++t) {
+                const world::BlockId mine = s.along_z
+                    ? self.get(s.self_fixed, y, t)
+                    : self.get(t, y, s.self_fixed);
+                if (!world::is_solid(mine)) continue;
+                const world::BlockId theirs = s.along_z
+                    ? s.other->get(s.other_fixed, y, t)
+                    : s.other->get(t, y, s.other_fixed);
+                if (world::is_solid(theirs)) ++hidden;
+                else                         ++expect_visible;
+            }
+        }
+        total_hidden += hidden;
+        EXPECT(plane_quads(s.normal_idx, s.axis, s.plane) == expect_visible,
+               "boundary faces emitted exactly where the neighbour is not solid");
+    }
+    // The test is only meaningful if the terrain actually presses solid
+    // against solid somewhere along all four sides.
+    EXPECT(total_hidden > 1000, "real terrain hides a large number of boundary faces");
 }
 
 
@@ -1082,6 +1172,7 @@ int main() {
     test_neighbor_culls_the_shared_boundary();
     test_a_gap_in_the_neighbor_keeps_the_face();
     test_missing_neighbor_never_culls();
+    test_boundary_faces_match_the_neighbour_exactly();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");

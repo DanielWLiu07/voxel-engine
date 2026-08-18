@@ -83,9 +83,9 @@ they reproduce exactly on any GPU:
 
 | Hardware-independent result | Value |
 | :--- | ---: |
-| Greedy meshing, triangles vs naive per-face | **5.2x fewer** (CI-gated at >=4.5x), counting only faces a camera can reach |
+| Greedy meshing, triangles vs naive per-face | **5.3x fewer** (CI-gated at >=4.5x), counting only faces a camera can reach |
 | Vertex format, packed vs float | 40 B to **12 B**, 3.3x |
-| Whole-world GPU mesh at radius 12, all three wins | 126.7 MB to **11.3 MB**, 11.2x (mesher output; streaming path not yet wired) |
+| Whole-world GPU mesh at radius 12, all three wins | 126.7 MB to **10.9 MB**, 11.6x |
 | Index data per chunk, one shared quad EBO | **zero** |
 | Chunk serialization, RLE vs raw | 39.06 MB to 0.67 MB, **58x** |
 | Sub-chunks drawn vs loaded, underground | up to **70x fewer** |
@@ -148,8 +148,8 @@ reference rather than something to read top to bottom.
 
 | Metric | Value |
 | --- | --- |
-| Greedy meshing, contiguous Perlin chunk | 5.2x fewer quads vs naive (0.9 ms build), GPU buffer 30.7 KB -> 5.9 KB |
-| Greedy meshing, same chunk with caves carved | 2.6x fewer quads (0.7 ms build), 49.4 KB -> 18.7 KB |
+| Greedy meshing, contiguous Perlin chunk | 5.3x fewer quads vs naive (0.7 ms build), GPU buffer 30.7 KB -> 5.8 KB |
+| Greedy meshing, same chunk with caves carved | 2.7x fewer quads (0.6 ms build), 49.4 KB -> 18.0 KB |
 | Greedy meshing, chunk-local (what this reported before cross-chunk culling) | 18.1x contiguous / 7.8x caves - see the note below |
 | Greedy meshing, single-biome Perlin chunk (historical) | 27.7x fewer quads |
 | Async chunk pipeline, radius 12 (625 chunks) | 2226 chunks/sec, 9 workers (281 ms wall: worker CPU compressed in parallel, 34 ms main-thread upload) |
@@ -189,11 +189,13 @@ nothing, and the ratio inherited the difference. On a contiguous chunk
 79.4% of the naive quads and 32.0% of the greedy quads were sealed against
 a solid neighbour.
 
-Removing them cut the contiguous ratio from 18.1x to **5.2x** and the
-caves-on ratio from 7.8x to **2.6x**. It also removed real geometry: the
-whole-world mesh at radius 12 went from 273,554 quads to **246,083**, and
-resident GPU buffers from 12.5 MB to **11.3 MB**. `--bench` prints both
-numbers side by side so the change is visible rather than asserted.
+Removing them cut the contiguous ratio from 18.1x to **5.3x** and the
+caves-on ratio from 7.8x to **2.7x**. It also removed real geometry: the
+whole-world mesh at radius 12 went from 273,554 quads to **237,688**, and
+the engine's resident GPU buffers from 12.5 MB to **11.0 MB**, which
+`--validate` now reports so the running engine's footprint is checkable
+without a HUD. `--bench` prints the chunk-local figure alongside so the
+change is visible rather than asserted.
 
 The cost is a coupling the engine did not have: a chunk's mesh now depends
 on its neighbours, so a neighbour arriving or a block changing at a chunk
@@ -201,6 +203,32 @@ boundary invalidates it. A missing neighbour is treated as air, which
 emits the face - the safe direction, since culling a face that might be
 visible is a hole in the world while emitting a hidden one costs a quad
 until the neighbour lands.
+
+Workers get a 16 KB copy of the four boundary layers rather than pointers
+into the chunk map, which is what lets meshing stay off the main thread
+while the main thread remains free to edit or evict anything it likes. A
+cold radius-12 load then spends **295 ms** re-meshing the chunks that were
+built before their neighbours existed; that is reported separately from
+the load figure rather than folded into it, because the load figure is
+what the chunks/sec number measures.
+
+Two defects fell out of wiring this up, both caught by checks that already
+existed:
+
+- The greedy sweep looks at block pairs `(s-1, s)`, so at the two outer
+  slices one side of every pair belongs to the neighbour. Once the sampler
+  returned real blocks instead of air, those pairs started producing faces
+  **owned by the chunk next door**, which that chunk also emits from its
+  own side - every shared boundary face built twice. `--validate` found it
+  by reading meshes back off the GPU and flagging 16,790 triangles whose
+  backing block was outside the chunk that drew them.
+- `section_reachable` derived its search range from a section's AABB,
+  which made a visibility test depend on how much geometry the section
+  happened to hold. Chunk-boundary walls were the tallest quads in most
+  sections and had been propping it up; deleting them collapsed the search
+  ranges and the culler began dropping visible geometry. The byte-identity
+  check caught it as 267 sections drawn against 407 with the images no
+  longer matching. The bound is now mesh-independent.
 
 ### Scaling with world size
 
@@ -263,13 +291,12 @@ one shared quad index buffer), and it shows live in the HUD's perf panel.
 ### Where the GPU memory went
 
 That footprint is also computed headlessly by `--bench`, which is what CI
-gates. **One caveat while cross-chunk culling lands:** the mesher takes
-neighbours and `--bench` passes them, but `World`'s streaming path does
-not yet, so the figures below are what the mesher produces rather than
-what the running engine currently uploads. Wiring the streaming path is
-the next step and is the only reason this is not already the engine's
-resident footprint; `--bench` says so in its own output rather than
-leaving it to be discovered. `World::apply_sections` buckets one chunk-wide greedy mesh into
+gates. The streaming path passes neighbours too, so these are
+the engine's own figures and not just the mesher's: `--validate` builds
+the world on a real GPU and reports `gpu_mesh_mb=10.99`, against the
+10.91 this computes from the meshes alone. The gap is the shared index
+buffer's growth slack, and the two agreeing is what says the streaming
+path uploads what the mesher produces. `World::apply_sections` buckets one chunk-wide greedy mesh into
 sections without re-meshing, so summing the meshes for a radius gives the
 vertex bytes the engine uploads - no GL context, no window, deterministic
 for a given seed. The shared index buffer is modelled on
@@ -280,12 +307,12 @@ the cost of dropping any single one is the gap between two adjacent rows:
 | Radius 12, 625 chunks | Quads | GPU mesh |
 | :--- | ---: | ---: |
 | naive faces, 40 B vertex, per-chunk index buffer | 722,030 | 126.7 MB |
-| + greedy meshing | 246,083 | 43.2 MB |
-| + 12-byte packed vertex | 246,083 | 16.9 MB |
-| + one shared quad index buffer | 246,083 | **11.3 MB** |
+| + greedy meshing | 237,688 | 41.7 MB |
+| + 12-byte packed vertex | 237,688 | 16.3 MB |
+| + one shared quad index buffer | 237,688 | **10.9 MB** |
 
-Face merging is worth 2.9x here, vertex packing 2.56x, index sharing
-1.50x; together 11.2x. Every row counts only faces a camera can reach -
+Face merging is worth 3.0x here, vertex packing 2.56x, index sharing
+1.50x; together 11.6x. Every row counts only faces a camera can reach -
 each chunk is meshed against its real neighbours - which is why the naive
 baseline is 722,030 quads rather than the 2,106,056 it was before
 cross-chunk culling. Most of that difference was buried boundary faces
@@ -296,10 +323,10 @@ Computing this chain is what showed an earlier "before" number was wrong:
 12.5 MB the result of all three wins credited face merging twice. The span
 that covers three wins starts at the naive row.
 
-The greedy factor is 2.9x here rather than the headline 5.2x because this
-is caves-on gameplay terrain across 625 chunks; the 5.2x is the contiguous
+The greedy factor is 3.0x here rather than the headline 5.3x because this
+is caves-on gameplay terrain across 625 chunks; the 5.3x is the contiguous
 single-chunk case the CI gate uses. That the two independent paths agree
-with the mesher bench's caves-on 2.6x is a useful cross-check, since they
+with the mesher bench's caves-on 2.7x is a useful cross-check, since they
 share no code.
 
 `--bench` emits `world_mesh_mb` on the `BENCH_SUMMARY` line and CI bounds

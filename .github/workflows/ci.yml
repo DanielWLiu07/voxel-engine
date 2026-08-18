@@ -68,7 +68,7 @@ jobs:
           echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x  occl_cave=${OCCL_CAVE}x  world_mesh=${WORLD_MESH}MB"
 
           # Thresholds carry ~10% slack below current measurements
-          # (M4 5.2 greedy / 2.96 / 3.09 / 12.35).
+          # (M4 5.33 greedy / 2.96 / 3.09 / 12.35).
           # If GH-hosted runners drift further, raise the slack rather than tightening the code.
           gate() {
               awk -v name="$1" -v val="$2" -v min="$3" \
@@ -83,7 +83,7 @@ jobs:
           }
           # Counts only faces a camera can reach: the gate chunk is meshed against
           # its four real neighbours, so faces buried against the next chunk are
-          # never emitted by either mesher. Measured 5.2x. The chunk-local
+          # never emitted by either mesher. Measured 5.33x. The chunk-local
           # figure this replaced was 18.1x, and most of that gap was the naive
           # baseline emitting one face per block along boundaries the greedy
           # mesher merged into a rectangle - work neither should have done.
@@ -101,8 +101,8 @@ jobs:
           # ceiling catches a fatter vertex or a reintroduced per-chunk
           # index buffer; the floor catches a mesher that regressed into
           # emitting nothing, which a ceiling alone would happily pass.
-          gate_max world_mesh_mb "$WORLD_MESH"       12.0
-          gate     world_mesh_mb "$WORLD_MESH"       10.5
+          gate_max world_mesh_mb "$WORLD_MESH"       11.5
+          gate     world_mesh_mb "$WORLD_MESH"       10.0
 
   sanitizers:
     name: sanitizers (TSan + ASan/UBSan)

@@ -55,8 +55,9 @@ double bench_greedy_vs_naive() {
         terrain.fill_chunk( 1,  0, east);
         terrain.fill_chunk( 0, -1, north);
         terrain.fill_chunk( 0,  1, south);
-        const world::NeighborChunks nbrs{.neg_x = &west,  .pos_x = &east,
-                                         .neg_z = &north, .pos_z = &south};
+        const auto nbrs = world::NeighborPlanes::from(
+            {.neg_x = &west,  .pos_x = &east,
+             .neg_z = &north, .pos_z = &south});
 
         double naive_total = 0.0, greedy_total = 0.0;
         world::ChunkMeshData last_naive, last_greedy;
@@ -231,10 +232,9 @@ int run_mesher_bench(int stream_radius) {
         for (int cz = -kRadius; cz <= kRadius; ++cz) {
             for (int cx = -kRadius; cx <= kRadius; ++cx, ++i) {
                 const world::Chunk& c = chunks[i];
-                const world::NeighborChunks n{.neg_x = at(cx - 1, cz),
-                                              .pos_x = at(cx + 1, cz),
-                                              .neg_z = at(cx, cz - 1),
-                                              .pos_z = at(cx, cz + 1)};
+                const auto n = world::NeighborPlanes::from(
+                    {.neg_x = at(cx - 1, cz), .pos_x = at(cx + 1, cz),
+                     .neg_z = at(cx, cz - 1), .pos_z = at(cx, cz + 1)});
                 const auto greedy = world::build_chunk_mesh_greedy(c, n);
                 const auto naive  = world::build_chunk_mesh_naive(c, n);
                 const std::size_t gq = greedy.vertices.size() / 4;

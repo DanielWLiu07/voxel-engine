@@ -69,7 +69,32 @@ inline int corner_ao(int side1, int side2, int corner) {
 
 }  // namespace
 
-BlockId sample_with_neighbors(const Chunk& chunk, const NeighborChunks& n,
+NeighborPlanes NeighborPlanes::from(const NeighborChunks& n) {
+    NeighborPlanes out;
+    // Each plane holds the neighbour's layer that touches this chunk: the
+    // +X neighbour contributes its x == 0 column, and so on.
+    auto copy_x = [](BoundaryPlane& p, const Chunk* c, int src_x) {
+        if (c == nullptr) return;
+        p.present = true;
+        for (int y = 0; y < kChunkSizeY; ++y)
+            for (int z = 0; z < kChunkSizeZ; ++z)
+                p.set(z, y, c->get(src_x, y, z));
+    };
+    auto copy_z = [](BoundaryPlane& p, const Chunk* c, int src_z) {
+        if (c == nullptr) return;
+        p.present = true;
+        for (int y = 0; y < kChunkSizeY; ++y)
+            for (int x = 0; x < kChunkSizeX; ++x)
+                p.set(x, y, c->get(x, y, src_z));
+    };
+    copy_x(out.neg_x, n.neg_x, kChunkSizeX - 1);
+    copy_x(out.pos_x, n.pos_x, 0);
+    copy_z(out.neg_z, n.neg_z, kChunkSizeZ - 1);
+    copy_z(out.pos_z, n.pos_z, 0);
+    return out;
+}
+
+BlockId sample_with_neighbors(const Chunk& chunk, const NeighborPlanes& n,
                               int x, int y, int z) {
     // Above and below the world is air; chunks span the full height.
     if (y < 0 || y >= kChunkSizeY) return BlockId::Air;
@@ -79,26 +104,26 @@ BlockId sample_with_neighbors(const Chunk& chunk, const NeighborChunks& n,
     if (!out_x && !out_z) return chunk.get(x, y, z);
 
     // Diagonally out of bounds needs the corner chunk, which is not
-    // tracked: only the four edge-adjacent neighbours are. This affects
-    // ambient-occlusion corner samples along the four vertical edges of a
-    // chunk and nothing else - face visibility is never diagonal, because
-    // a face's occluder is the cell directly across it. Reporting air
-    // there leaves those corners very slightly brighter than they would
-    // be with the corner chunk in hand; it cannot open a hole.
+    // tracked: only the four edge-adjacent neighbours are. This reaches
+    // only ambient-occlusion corner samples along a chunk's four vertical
+    // edges - face visibility is never diagonal, because a face's occluder
+    // is the cell directly across it - so those corners sit slightly
+    // brighter than they would with the corner chunk in hand. It cannot
+    // open a hole.
     if (out_x && out_z) return BlockId::Air;
 
+    // More than one cell outside is never sampled: face visibility looks
+    // one across, AO samples the same outside layer. A plane is enough.
     if (out_x) {
-        const Chunk* c = (x < 0) ? n.neg_x : n.pos_x;
-        if (c == nullptr) return BlockId::Air;
-        return c->get(x < 0 ? x + kChunkSizeX : x - kChunkSizeX, y, z);
+        const BoundaryPlane& p = (x < 0) ? n.neg_x : n.pos_x;
+        return p.present ? p.at(z, y) : BlockId::Air;
     }
-    const Chunk* c = (z < 0) ? n.neg_z : n.pos_z;
-    if (c == nullptr) return BlockId::Air;
-    return c->get(x, y, z < 0 ? z + kChunkSizeZ : z - kChunkSizeZ);
+    const BoundaryPlane& p = (z < 0) ? n.neg_z : n.pos_z;
+    return p.present ? p.at(x, y) : BlockId::Air;
 }
 
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
-                                     const NeighborChunks& neighbors) {
+                                     const NeighborPlanes& neighbors) {
     ZoneScopedN("mesh_naive");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
@@ -160,7 +185,7 @@ namespace {
 // merger needs that does not vary within a slice.
 struct SliceContext {
     const Chunk& chunk;
-    const NeighborChunks& neighbors;
+    const NeighborPlanes& neighbors;
     int d;
     int u_axis;
     int v_axis;
@@ -283,7 +308,7 @@ void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
 // Greedy mesh: sweep 6 (axis, dir) combos. Per slice, build a BlockId mask
 // then merge contiguous same-id cells into maximal rectangles.
 ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
-                                      const NeighborChunks& neighbors) {
+                                      const NeighborPlanes& neighbors) {
     ZoneScopedN("mesh_greedy");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
@@ -317,6 +342,19 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
             std::memset(mask_pos.data(), 0, mask_size);
             std::memset(mask_neg.data(), 0, mask_size);
 
+            // A chunk emits faces for the blocks it owns, and only those.
+            //
+            // The sweep looks at the pair (s-1, s), so at the two outer
+            // slices one side of every pair belongs to the neighbour. Once
+            // the sampler started returning the neighbour's real blocks
+            // instead of air, those pairs began producing faces owned by
+            // the chunk next door - which that chunk also emits, from its
+            // own side, so every shared boundary face was built twice.
+            // Chunk-local meshing never hit this because the outside always
+            // read as air and air owns nothing.
+            const bool owns_pos = (s > 0);        // owner is the s-1 cell
+            const bool owns_neg = (s < d_size);   // owner is the s cell
+
             for (int v = 0; v < v_size; ++v) {
                 for (int u = 0; u < u_size; ++u) {
                     int xa, ya, za, xb, yb, zb;
@@ -329,8 +367,10 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
                                                       xb, yb, zb);
 
                     const std::size_t idx = static_cast<std::size_t>(v * u_size + u);
-                    if (face_visible(a, b)) mask_pos[idx] = static_cast<std::uint8_t>(a);
-                    if (face_visible(b, a)) mask_neg[idx] = static_cast<std::uint8_t>(b);
+                    if (owns_pos && face_visible(a, b))
+                        mask_pos[idx] = static_cast<std::uint8_t>(a);
+                    if (owns_neg && face_visible(b, a))
+                        mask_neg[idx] = static_cast<std::uint8_t>(b);
                 }
             }
 

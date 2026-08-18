@@ -292,7 +292,10 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     const std::uint64_t gen = generation_;
     requested_[c] = stamp;
     jobs_in_flight_.fetch_add(1);
-    pool.submit([this, &terrain, c, gen, stamp]() {
+    std::uint8_t mask = 0;
+    NeighborPlanes planes = neighbor_planes_for(c, &mask);
+    pool.submit([this, &terrain, c, gen, stamp, mask,
+                 planes = std::move(planes)]() {
         ZoneScopedN("chunk_worker_job");
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
@@ -304,7 +307,8 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
             t_after_terrain - t0).count();
-        fc.mesh_data = build_chunk_mesh_greedy(fc.chunk);
+        fc.mesh_data = build_chunk_mesh_greedy(fc.chunk, planes);
+        fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms = std::chrono::duration<double, std::milli>(
             clock::now() - t0).count();
@@ -421,18 +425,106 @@ int World::drain_finished(int max_per_frame) {
         requested_.erase(req_it);
 
         const auto up_t0 = clock::now();
-        auto [slot_it, inserted] = chunks_.emplace(
-            fc.coord,
-            build_slot(fc.coord, std::move(fc.chunk), std::move(fc.mesh_data),
-                       fc.visibility, quad_ibo_));
-        // Chunks that came from disk or the edit stash must keep stashing
-        // on eviction; the terrain generator cannot reproduce them.
-        if (inserted) slot_it->second->player_modified = fc.preserve_on_evict;
+        const std::uint8_t landed_mask = fc.neighbor_mask;
+        auto new_slot = build_slot(fc.coord, std::move(fc.chunk),
+                                   std::move(fc.mesh_data), fc.visibility,
+                                   quad_ibo_);
+        // find-then-assign rather than emplace: emplace is free to move
+        // from its argument even when the key already exists, and the
+        // re-mesh path below needs the slot intact in exactly that case.
+        auto slot_it = chunks_.find(fc.coord);
+        if (slot_it == chunks_.end()) {
+            // Chunks that came from disk or the edit stash must keep
+            // stashing on eviction; the terrain generator cannot reproduce
+            // them.
+            new_slot->player_modified = fc.preserve_on_evict;
+            slot_it = chunks_.emplace(fc.coord, std::move(new_slot)).first;
+        } else {
+            // A re-mesh of a chunk that is already resident. Assigning the
+            // slot swaps in the new GL mesh and destroys the old one here
+            // on the main thread, where deleting GL objects is legal.
+            new_slot->player_modified = slot_it->second->player_modified ||
+                                        fc.preserve_on_evict;
+            slot_it->second = std::move(new_slot);
+        }
+        slot_it->second->meshed_with = landed_mask;
+        // Anything already resident beside this chunk was meshed without
+        // it and is still drawing the faces it now hides.
+        mark_neighbors_dirty(fc.coord);
         total_upload_ms_ += std::chrono::duration<double, std::milli>(
             clock::now() - up_t0).count();
         ++uploaded;
     }
     return uploaded;
+}
+
+NeighborPlanes World::neighbor_planes_for(ChunkCoord c,
+                                          std::uint8_t* out_mask) const {
+    const auto at = [&](int dx, int dz) -> const Chunk* {
+        auto it = chunks_.find({c.x + dx, c.z + dz});
+        return it == chunks_.end() ? nullptr : &it->second->chunk;
+    };
+    const NeighborChunks n{.neg_x = at(-1, 0), .pos_x = at(1, 0),
+                           .neg_z = at(0, -1), .pos_z = at(0, 1)};
+    if (out_mask != nullptr) {
+        std::uint8_t m = 0;
+        if (n.neg_x) m |= kNeighborNegX;
+        if (n.pos_x) m |= kNeighborPosX;
+        if (n.neg_z) m |= kNeighborNegZ;
+        if (n.pos_z) m |= kNeighborPosZ;
+        *out_mask = m;
+    }
+    return NeighborPlanes::from(n);
+}
+
+// A chunk that landed after its neighbours were meshed leaves those
+// neighbours holding boundary faces it now hides. Rather than re-meshing
+// them immediately - which would multiply the work of a bulk load by five
+// and spike the frame that happens to drain the last chunk - they are
+// queued and drained a few at a time.
+void World::mark_neighbors_dirty(ChunkCoord c) {
+    const std::pair<ChunkCoord, std::uint8_t> sides[4] = {
+        {{c.x - 1, c.z}, kNeighborPosX},   // our -X neighbour sees us at +X
+        {{c.x + 1, c.z}, kNeighborNegX},
+        {{c.x, c.z - 1}, kNeighborPosZ},
+        {{c.x, c.z + 1}, kNeighborNegZ},
+    };
+    for (const auto& [coord, bit] : sides) {
+        auto it = chunks_.find(coord);
+        if (it == chunks_.end()) continue;
+        // Already meshed against us: nothing changed for it.
+        if (it->second->meshed_with & bit) continue;
+        if (dirty_set_.insert(coord).second) dirty_meshes_.push_back(coord);
+    }
+}
+
+// Queues a resident chunk for a re-mesh. Used when something outside it
+// changed in a way that alters which of its faces are hidden.
+void World::queue_remesh(ChunkCoord c) {
+    if (chunks_.find(c) == chunks_.end()) return;
+    if (dirty_set_.insert(c).second) dirty_meshes_.push_back(c);
+}
+
+int World::flush_pending_remeshes(core::ThreadPool& pool, int max_jobs) {
+    int issued = 0;
+    while (issued < max_jobs && !dirty_meshes_.empty()) {
+        const ChunkCoord c = dirty_meshes_.back();
+        dirty_meshes_.pop_back();
+        dirty_set_.erase(c);
+
+        auto it = chunks_.find(c);
+        if (it == chunks_.end()) continue;         // evicted since marking
+        if (requested_.count(c) != 0) continue;    // a job is already coming
+
+        // Hand the worker a copy of the chunk and of the boundary layers.
+        // Copying rather than pointing is the whole reason this is safe to
+        // run off-thread: the main thread stays free to edit or evict any
+        // of these chunks while the job is in flight.
+        enqueue_decoded_chunk(c, it->second->chunk, pool,
+                              it->second->player_modified);
+        ++issued;
+    }
+    return issued;
 }
 
 int World::pending_async() const { return jobs_in_flight_.load(); }
@@ -444,7 +536,10 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     requested_[c] = stamp;
     jobs_in_flight_.fetch_add(1);
     const std::uint64_t gen = generation_;
-    pool.submit([this, c, gen, stamp, preserve_on_evict,
+    std::uint8_t mask = 0;
+    NeighborPlanes planes = neighbor_planes_for(c, &mask);
+    pool.submit([this, c, gen, stamp, preserve_on_evict, mask,
+                 planes = std::move(planes),
                  chunk = std::move(chunk)]() mutable {
         ZoneScopedN("chunk_loaded_worker_job");
         using clock = std::chrono::steady_clock;
@@ -458,7 +553,8 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
-        fc.mesh_data  = build_chunk_mesh_greedy(fc.chunk);
+        fc.mesh_data  = build_chunk_mesh_greedy(fc.chunk, planes);
+        fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms  = std::chrono::duration<double, std::milli>(
             clock::now() - t0).count();
@@ -511,7 +607,10 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     slot.chunk.set(lx, wy, lz, b);
     slot.player_modified = true;
     const auto edit_t0 = std::chrono::steady_clock::now();
-    auto mesh_data = build_chunk_mesh_greedy(slot.chunk);
+    std::uint8_t mask = 0;
+    auto mesh_data = build_chunk_mesh_greedy(slot.chunk,
+                                             neighbor_planes_for(cc, &mask));
+    slot.meshed_with = mask;
     // Edits can shift quads across section boundaries (placing a block on
     // top of a tall column, breaking the lowest solid in a section), so
     // every section is re-bucketed and the chunk_aabb gets rebuilt. Greedy
@@ -525,6 +624,17 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     edit_total_ms_ += edit_last_ms_;
     edit_max_ms_ = std::max(edit_max_ms_, edit_last_ms_);
     ++edit_count_;
+
+    // An edit in the outermost column changes what the chunk next door
+    // should be hiding: digging into a shared wall exposes a face on the
+    // other side of it. Only boundary edits can do that, so only they pay.
+    ChunkCoord touched{0, 0};
+    bool touches_boundary = false;
+    if (lx == 0)                  { touched = {cc.x - 1, cc.z}; touches_boundary = true; }
+    else if (lx == kChunkSizeX-1) { touched = {cc.x + 1, cc.z}; touches_boundary = true; }
+    if (touches_boundary) queue_remesh(touched);
+    if (lz == 0)                  { queue_remesh({cc.x, cc.z - 1}); }
+    else if (lz == kChunkSizeZ-1) { queue_remesh({cc.x, cc.z + 1}); }
     return true;
 }
 
@@ -610,9 +720,25 @@ namespace {
 // spans is reachable, or a tall cliff face would vanish when only its
 // upper half is in view.
 bool section_reachable(std::uint8_t mask, int i, const gfx::AABB& aabb) {
-    int hi = static_cast<int>(std::floor(aabb.max.y - 0.001f)) / kSectionHeight;
-    hi = std::clamp(hi, i, kSectionsPerChunk - 1);
-    for (int s = i; s <= hi; ++s) {
+    // Every section from this one upward, NOT just the ones this section's
+    // geometry happens to reach.
+    //
+    // The bound used to come from aabb.max.y, which made a visibility test
+    // depend on how much geometry a section held: a section with a tall
+    // quad in it searched further up the mask than one without, and was
+    // therefore more likely to survive. That was never sound, and it was
+    // being propped up by chunk-boundary walls - the tallest quads in most
+    // sections. Cross-chunk culling deleted those walls, the search ranges
+    // collapsed, and sections holding visible geometry started being
+    // culled: the byte-identity check caught it as 267 sections drawn
+    // against 407, with the images no longer matching.
+    //
+    // A section's geometry is bucketed by its BOTTOM y and can extend
+    // arbitrarily far up, so any reachable section at or above it can be
+    // showing part of it. The aabb parameter is kept for the signature the
+    // tests use and deliberately no longer consulted.
+    (void)aabb;
+    for (int s = i; s < kSectionsPerChunk; ++s) {
         if (mask & (1u << s)) return true;
     }
     return false;
