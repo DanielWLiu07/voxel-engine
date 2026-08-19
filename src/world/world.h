@@ -231,6 +231,12 @@ public:
     // bugs - validates what the GPU draws, not what the CPU built.
     int debug_validate_gpu_meshes() const;
 
+    // Which mesher builds every chunk from here on. Set once before the
+    // world is generated; each job captures it by value at submit time, so
+    // changing it mid-flight cannot tear a job in half.
+    void set_mesher(MesherKind kind) { mesher_kind_ = kind; }
+    MesherKind mesher() const { return mesher_kind_; }
+
     std::size_t chunk_count() const { return chunks_.size(); }
     // Chunks still owed a re-mesh because a neighbour landed after them.
     // A world with a nonzero count draws correctly but is still carrying
@@ -358,6 +364,7 @@ private:
                         const SectionReachableMap* reachable,
                         const std::function<void(const glm::mat4&)>& set_model) const;
 
+    MesherKind mesher_kind_ = MesherKind::Greedy;
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
     // The one element buffer every chunk mesh shares (all quads use the
     // same index pattern); grown to the largest chunk seen, uploaded once.

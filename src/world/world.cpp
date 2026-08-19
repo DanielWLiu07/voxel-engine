@@ -246,7 +246,7 @@ void World::generate_grid(int radius, const ColumnFiller& fill_column) {
                     fill_column(origin_x + x, origin_z + z, chunk, x, z);
                 }
             }
-            auto mesh_data = build_chunk_mesh_greedy(chunk);
+            auto mesh_data = build_chunk_mesh(mesher_kind_, chunk);
             auto vis = compute_section_visibility(chunk);
             ChunkCoord c{cx, cz};
             chunks_.emplace(c, build_slot(c, std::move(chunk), std::move(mesh_data), vis, quad_ibo_));
@@ -268,7 +268,7 @@ World::GenStats World::generate_grid(int radius, const TerrainGen& terrain) {
             stats.gen_ms += std::chrono::duration<double, std::milli>(clock::now() - gen_t0).count();
 
             auto mesh_t0 = clock::now();
-            auto mesh_data = build_chunk_mesh_greedy(chunk);
+            auto mesh_data = build_chunk_mesh(mesher_kind_, chunk);
             stats.mesh_ms += std::chrono::duration<double, std::milli>(clock::now() - mesh_t0).count();
 
             auto vis = compute_section_visibility(chunk);
@@ -294,7 +294,8 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     jobs_in_flight_.fetch_add(1);
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
-    pool.submit([this, &terrain, c, gen, stamp, mask,
+    const MesherKind kind = mesher_kind_;
+    pool.submit([this, &terrain, c, gen, stamp, mask, kind,
                  planes = std::move(planes)]() {
         ZoneScopedN("chunk_worker_job");
         using clock = std::chrono::steady_clock;
@@ -307,7 +308,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
             t_after_terrain - t0).count();
-        fc.mesh_data = build_chunk_mesh_greedy(fc.chunk, planes);
+        fc.mesh_data = build_chunk_mesh(kind, fc.chunk, planes);
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms = std::chrono::duration<double, std::milli>(
@@ -538,7 +539,8 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     const std::uint64_t gen = generation_;
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
-    pool.submit([this, c, gen, stamp, preserve_on_evict, mask,
+    const MesherKind kind = mesher_kind_;
+    pool.submit([this, c, gen, stamp, preserve_on_evict, mask, kind,
                  planes = std::move(planes),
                  chunk = std::move(chunk)]() mutable {
         ZoneScopedN("chunk_loaded_worker_job");
@@ -553,7 +555,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
-        fc.mesh_data  = build_chunk_mesh_greedy(fc.chunk, planes);
+        fc.mesh_data  = build_chunk_mesh(kind, fc.chunk, planes);
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms  = std::chrono::duration<double, std::milli>(
@@ -608,7 +610,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     slot.player_modified = true;
     const auto edit_t0 = std::chrono::steady_clock::now();
     std::uint8_t mask = 0;
-    auto mesh_data = build_chunk_mesh_greedy(slot.chunk,
+    auto mesh_data = build_chunk_mesh(mesher_kind_, slot.chunk,
                                              neighbor_planes_for(cc, &mask));
     slot.meshed_with = mask;
     // Edits can shift quads across section boundaries (placing a block on

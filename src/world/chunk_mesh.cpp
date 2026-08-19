@@ -386,4 +386,12 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
     return out;
 }
 
+ChunkMeshData build_chunk_mesh(MesherKind kind, const Chunk& chunk,
+                               const NeighborPlanes& neighbors) {
+    return kind == MesherKind::Naive
+        ? build_chunk_mesh_naive(chunk, neighbors)
+        : build_chunk_mesh_greedy(chunk, neighbors);
+}
+
 }  // namespace world
+

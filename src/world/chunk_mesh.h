@@ -92,6 +92,19 @@ struct NeighborPlanes {
 BlockId sample_with_neighbors(const Chunk& chunk, const NeighborPlanes& n,
                               int x, int y, int z);
 
+// Which mesher the world builds with.
+//
+// Naive exists in the engine, not just the benchmark, so the difference
+// the greedy mesher makes can be looked at rather than only quoted. A
+// wireframe render of the same view under each one is the clearest
+// statement of what "5.3x fewer triangles" means, and a reader should not
+// have to take the number on faith.
+//
+// Passed explicitly rather than kept in a global: the choice is made once
+// before the world is built and then captured by value into every worker
+// job, which keeps it thread-safe by construction.
+enum class MesherKind { Greedy, Naive };
+
 // One quad per visible face. The slow baseline.
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
                                      const NeighborPlanes& neighbors = {});
@@ -100,5 +113,9 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
 // terrain-like data.
 ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
                                       const NeighborPlanes& neighbors = {});
+
+// Dispatches to one of the two above.
+ChunkMeshData build_chunk_mesh(MesherKind kind, const Chunk& chunk,
+                               const NeighborPlanes& neighbors = {});
 
 }  // namespace world
