@@ -6,16 +6,36 @@ A desktop voxel engine I built solo over three weeks in C++20 and OpenGL 4.1
 Core, to learn graphics from scratch and get some measurable performance wins
 out of it. Numbers below are from my Apple M4.
 
-![Orbit over the biome triple point: desert, forest valley, snow ridge](docs/media/orbit.gif)
+![Sunset over the biome triple point: desert ridges, forest valley, snow field](docs/media/vista_sunset.jpg)
+
+625 chunks streamed and drawn, low sun, distance fog carrying the scale.
+Every still here is a deterministic capture, not a lucky frame - the
+camera pose, the seed, and the hour of the day are all arguments, so
+anyone can reproduce the exact image:
+
+```
+./build/voxel_engine --pose-at 40,98,40,-135,-22 --seed 1337 \
+    --time-of-day 0.76 --screenshot-after 60 --shot-file vista.png
+```
+
+![Golden hour over the dunes](docs/media/dunes_goldenhour.jpg)
+
+The same world an hour later and a hundred blocks lower
+(`--pose-at 10,78,10,-150,-6 --time-of-day 0.755`). Sun disc and bloom
+come from the HDR chain: multisampled scene buffer, dual-filter Kawase
+bloom pyramid, ACES tonemap, then grading.
+
+![Orbit over the biome triple point](docs/media/orbit.gif)
 
 A full camera orbit over the streamed world, captured from a live run
 (`./scripts/capture_clip.sh orbit` regenerates it: the engine flies a
 deterministic fixed-step circle and saves every frame, ffmpeg assembles
 the seamless loop).
 
-| ![Ground level](docs/media/ground.jpg) | ![Inside a cave](docs/media/cave.jpg) |
-| :---: | :---: |
-| Eye level: raking CSM shadows across a cobble terrace, vertex AO, 64px mipmapped texture array | Inside a cave tunnel: occlusion culling draws **7 sections instead of 436**, byte-identical to the unculled render |
+![Inside a cave](docs/media/cave.jpg)
+
+Inside a cave tunnel: occlusion culling draws **7 sections instead of
+436**, and the render is byte-identical to the unculled one.
 
 ![Orbit over the lake: animated water with analytic wave normals, sun glints, day-cycle-scaled color](docs/media/lake_orbit.gif)
 

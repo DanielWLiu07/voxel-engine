@@ -466,6 +466,8 @@ int main(int argc, char** argv) {
     world::BlockId place_id = world::BlockId::Stone;
 
     float time_of_day = 0.35f;
+    // A capture can pin the sun; interactive runs keep the default.
+    if (opt.time_of_day >= 0.0f) time_of_day = opt.time_of_day;
     const float day_speed = 1.0f / 240.0f;
     // Bench/shot modes pause time-of-day so a sunrise/sunset transition
     // mid-run can't fire the shadow-resync force-refresh path (bench: timing
@@ -938,8 +940,18 @@ int main(int argc, char** argv) {
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.
-        auto target = wrld.raycast(cam.position(), cam.forward(), 8.0f);
-        render::draw_crosshair_and_selection(
+        //
+        // Suppressed for stills and clips: a reticle and a selection box
+        // are interface, not scene, and every capture this repo commits is
+        // meant to show the renderer. They were quietly appearing in the
+        // middle of every documentation image.
+        const bool capturing_image = shot_after > 0 || orbit_frames > 0 ||
+                                     cycle_frames > 0 || bench_frames > 0;
+        world::World::RayHit target{};
+        if (!capturing_image) {
+            target = wrld.raycast(cam.position(), cam.forward(), 8.0f);
+        }
+        if (!capturing_image) render::draw_crosshair_and_selection(
             wireframe_shader, selection_cube,
             crosshair_shader, crosshair_vao,
             fv,
