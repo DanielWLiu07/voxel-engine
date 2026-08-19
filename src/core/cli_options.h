@@ -35,6 +35,11 @@ struct CliOptions {
     std::string load_path;
     std::string save_path;
     bool start_wireframe = false;
+    // --naive-mesh: build the world with the one-quad-per-face baseline
+    // instead of the greedy mesher. A rendering aid, not a mode anyone
+    // should play in - it exists so the greedy win can be looked at in a
+    // wireframe rather than only quoted as a ratio.
+    bool naive_mesh = false;
     int bench_edit = 0;
     bool validate_mode = false;
     bool verify_edit_persistence = false;

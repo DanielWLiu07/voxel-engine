@@ -250,6 +250,22 @@ existed:
   check caught it as 267 sections drawn against 407 with the images no
   longer matching. The bound is now mesh-independent.
 
+The engine can also build the world with the naive mesher, so the claim
+is checkable rather than quotable. Both configurations validate clean -
+every triangle read back off the GPU is an axis-aligned face backed by a
+solid block - and the difference is what each leaves resident:
+
+```
+./build/voxel_engine --validate               # greedy   10.99 MB
+./build/voxel_engine --naive-mesh --validate  # naive    33.39 MB
+```
+
+**3.04x**, on the running engine at radius 12 rather than on a single
+benchmark chunk, and `audit.sh` checks it on every run. The figure is
+smaller than the 5.3x single-chunk ratio for the reason given above: this
+is caves-on gameplay terrain across 625 chunks, where caves break up
+mergeable runs.
+
 ### Scaling with world size
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4

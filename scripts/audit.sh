@@ -54,6 +54,29 @@ step      "unit tests"          ctest --test-dir build --output-on-failure
 grep_step "greedy ratio >= 4.5x" "[4-9]\.[0-9]x fewer quads|[1-9][0-9]\.[0-9]x fewer quads" \
           ./build/voxel_engine --bench
 grep_step "GPU mesh validation" "bad_triangles=0 .* ok"    ./build/voxel_engine --validate
+grep_step "naive mesher validates" "bad_triangles=0 .* ok" \
+          ./build/voxel_engine --naive-mesh --validate
+
+# The greedy win, measured on the running engine rather than the bench:
+# build the same world both ways and compare what each leaves resident on
+# the GPU. This is the claim a reader can check for themselves in two
+# commands, so it is checked here too.
+if [ "${AUDIT_SKIP_MESHER_AB:-0}" != "1" ]; then
+  printf '%-34s' "greedy vs naive resident bytes"
+  G=$(./build/voxel_engine --validate 2>/dev/null \
+        | sed -n 's/.*gpu_mesh_mb=\([0-9.]*\).*/\1/p')
+  N=$(./build/voxel_engine --naive-mesh --validate 2>/dev/null \
+        | sed -n 's/.*gpu_mesh_mb=\([0-9.]*\).*/\1/p')
+  if [ -z "$G" ] || [ -z "$N" ]; then
+    echo "FAIL (could not read gpu_mesh_mb)"; fail=1
+  else
+    awk -v g="$G" -v n="$N" 'BEGIN {
+      r = (g > 0) ? n / g : 0
+      if (r >= 2.5) printf "PASS  greedy %.2f MB vs naive %.2f MB (%.2fx)\n", g, n, r
+      else        { printf "FAIL  greedy %.2f MB vs naive %.2f MB (%.2fx, want >= 2.5x)\n", g, n, r; exit 1 }
+    }' || fail=1
+  fi
+fi
 grep_step "edit persistence"    "survived=1 ok"         ./build/voxel_engine --verify-edit-persistence
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "occlusion byte-identity"   ./scripts/verify_occlusion.sh

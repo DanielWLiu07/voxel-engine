@@ -36,6 +36,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
                 "  voxel_engine --screenshot-after N     load world, settle N frames, save PNG, exit\n"
                 "  voxel_engine --pose-at x,y,z,yaw,pitch  exact camera placement for shots and\n"
+                "  voxel_engine --naive-mesh              build with the naive mesher\n"
+                "                                         (pair with --wireframe to see the\n"
+                "                                          quads greedy meshing merges)\n"
                 "  voxel_engine --time-of-day 0.28        sun angle for a capture\n"
                 "                                         (0.25 sunrise, 0.5 noon, 0.75 sunset)\n"
                 "                                        benches (overrides --pose); the water/\n"
@@ -135,6 +138,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             ++i;
             continue;
         }
+        if (arg == "--naive-mesh") { o.naive_mesh = true; continue; }
         if (arg == "--time-of-day" && i + 1 < argc) {
             const float t = std::strtof(argv[i + 1], nullptr);
             if (!(t >= 0.0f && t <= 1.0f)) {

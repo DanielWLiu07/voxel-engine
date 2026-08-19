@@ -356,6 +356,13 @@ int main(int argc, char** argv) {
         : std::max<std::size_t>(2, std::thread::hardware_concurrency() - 1);
     world::TerrainGen terrain(terrain_seed);
     world::World wrld;
+    // Set before any chunk is generated: every mesh job captures the kind
+    // at submit time.
+    if (opt.naive_mesh) {
+        wrld.set_mesher(world::MesherKind::Naive);
+        std::printf("[world] naive mesher: one quad per visible face "
+                    "(rendering aid, not the shipped path)\n");
+    }
     core::ThreadPool pool(worker_count);
 
     const int total_chunks = (2 * stream_radius + 1) * (2 * stream_radius + 1);
