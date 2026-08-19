@@ -23,6 +23,13 @@ esac
 # CLIP_ORBIT_CENTER="x,z[,look_y]" recenters the orbit (the lake clip uses
 # 288,-400,30); unset keeps the spawn triple-point circle.
 CENTER_ARGS=()
+# CLIP_TIME_OF_DAY pins the sun for the clip (0.25 sunrise, 0.5 noon,
+# 0.75 sunset). Without it the engine's default mid-morning sun applies,
+# which is the one angle that flattens the shadows.
+TOD_ARGS=()
+if [ -n "${CLIP_TIME_OF_DAY:-}" ]; then
+  TOD_ARGS=(--time-of-day "$CLIP_TIME_OF_DAY")
+fi
 if [ -n "${CLIP_ORBIT_CENTER:-}" ]; then
   CENTER_ARGS=(--orbit-center "$CLIP_ORBIT_CENTER")
 fi
@@ -30,7 +37,10 @@ WIDTH=${CLIP_GIF_WIDTH:-560}
 FPS=${CLIP_GIF_FPS:-12}
 
 rm -rf capture
-./build/voxel_engine "--capture-$MODE" "$FRAMES" "${CENTER_ARGS[@]}"
+# ${ARR[@]+"${ARR[@]}"} rather than "${ARR[@]}": macOS ships bash 3.2, where
+# expanding an EMPTY array under `set -u` is an unbound-variable error.
+./build/voxel_engine "--capture-$MODE" "$FRAMES" \
+    ${CENTER_ARGS[@]+"${CENTER_ARGS[@]}"} ${TOD_ARGS[@]+"${TOD_ARGS[@]}"}
 
 # Two-pass palette assembly: a shared palette across the whole clip avoids
 # per-frame palette flicker, and lanczos keeps block edges crisp at README

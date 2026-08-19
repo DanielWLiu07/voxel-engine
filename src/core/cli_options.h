@@ -47,6 +47,17 @@ struct CliOptions {
     float pose_at_yaw = 0.0f;
     float pose_at_pitch = 0.0f;
     bool have_pose_at = false;
+
+    // Sun position, as a fraction of a day: 0 midnight, 0.25 sunrise,
+    // 0.5 noon, 0.75 sunset. Negative means "leave it at the engine's
+    // default", which is what interactive runs want.
+    //
+    // Exposed because a still is only as good as its light. The default
+    // sits mid-morning with the sun high, which is the one angle that
+    // hides what three cascades of shadow mapping are doing; a low sun
+    // rakes shadows across the terrain and shows it. Captures should be
+    // able to choose the hour without editing the source.
+    float time_of_day = -1.0f;
 };
 
 // Parses argv and range-checks it. Returns nullopt when the program should
