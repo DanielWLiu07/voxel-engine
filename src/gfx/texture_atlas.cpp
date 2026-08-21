@@ -146,6 +146,15 @@ Rgb paint_tile(int block_id, int x, int y) {
         if (hash2(x * 3, y * 5) > 0.93f) tone = mix(tone, {255, 255, 255}, 0.8f);
         return tone;
     }
+    case 11: {  // Glow: warm cracked crystal, the light source
+        Rgb base{255, 214, 130};
+        float n = fbm(x, y, 137);
+        Rgb tone = mix(base, {255, 168, 66}, n * 0.5f);
+        // Bright veins, so it reads as emissive rather than as sand.
+        float v = hash2(x / 3, y / 3);
+        if (v > 0.72f) tone = mix(tone, {255, 249, 214}, 0.75f);
+        return tone;
+    }
     default:
         return {255, 0, 255};
     }

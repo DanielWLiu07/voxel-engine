@@ -38,7 +38,8 @@ constexpr int kNeighborOffsets[6][3] = {
 // kFaces order matches gfx::kPackedNormals (+X,-X,+Y,-Y,+Z,-Z), so the
 // face index IS the packed normal index.
 gfx::VertexPacked pack_vertex(const glm::vec3& p, int normal_idx,
-                              float uu, float vv, int ao, std::uint8_t id) {
+                              float uu, float vv, int ao, std::uint8_t id,
+                              std::uint8_t light = kMaxLight) {
     gfx::VertexPacked v;
     v.x = static_cast<std::uint8_t>(p.x);
     v.y = static_cast<std::uint16_t>(p.y);
@@ -48,15 +49,18 @@ gfx::VertexPacked pack_vertex(const glm::vec3& p, int normal_idx,
     v.u = static_cast<std::uint16_t>(uu);
     v.v = static_cast<std::uint16_t>(vv);
     v.block_id = id;
+    v.light = light;
     return v;
 }
 
 void emit_quad(ChunkMeshData& out, const glm::vec3& origin, int face_idx,
-               const FaceDef& f, BlockId id) {
+               const FaceDef& f, BlockId id,
+               std::uint8_t light = kMaxLight) {
     for (int i = 0; i < 4; ++i) {
         out.vertices.push_back(pack_vertex(origin + f.corners[i], face_idx,
                                            kFaceUV[i][0], kFaceUV[i][1],
-                                           3, static_cast<std::uint8_t>(id)));
+                                           3, static_cast<std::uint8_t>(id),
+                                           light));
     }
     ++out.quad_count;
 }
@@ -122,8 +126,27 @@ BlockId sample_with_neighbors(const Chunk& chunk, const NeighborPlanes& n,
     return p.present ? p.at(x, y) : BlockId::Air;
 }
 
+// Light at a cell, following the neighbour faces when the coordinate
+// leaves the chunk. Full bright when there is no light data at all, which
+// is the pre-block-light look.
+std::uint8_t sample_light(const LightSource& ls, int x, int y, int z) {
+    if (ls.grid == nullptr) return kMaxLight;
+    if (y < 0 || y >= kChunkSizeY) return 0;
+    const bool ox = (x < 0 || x >= kChunkSizeX);
+    const bool oz = (z < 0 || z >= kChunkSizeZ);
+    if (!ox && !oz) return ls.grid->get(x, y, z);
+    if (ls.neighbors == nullptr || (ox && oz)) return 0;
+    if (ox) {
+        const LightPlane& p = (x < 0) ? ls.neighbors->neg_x : ls.neighbors->pos_x;
+        return p.present ? p.at(z, y) : 0;
+    }
+    const LightPlane& p = (z < 0) ? ls.neighbors->neg_z : ls.neighbors->pos_z;
+    return p.present ? p.at(x, y) : 0;
+}
+
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
-                                     const NeighborPlanes& neighbors) {
+                                     const NeighborPlanes& neighbors,
+                                     const LightSource& light) {
     ZoneScopedN("mesh_naive");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
@@ -147,7 +170,8 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
                     int nz = z + kNeighborOffsets[f][2];
                     if (face_visible(self, sample_with_neighbors(
                             chunk, neighbors, nx, ny, nz))) {
-                        emit_quad(out, origin, f, kFaces[f], self);
+                        emit_quad(out, origin, f, kFaces[f], self,
+                                  sample_light(light, nx, ny, nz));
                     }
                 }
             }
@@ -186,6 +210,7 @@ namespace {
 struct SliceContext {
     const Chunk& chunk;
     const NeighborPlanes& neighbors;
+    const LightSource& light;
     int d;
     int u_axis;
     int v_axis;
@@ -256,6 +281,26 @@ void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
                 return corner_ao(s1, s2, sc);
             };
 
+            // Light for a merged rectangle is sampled per corner from the
+            // outside cells, the same places AO already looks, so a long
+            // quad running out of a lit cave gradates instead of taking one
+            // flat value. max() rather than an average because a solid
+            // neighbour reads 0 and would drag a lit corner dark.
+            auto vertex_light = [&](int du, int dv) -> std::uint8_t {
+                const int U = u + du * w;
+                const int V = v + dv * h;
+                std::uint8_t best = 0;
+                for (int su = -1; su <= 0; ++su) {
+                    for (int sv = -1; sv <= 0; ++sv) {
+                        int xa, ya, za;
+                        slice_coords(ctx.d, ctx.u_axis, ctx.v_axis, out_d,
+                                     U + su, V + sv, xa, ya, za);
+                        best = std::max(best, sample_light(ctx.light, xa, ya, za));
+                    }
+                }
+                return best;
+            };
+
             int ao00 = vertex_ao(0, 0);
             int ao10 = vertex_ao(1, 0);
             int ao11 = vertex_ao(1, 1);
@@ -263,20 +308,23 @@ void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
 
             gfx::VertexPacked corner[4];
             int n = 0;
-            auto push = [&](const glm::vec3& p, float uu, float vv, int ao) {
-                corner[n++] = pack_vertex(p, face_idx, uu, vv, ao, id);
+            auto push = [&](const glm::vec3& p, float uu, float vv, int ao,
+                            std::uint8_t lt) {
+                corner[n++] = pack_vertex(p, face_idx, uu, vv, ao, id, lt);
             };
+            const std::uint8_t l00 = vertex_light(0, 0), l10 = vertex_light(1, 0);
+            const std::uint8_t l11 = vertex_light(1, 1), l01 = vertex_light(0, 1);
 
             if (dir > 0) {
-                push(p00, 0.0f, 0.0f, ao00);
-                push(p10, static_cast<float>(w), 0.0f, ao10);
-                push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
-                push(p01, 0.0f, static_cast<float>(h), ao01);
+                push(p00, 0.0f, 0.0f, ao00, l00);
+                push(p10, static_cast<float>(w), 0.0f, ao10, l10);
+                push(p11, static_cast<float>(w), static_cast<float>(h), ao11, l11);
+                push(p01, 0.0f, static_cast<float>(h), ao01, l01);
             } else {
-                push(p00, 0.0f, 0.0f, ao00);
-                push(p01, 0.0f, static_cast<float>(h), ao01);
-                push(p11, static_cast<float>(w), static_cast<float>(h), ao11);
-                push(p10, static_cast<float>(w), 0.0f, ao10);
+                push(p00, 0.0f, 0.0f, ao00, l00);
+                push(p01, 0.0f, static_cast<float>(h), ao01, l01);
+                push(p11, static_cast<float>(w), static_cast<float>(h), ao11, l11);
+                push(p10, static_cast<float>(w), 0.0f, ao10, l10);
             }
 
             // ao_flip: cut the other diagonal when it is more
@@ -308,7 +356,8 @@ void emit_merged_quads(const SliceContext& ctx, std::vector<std::uint8_t>& mask,
 // Greedy mesh: sweep 6 (axis, dir) combos. Per slice, build a BlockId mask
 // then merge contiguous same-id cells into maximal rectangles.
 ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
-                                      const NeighborPlanes& neighbors) {
+                                      const NeighborPlanes& neighbors,
+                                      const LightSource& light) {
     ZoneScopedN("mesh_greedy");
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
@@ -375,7 +424,7 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
             }
 
 
-            const SliceContext ctx{chunk, neighbors, d, u_axis, v_axis,
+            const SliceContext ctx{chunk, neighbors, light, d, u_axis, v_axis,
                                    u_size, v_size, s};
             emit_merged_quads(ctx, mask_pos, +1, out);
             emit_merged_quads(ctx, mask_neg, -1, out);
@@ -387,10 +436,11 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
 }
 
 ChunkMeshData build_chunk_mesh(MesherKind kind, const Chunk& chunk,
-                               const NeighborPlanes& neighbors) {
+                               const NeighborPlanes& neighbors,
+                               const LightSource& light) {
     return kind == MesherKind::Naive
-        ? build_chunk_mesh_naive(chunk, neighbors)
-        : build_chunk_mesh_greedy(chunk, neighbors);
+        ? build_chunk_mesh_naive(chunk, neighbors, light)
+        : build_chunk_mesh_greedy(chunk, neighbors, light);
 }
 
 }  // namespace world

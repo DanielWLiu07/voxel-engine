@@ -1198,6 +1198,53 @@ static void test_light_grid_is_nibble_packed() {
 }
 
 
+
+// The whole pipeline in one check: a light source changes the vertices the
+// mesher emits. Without this the propagation could be perfect and the
+// renderer would still draw a uniformly bright world, which is exactly the
+// state this repo shipped in for one round.
+static void test_light_reaches_the_vertices() {
+    world::Chunk c;
+    for (int z = 0; z < world::kChunkSizeZ; ++z)
+        for (int x = 0; x < world::kChunkSizeX; ++x)
+            for (int y = 0; y < 40; ++y)
+                c.set(x, y, z, world::BlockId::Stone);
+    // Carve a pocket and put a source in it.
+    for (int y = 20; y <= 24; ++y)
+        for (int z = 6; z <= 10; ++z)
+            for (int x = 6; x <= 10; ++x)
+                c.set(x, y, z, world::BlockId::Air);
+    c.set(8, 22, 8, world::BlockId::Glow);
+
+    world::LightGrid g;
+    world::propagate_light(c, {}, g);
+
+    const auto unlit = world::build_chunk_mesh_greedy(c);
+    const auto lit   = world::build_chunk_mesh_greedy(c, {}, {&g, nullptr});
+    EXPECT(unlit.quad_count == lit.quad_count,
+           "light changes brightness, never geometry");
+
+    auto max_light = [](const world::ChunkMeshData& m) {
+        std::uint8_t hi = 0;
+        for (const auto& v : m.vertices) hi = std::max(hi, v.light);
+        return hi;
+    };
+    auto min_light = [](const world::ChunkMeshData& m) {
+        std::uint8_t lo = 255;
+        for (const auto& v : m.vertices) lo = std::min(lo, v.light);
+        return lo;
+    };
+    // With no grid at all every vertex is full bright: that is the
+    // pre-block-light look, and it is what keeps the mesher's default
+    // harmless until a caller supplies light.
+    EXPECT(min_light(unlit) == world::kMaxLight, "no grid means full bright");
+    // With a grid, the pocket walls are lit and the sealed rock is not.
+    EXPECT(max_light(lit) > 0, "faces around the source carry light");
+    EXPECT(min_light(lit) == 0, "faces sealed in rock stay dark");
+    EXPECT(max_light(lit) < world::kMaxLight + 1, "light stays in range");
+}
+
+
 int main() {
     std::printf("voxel_tests: running...\n");
     test_aabb_empty_chunk();
@@ -1247,6 +1294,7 @@ int main() {
     test_light_does_not_pass_through_solids();
     test_light_crosses_a_chunk_boundary();
     test_light_grid_is_nibble_packed();
+    test_light_reaches_the_vertices();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");

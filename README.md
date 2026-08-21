@@ -182,7 +182,7 @@ reference rather than something to read top to bottom.
 | Occlusion cull (section-graph BFS), cave pose | 283 -> 4 sections (**70.8x** fewer draws underground) |
 | Packed vertex format | 40 -> 12 bytes/vertex (integer attributes, shader-side decode): world GPU buffers 48 -> 18.8 MB and peak RSS 253 -> 198 MB at radius 12; renders byte-identical (`verify_occlusion.sh`), GPU-validated (`--validate`), greedy ratios unchanged |
 | Shared quad index buffer | per-chunk index buffers eliminated (every quad triangulates the same way; the AO diagonal flip moved into vertex order): world GPU buffers 18.8 -> 12.5 MB at radius 12 (-33%); renders byte-identical to the per-chunk-EBO build across 4 poses, `--validate` clean on all 625 chunks |
-| Block edit, full remesh path (`--bench-edit 200`) | 0.80 ms p50 per edit: greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous |
+| Block edit, full remesh path (`--bench-edit 200`) | 0.95 ms p50 per edit: light re-propagation + greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous (was 0.80 ms before block light) |
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
 | GPU mesh validation (`--validate`) | reads every VBO/EBO back off the GPU and checks each triangle is an axis-aligned face backed by a solid block; composes with `--load`/`--seed`, exits nonzero on offenders |
@@ -283,12 +283,23 @@ Two levels share a byte for the same reason the mesh vertex is 12 bytes: a
 byte per block would be 40 MB of light at radius 12 for a value that needs
 four bits.
 
-**Not yet wired to the renderer.** The propagation, the storage, and the
-cross-chunk seeding are done and tested; the mesher does not yet carry a
-light level per vertex and the shader does not yet read one, so nothing on
-screen is darker for it. That work is next, and it is called out here
-rather than left for a reader to discover, the same way the cross-chunk
-mesher was before its streaming path landed.
+![Emissive blocks lighting the terrain at night](docs/media/block_light.jpg)
+
+Wired end to end: the mesher bakes a light level into every vertex and the
+shader adds it to the sun, so a source brightens a cave without washing
+out a surface already in daylight. Reproduce with
+`--time-of-day 0.03 --demo-lights`, which scatters sources around the
+camera because terrain generates none.
+
+**The light level costs nothing per vertex.** It went into the byte the
+packed vertex was already spending on alignment, so the stride is still
+12, its `static_assert` is unchanged, and every memory figure above holds.
+`--validate` reports the same 10.99 MB resident with light as without.
+
+What it does cost is edit latency: a block edit re-propagates its chunk's
+light before remeshing, which moved `--bench-edit` from 0.80 to 0.95 ms
+p50. That is the honest price and it is quoted above rather than left at
+the old number.
 
 ### Scaling with world size
 
@@ -397,7 +408,7 @@ emitting nothing.
 Block edits (place/break) remesh the whole 16x256x16 chunk synchronously
 rather than patching the mesh, because greedy meshing is fast enough to
 make patching pointless: `--bench-edit 200` runs deterministic
-break-and-restore pairs across chunks and reports 0.80 ms p50 for the
+break-and-restore pairs across chunks and reports 0.95 ms p50 for the
 full path (greedy remesh, section re-bucket, GL re-upload, visibility
 recompute) -- about a seventh of the 5.7 ms frame budget. The HUD shows
 the same numbers live (`edit remesh` row) once you edit a block.

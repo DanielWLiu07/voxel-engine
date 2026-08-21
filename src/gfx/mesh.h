@@ -28,8 +28,12 @@ struct VertexPacked {
     std::uint8_t  ao = 3;         // 0 occluded .. 3 unoccluded
     std::uint16_t y = 0;          // attribute 1: y, u, v (3 x u16)
     std::uint16_t u = 0, v = 0;
-    std::uint8_t  block_id = 0;   // attribute 2: block id (u8)
-    std::uint8_t  pad = 0;
+    std::uint8_t  block_id = 0;   // attribute 2: block id, light (2 x u8)
+    // Block light 0..15. This byte was padding: the struct needed 12 for
+    // alignment whether it was used or not, so carrying a light level per
+    // vertex costs nothing at all - the stride, its static_assert, and
+    // every memory figure in the README are unchanged by it.
+    std::uint8_t  light = 0;
 
     glm::vec3 pos() const {
         return {static_cast<float>(x), static_cast<float>(y),

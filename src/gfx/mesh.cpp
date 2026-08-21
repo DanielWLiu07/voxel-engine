@@ -87,7 +87,7 @@ void Mesh::upload(std::span<const VertexPacked> vertices,
     };
     iattr(0, 4, GL_UNSIGNED_BYTE,  offsetof(VertexPacked, x));
     iattr(1, 3, GL_UNSIGNED_SHORT, offsetof(VertexPacked, y));
-    iattr(2, 1, GL_UNSIGNED_BYTE,  offsetof(VertexPacked, block_id));
+    iattr(2, 2, GL_UNSIGNED_BYTE,  offsetof(VertexPacked, block_id));
 
     glBindVertexArray(0);
     index_count_ = quad_count * 6;
