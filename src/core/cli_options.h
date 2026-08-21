@@ -40,6 +40,11 @@ struct CliOptions {
     // should play in - it exists so the greedy win can be looked at in a
     // wireframe rather than only quoted as a ratio.
     bool naive_mesh = false;
+    // --demo-lights: scatter emissive blocks around the camera once the
+    // world settles. A capture aid, like --time-of-day: block light is
+    // only visible where something emits, and terrain generates none, so
+    // without this there is no way to photograph the feature.
+    bool demo_lights = false;
     int bench_edit = 0;
     bool validate_mode = false;
     bool verify_edit_persistence = false;

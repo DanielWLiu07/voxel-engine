@@ -5,6 +5,7 @@
 #include "gfx/mesh.h"
 #include "gfx/shader.h"
 #include "world/chunk.h"
+#include "world/chunk_light.h"
 #include "world/chunk_mesh.h"
 #include "world/section_visibility.h"
 #include "world/terrain_gen.h"
@@ -77,6 +78,9 @@ struct ChunkSlot {
     // hides, so it has to be re-meshed once the neighbour lands; this is
     // what says whether that is still owed.
     std::uint8_t meshed_with = 0;
+    // Block light for this chunk, flood-filled on the worker next to the
+    // mesh. Kept on the slot so a neighbour can be lit from it later.
+    LightGrid light;
     // Set by set_block (and for chunks that came off disk rather than the
     // terrain generator). Streaming eviction stashes modified chunks so
     // walking away from an edit can never silently regenerate it.
@@ -340,6 +344,7 @@ private:
         bool            preserve_on_evict = false;
         // Which neighbours the worker actually meshed against.
         std::uint8_t    neighbor_mask = 0;
+        LightGrid       light;
     };
 
     // Copies the four boundary layers out of whatever neighbours are
@@ -348,6 +353,9 @@ private:
     // anything the main thread does to those chunks afterwards.
     NeighborPlanes neighbor_planes_for(ChunkCoord c,
                                        std::uint8_t* out_mask) const;
+    // The four neighbours' boundary light, copied for the same reason the
+    // block planes are: a worker must not read the chunk map.
+    NeighborLight neighbor_light_for(ChunkCoord c) const;
 
     // Chunks whose mesh predates one of their neighbours. Drained a few at
     // a time so a settling world does not spike a frame.

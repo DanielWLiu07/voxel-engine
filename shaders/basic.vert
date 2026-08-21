@@ -2,10 +2,10 @@
 
 // Packed 12-byte chunk vertex (see gfx::VertexPacked): integer
 // attributes, decoded here. Attribute 0 = x, z, normal index, ao level;
-// attribute 1 = y, u, v.
+// attribute 1 = y, u, v; attribute 2 = block id, block light 0..15.
 layout(location = 0) in uvec4 a_xzna;
 layout(location = 1) in uvec3 a_yuv;
-layout(location = 2) in uint  a_block;
+layout(location = 2) in uvec2 a_block_light;
 
 const vec3 kNormals[6] = vec3[6](
     vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0),
@@ -24,6 +24,7 @@ out vec3  v_world_pos;
 out vec3  v_view_pos;
 out vec4  v_light_pos[3];
 out float v_ao;
+out float v_light;
 flat out int v_block_id;
 
 void main() {
@@ -37,7 +38,10 @@ void main() {
     v_normal_ws = mat3(u_model) * a_normal;
     v_uv = a_uv;
     v_ao = a_ao;
-    v_block_id = int(a_block);
+    v_block_id = int(a_block_light.x);
+    // Block light 0..15 -> a brightness floor. Even an unlit face keeps
+    // some ambient, or caves would be pure black rather than dark.
+    v_light = float(a_block_light.y) / 15.0;
     for (int i = 0; i < 3; ++i) {
         v_light_pos[i] = u_light_vp[i] * world;
     }

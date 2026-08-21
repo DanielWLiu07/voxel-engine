@@ -6,6 +6,7 @@ in vec3  v_world_pos;
 in vec3  v_view_pos;
 in vec4  v_light_pos[3];
 in float v_ao;
+in float v_light;
 flat in int v_block_id;
 
 uniform vec3  u_light_dir;
@@ -39,6 +40,8 @@ int tile_for_face(int block_id, vec3 normal) {
     if (block_id == 3 && top) return 8;   // Grass top
     if (block_id == 5 && abs(normal.y) > 0.5) return 9;   // Wood end-grain
     if (block_id == 7 && top) return 10;  // Snow top
+    if (block_id == 8) return 11;         // Glow: its own tile, since tile 8
+                                          // is already the grass top
     return block_id;
 }
 
@@ -80,11 +83,21 @@ void main() {
     float shadow  = mix(1.0, sample_csm(N, L), u_shadow_strength);
     vec3 lighting = u_ambient_color + u_light_color * diffuse * shadow;
 
-    int id = clamp(v_block_id, 0, 7);
+    int id = clamp(v_block_id, 0, 8);
     int tile = tile_for_face(id, N);
     vec3 albedo = sample_atlas(tile, v_uv);
 
-    vec3 lit = albedo * lighting * v_ao;
+    // Block light adds to the sun rather than replacing it: a torch has to
+    // brighten a cave without washing out a surface already in daylight.
+    // The warm tint is what makes a lit cave read as torchlight instead of
+    // as a hole in the fog.
+    const vec3 kTorchTint = vec3(1.0, 0.78, 0.48);
+    vec3 block_light = kTorchTint * (v_light * v_light) * 1.6;
+    // An emissive block ignores shading entirely, or the source itself
+    // looks like an ordinary dark cube next to the light it is casting.
+    vec3 lit = (id == 8)
+        ? albedo * kTorchTint * 1.5
+        : albedo * (lighting + block_light) * v_ao;
 
     float d = length(v_world_pos - u_camera_pos);
     float f = clamp((d - u_fog_start) / max(u_fog_end - u_fog_start, 1e-4), 0.0, 1.0);

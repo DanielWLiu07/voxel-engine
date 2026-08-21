@@ -2,6 +2,7 @@
 
 #include "gfx/mesh.h"
 #include "world/chunk.h"
+#include "world/chunk_light.h"
 
 #include <array>
 #include <cstddef>
@@ -105,17 +106,31 @@ BlockId sample_with_neighbors(const Chunk& chunk, const NeighborPlanes& n,
 // job, which keeps it thread-safe by construction.
 enum class MesherKind { Greedy, Naive };
 
+// Light the mesher bakes into each vertex, when it has any.
+//
+// Null means "no light data", which meshes at full brightness - exactly
+// what the engine looked like before block light existed. That default is
+// what lets the mesher change ahead of the streaming path without moving a
+// single pixel until the two are connected.
+struct LightSource {
+    const LightGrid* grid = nullptr;
+    const NeighborLight* neighbors = nullptr;
+};
+
 // One quad per visible face. The slow baseline.
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
-                                     const NeighborPlanes& neighbors = {});
+                                     const NeighborPlanes& neighbors = {},
+                                     const LightSource& light = {});
 
 // Slice-sweep + maximal-rectangle merge. Typical 20-50x reduction on
 // terrain-like data.
 ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
-                                      const NeighborPlanes& neighbors = {});
+                                      const NeighborPlanes& neighbors = {},
+                                      const LightSource& light = {});
 
 // Dispatches to one of the two above.
 ChunkMeshData build_chunk_mesh(MesherKind kind, const Chunk& chunk,
-                               const NeighborPlanes& neighbors = {});
+                               const NeighborPlanes& neighbors = {},
+                               const LightSource& light = {});
 
 }  // namespace world

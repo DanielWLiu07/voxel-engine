@@ -360,6 +360,7 @@ int main(int argc, char** argv) {
     world::World wrld;
     // Set before any chunk is generated: every mesh job captures the kind
     // at submit time.
+    bool demo_lights_pending = opt.demo_lights;
     if (opt.naive_mesh) {
         wrld.set_mesher(world::MesherKind::Naive);
         std::printf("[world] naive mesher: one quad per visible face "
@@ -1028,6 +1029,30 @@ int main(int argc, char** argv) {
         // Wait for a settled world: chunks meshed before their neighbours
         // arrived are still owed a re-mesh, and validating (or measuring)
         // mid-convergence reports the pre-culling footprint.
+        // Emissive blocks for a capture. Placed once the world has
+        // settled, in a fixed ring around the camera so the shot is
+        // deterministic, and only into air so nothing is destroyed.
+        if (demo_lights_pending && world_settled) {
+            demo_lights_pending = false;
+            const glm::vec3 p = cam.position();
+            int placed = 0;
+            for (int i = 0; i < 16; ++i) {
+                const float a = 6.2831853f * static_cast<float>(i) / 16.0f;
+                for (int r = 4; r <= 12; r += 4) {
+                    const int bx = static_cast<int>(std::floor(p.x + std::cos(a) * r));
+                    const int bz = static_cast<int>(std::floor(p.z + std::sin(a) * r));
+                    for (int dy = -3; dy <= 3; ++dy) {
+                        const int by = static_cast<int>(std::floor(p.y)) + dy;
+                        if (by < 1 || by >= world::kChunkSizeY) continue;
+                        if (wrld.block_at(bx, by, bz) != world::BlockId::Air) continue;
+                        if (wrld.set_block(bx, by, bz, world::BlockId::Glow)) ++placed;
+                        break;
+                    }
+                }
+            }
+            std::printf("[demo] placed %d light sources around the camera\n", placed);
+        }
+
         if (validate_mode && world_settled) {
             const int bad = wrld.debug_validate_gpu_meshes();
             // The engine's own resident mesh footprint, printed here
