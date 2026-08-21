@@ -10,6 +10,7 @@
 #include "core/frame_stats.h"
 #include "world/block.h"
 #include "world/chunk.h"
+#include "world/chunk_light.h"
 #include "world/chunk_mesh.h"
 #include "world/chunk_serialize.h"
 #include "world/section_visibility.h"
@@ -1128,6 +1129,75 @@ static void test_boundary_faces_match_the_neighbour_exactly() {
 }
 
 
+
+// ---- Block light propagation --------------------------------------------
+
+static void test_light_falls_off_by_one_per_step() {
+    world::Chunk c;                       // all air
+    c.set(8, 40, 8, world::BlockId::Glow);
+    world::LightGrid g;
+    const auto st = world::propagate_light(c, {}, g);
+
+    EXPECT(st.sources == 1, "one emitter seeded");
+    EXPECT(g.get(8, 40, 8) == world::kMaxLight, "the source cell is full bright");
+    EXPECT(g.get(9, 40, 8) == world::kMaxLight - 1, "one step costs one level");
+    EXPECT(g.get(8 + 5, 40, 8) == world::kMaxLight - 5, "five steps cost five");
+    // 15 levels means light dies exactly 15 steps out. Measured up the Y
+    // axis: a chunk is only 16 wide, so 15 steps in x or z would leave the
+    // chunk and read out of bounds.
+    EXPECT(g.get(8, 40 + 15, 8) == 0, "light runs out at its range");
+    EXPECT(g.get(8, 40 + 14, 8) == 1, "and is still 1 the step before");
+}
+
+static void test_light_does_not_pass_through_solids() {
+    world::Chunk c;
+    // A sealed 1-block pocket: emitter inside a stone shell.
+    for (int y = 39; y <= 41; ++y)
+        for (int z = 7; z <= 9; ++z)
+            for (int x = 7; x <= 9; ++x)
+                c.set(x, y, z, world::BlockId::Stone);
+    c.set(8, 40, 8, world::BlockId::Glow);
+
+    world::LightGrid g;
+    world::propagate_light(c, {}, g);
+    EXPECT(g.get(8, 40, 8) == world::kMaxLight, "the emitter still lights itself");
+    // Everything outside the shell stays dark: stone does not transmit.
+    EXPECT(g.get(8, 40, 6) == 0, "light does not leak through a solid wall");
+    EXPECT(g.get(6, 40, 8) == 0, "nor sideways through one");
+    EXPECT(g.get(8, 42, 8) == 0, "nor upward through one");
+}
+
+// Without this a torch near a chunk edge would light its own chunk and
+// stop dead at the boundary - a seam every 16 blocks, which is exactly the
+// kind of thing that makes a voxel world look unfinished.
+static void test_light_crosses_a_chunk_boundary() {
+    world::Chunk c;                       // all air
+    world::NeighborLight in;
+    in.neg_x.present = true;
+    in.neg_x.set(4, 40, 10);              // the neighbour's edge column is at 10
+
+    world::LightGrid g;
+    world::propagate_light(c, in, g);
+    // Crossing the boundary costs one step, then one per cell after that.
+    EXPECT(g.get(0, 40, 4) == 9, "light entering from -X arrives one level down");
+    EXPECT(g.get(1, 40, 4) == 8, "and keeps falling off inside this chunk");
+    EXPECT(g.get(0, 40, 6) == 7, "it also spreads along the face");
+}
+
+static void test_light_grid_is_nibble_packed() {
+    // 32 KB per chunk rather than 64: the same refusal the 12-byte vertex
+    // makes, applied to the second grid.
+    world::LightGrid g;
+    EXPECT(g.bytes() == static_cast<std::size_t>(world::kChunkVolume) / 2,
+           "two light levels share a byte");
+    // Adjacent cells share a byte, so writing one must not disturb the other.
+    g.set(0, 0, 0, 15);
+    g.set(1, 0, 0, 3);
+    EXPECT(g.get(0, 0, 0) == 15, "low nibble survives its neighbour's write");
+    EXPECT(g.get(1, 0, 0) == 3,  "high nibble reads back");
+}
+
+
 int main() {
     std::printf("voxel_tests: running...\n");
     test_aabb_empty_chunk();
@@ -1173,6 +1243,10 @@ int main() {
     test_a_gap_in_the_neighbor_keeps_the_face();
     test_missing_neighbor_never_culls();
     test_boundary_faces_match_the_neighbour_exactly();
+    test_light_falls_off_by_one_per_step();
+    test_light_does_not_pass_through_solids();
+    test_light_crosses_a_chunk_boundary();
+    test_light_grid_is_nibble_packed();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");

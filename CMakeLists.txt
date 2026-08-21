@@ -117,6 +117,7 @@ add_executable(voxel_engine
   src/render/lighting.cpp
   src/render/passes.cpp
   src/ui/debug_hud.cpp
+  src/world/chunk_light.cpp
   src/world/chunk_mesh.cpp
   src/world/chunk_serialize.cpp
   src/world/section_visibility.cpp
@@ -169,6 +170,7 @@ if(VOXEL_BUILD_TESTS)
   add_executable(voxel_tests
     tests/test_world.cpp
     src/world/world.cpp
+    src/world/chunk_light.cpp
     src/world/chunk_mesh.cpp
     src/world/chunk_serialize.cpp
     src/world/world_io.cpp

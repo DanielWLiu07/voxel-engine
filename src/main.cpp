@@ -65,6 +65,7 @@ const glm::vec3 kBlockPalette[world::kBlockPaletteSize] = {
     {0.42f, 0.27f, 0.13f},  // Wood
     {0.22f, 0.46f, 0.20f},  // Leaves
     {0.95f, 0.96f, 0.98f},  // Snow
+    {1.00f, 0.86f, 0.55f},  // Glow (emissive)
 };
 
 // Shared save/load console report: both directions measure and print
@@ -147,6 +148,7 @@ const char* block_name(world::BlockId b) {
     case world::BlockId::Wood:   return "Wood";
     case world::BlockId::Leaves: return "Leaves";
     case world::BlockId::Snow:   return "Snow";
+    case world::BlockId::Glow:   return "Glow";
     default:                     return "?";
     }
 }
@@ -487,7 +489,7 @@ int main(int argc, char** argv) {
     int   capture_settle = 0;
 
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
-    std::printf("[input] LClick = break, RClick = place, 1-7 = pick block, Shift = sprint\n");
+    std::printf("[input] LClick = break, RClick = place, 1-8 = pick block (8 = Glow, a light source), Shift = sprint\n");
     std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
     std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
     std::printf("[input] O = toggle occlusion culling, G = toggle wireframe\n");
@@ -645,7 +647,7 @@ int main(int argc, char** argv) {
             std::printf("[mode] %s\n", walk_mode ? "walk" : "fly");
         }
 
-        for (int k = 0; k < 7; ++k) {
+        for (int k = 0; k < world::kMaxBlockId; ++k) {
             if (input.key_pressed(GLFW_KEY_1 + k)) {
                 place_id = static_cast<world::BlockId>(k + 1);
                 std::printf("[place] %s\n", block_name(place_id));

@@ -6,6 +6,7 @@
 #include "gfx/frustum.h"
 #include "gfx/mesh.h"
 #include "world/chunk.h"
+#include "world/chunk_light.h"
 #include "world/chunk_mesh.h"
 #include "world/section_visibility.h"
 #include "world/terrain_gen.h"
@@ -382,6 +383,46 @@ int run_mesher_bench(int stream_radius) {
                     cave_occl > 0 ? double(cave_frustum) / cave_occl : 0.0);
     } else {
         std::printf("  cave pose                : n/a (no air pocket found near origin)\n");
+    }
+
+    // ---- Block light propagation ---------------------------------------
+    // Flood fill from emissive blocks, one level lost per step, stopped by
+    // anything solid. Measured on the same 625 chunks the cull bench built,
+    // with a light source dropped in every chunk so the fill has work to do.
+    {
+        world::LightGrid grid;
+        std::uint64_t cells = 0, sources = 0;
+        const auto lt0 = std::chrono::steady_clock::now();
+        for (std::size_t i = 0; i < chunks.size(); ++i) {
+            world::Chunk lit = chunks[i];
+            // One emitter per chunk, in the first air cell above the floor
+            // so the fill runs through open space rather than dying inside
+            // rock. Deterministic scan, so the count is reproducible.
+            bool placed = false;
+            for (int y = 40; y < 90 && !placed; ++y) {
+                if (world::is_solid(lit.get(8, y, 8))) continue;
+                lit.set(8, y, 8, world::BlockId::Glow);
+                placed = true;
+            }
+            if (!placed) continue;
+            const auto st = world::propagate_light(lit, {}, grid);
+            cells += st.cells_visited;
+            sources += st.sources;
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - lt0).count();
+        std::printf("\n==== block light propagation (%d chunks, one emitter each) ====\n",
+                    total);
+        std::printf("  %llu sources, %llu cells visited in %.1f ms "
+                    "(%.2f ms/chunk, %.1fM cells/sec)\n",
+                    static_cast<unsigned long long>(sources),
+                    static_cast<unsigned long long>(cells), ms,
+                    ms / static_cast<double>(total),
+                    ms > 0.0 ? cells / ms / 1000.0 : 0.0);
+        std::printf("  light grid: %zu KB per chunk, nibble-packed "
+                    "(a byte per block would be %zu KB)\n",
+                    grid.bytes() / 1024,
+                    static_cast<std::size_t>(world::kChunkVolume) / 1024);
     }
 
     // ---- Whole-world GPU mesh footprint --------------------------------
