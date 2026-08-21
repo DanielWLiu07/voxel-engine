@@ -266,6 +266,30 @@ smaller than the 5.3x single-chunk ratio for the reason given above: this
 is caves-on gameplay terrain across 625 chunks, where caves break up
 mergeable runs.
 
+### Block light
+
+Flood-fill propagation from emissive blocks, fifteen levels, one lost per
+step, stopped by anything that does not transmit. Light entering from a
+neighbouring chunk is seeded from that chunk's boundary face, so a source
+near an edge lights across the boundary instead of stopping dead at it.
+
+| | |
+| :--- | ---: |
+| Propagation, 625 chunks with one source each | 1,506,399 cells in 25.3 ms |
+| | **59.5M cells/sec**, 0.04 ms/chunk |
+| Light grid per chunk | **32 KB**, nibble-packed (64 KB unpacked) |
+
+Two levels share a byte for the same reason the mesh vertex is 12 bytes: a
+byte per block would be 40 MB of light at radius 12 for a value that needs
+four bits.
+
+**Not yet wired to the renderer.** The propagation, the storage, and the
+cross-chunk seeding are done and tested; the mesher does not yet carry a
+light level per vertex and the shader does not yet read one, so nothing on
+screen is darker for it. That work is next, and it is called out here
+rather than left for a reader to discover, the same way the cross-chunk
+mesher was before its streaming path landed.
+
 ### Scaling with world size
 
 Frame time scaling, vsync off, `center` pose, 30-frame settle, M4

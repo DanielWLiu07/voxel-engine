@@ -13,11 +13,25 @@ enum class BlockId : std::uint8_t {
     Wood   = 5,
     Leaves = 6,
     Snow   = 7,
+    // Emissive. The only block that is a light source, which is what makes
+    // a cave dark until you put one there.
+    Glow   = 8,
 };
+
+// Light a block emits, 0..kMaxLight. Everything except Glow emits nothing.
+inline constexpr std::uint8_t kMaxLight = 15;
+inline constexpr std::uint8_t light_emission(BlockId b) {
+    return b == BlockId::Glow ? kMaxLight : 0;
+}
+
+// Whether light passes through. Air propagates; solids stop it. Kept
+// separate from is_solid so glass or water can differ later without
+// touching the propagation code.
+inline constexpr bool transmits_light(BlockId b) { return b == BlockId::Air; }
 
 // Highest id the enum defines; bytes above this are not blocks. The RLE
 // decoder rejects them so a corrupt save cannot smuggle in garbage ids.
-constexpr std::uint8_t kMaxBlockId = static_cast<std::uint8_t>(BlockId::Snow);
+constexpr std::uint8_t kMaxBlockId = static_cast<std::uint8_t>(BlockId::Glow);
 
 constexpr bool is_solid(BlockId b) { return b != BlockId::Air; }
 
