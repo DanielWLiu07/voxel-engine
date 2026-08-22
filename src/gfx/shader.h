@@ -26,6 +26,7 @@ public:
     void set_float(const char* name, float v) const;
     void set_vec2(const char* name, const glm::vec2& v) const;
     void set_vec3(const char* name, const glm::vec3& v) const;
+    void set_mat3(const char* name, const glm::mat3& m) const;
     void set_mat4(const char* name, const glm::mat4& m) const;
 
     // Array uniforms (u_light_vp[N], u_cascade_far[N], u_palette[N]).
