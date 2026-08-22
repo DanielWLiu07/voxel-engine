@@ -37,6 +37,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --screenshot-after N     load world, settle N frames, save PNG, exit\n"
                 "  voxel_engine --pose-at x,y,z,yaw,pitch  exact camera placement for shots and\n"
                 "  voxel_engine --demo-lights             scatter light sources for a capture\n"
+                "  voxel_engine --sky-overdraw            draw the sky first, no depth test\n"
+                "                                         (the pre-cloud order; A/B against\n"
+                "                                          the default with --pass-breakdown)\n"
                 "  voxel_engine --naive-mesh              build with the naive mesher\n"
                 "                                         (pair with --wireframe to see the\n"
                 "                                          quads greedy meshing merges)\n"
@@ -140,6 +143,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             continue;
         }
         if (arg == "--naive-mesh") { o.naive_mesh = true; continue; }
+        if (arg == "--sky-overdraw") { o.sky_overdraw = true; continue; }
         if (arg == "--demo-lights") { o.demo_lights = true; continue; }
         if (arg == "--time-of-day" && i + 1 < argc) {
             const float t = std::strtof(argv[i + 1], nullptr);

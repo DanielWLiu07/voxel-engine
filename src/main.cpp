@@ -233,6 +233,7 @@ int main(int argc, char** argv) {
     // rather than a rewrite of the render loop.
     const int bench_frames = opt.bench_frames;
     const bool bench_pass_breakdown = opt.bench_pass_breakdown;
+    const bool sky_overdraw         = opt.sky_overdraw;
     const bool bench_io = opt.bench_io;
     const bool bench_orbit = opt.bench_orbit;
     std::string_view bench_pose = opt.bench_pose;
@@ -930,9 +931,15 @@ int main(int argc, char** argv) {
 
         postfx.begin_scene();
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        pass_start();
-        render::draw_sky(sky_shader, sky_vao, fv, light);
-        pass_end(pass_ms.sky);
+        // Sky last, on purpose: draw_sky depth-tests its far-plane triangle
+        // against what the terrain just wrote, so the procedural clouds and
+        // stars only shade the pixels the world left empty. --sky-overdraw
+        // restores the old sky-first order for the A/B.
+        if (sky_overdraw) {
+            pass_start();
+            render::draw_sky(sky_shader, sky_vao, fv, light, false);
+            pass_end(pass_ms.sky);
+        }
         pass_start();
         // Wireframe wraps only the terrain color pass; the shadow depth pass
         // is already done and the sky, water, and post-process fullscreen
@@ -943,6 +950,11 @@ int main(int argc, char** argv) {
                                           occlusion_cull_enabled);
         if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         pass_end(pass_ms.terrain);
+        if (!sky_overdraw) {
+            pass_start();
+            render::draw_sky(sky_shader, sky_vao, fv, light, true);
+            pass_end(pass_ms.sky);
+        }
         pass_start();
         render::draw_water(water_shader, water, fv, light,
                            static_cast<float>(world::kSeaLevel));

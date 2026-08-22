@@ -35,15 +35,24 @@ void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
 }
 
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
-              const FrameView& fv, const LightingFrame& light) {
+              const FrameView& fv, const LightingFrame& light,
+              bool depth_test) {
     ZoneScopedN("sky_pass");
     // Strip translation so the sky never moves with the camera.
     glm::mat4 view_no_trans = fv.view;
     view_no_trans[3] = glm::vec4(0, 0, 0, 1);
     glm::mat4 inv_vp = glm::inverse(fv.proj * view_no_trans);
 
+    // The sky runs AFTER the terrain, not before it. Its triangle sits on
+    // the far plane, so with the depth test left on and flipped to LEQUAL
+    // it survives only where nothing was drawn - the shader never runs on
+    // a pixel the world already covers. That inversion is what pays for
+    // the clouds and stars: the pass got more expensive per pixel and
+    // cheaper per frame, because a typical view is mostly ground.
+    // Depth writes stay off; the sky must not occlude the water pass.
     glDepthMask(GL_FALSE);
-    glDisable(GL_DEPTH_TEST);
+    if (depth_test) glDepthFunc(GL_LEQUAL);
+    else            glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
 
     sky_shader.use();
@@ -52,11 +61,16 @@ void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
     sky_shader.set_vec3("u_sky_horizon", light.sky_horizon);
     sky_shader.set_vec3("u_sun_dir", light.sun_dir);
     sky_shader.set_vec3("u_sun_color", light.sun_color);
+    sky_shader.set_vec3("u_moon_dir", light.moon_dir);
+    sky_shader.set_float("u_star_fade", light.star_fade);
+    sky_shader.set_float("u_time", fv.time_seconds);
+    sky_shader.set_mat3("u_star_rot", light.star_rot);
     glBindVertexArray(sky_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
 
-    glEnable(GL_DEPTH_TEST);
+    if (depth_test) glDepthFunc(GL_LESS);
+    else            glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glDepthMask(GL_TRUE);
 }
