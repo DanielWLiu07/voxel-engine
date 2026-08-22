@@ -33,8 +33,14 @@ fi
 if [ -n "${CLIP_ORBIT_CENTER:-}" ]; then
   CENTER_ARGS=(--orbit-center "$CLIP_ORBIT_CENTER")
 fi
-WIDTH=${CLIP_GIF_WIDTH:-560}
-FPS=${CLIP_GIF_FPS:-12}
+# The procedural sky put clouds and stars in every frame, which is a lot
+# more entropy for a palette to carry: at the old 560px/12fps/128 colors
+# the orbit clip encoded to 10 MB and GitHub stops rendering a GIF inline
+# somewhere around there. Slightly smaller and slightly fewer colors puts
+# it back under 7 MB with no visible loss at README width.
+WIDTH=${CLIP_GIF_WIDTH:-520}
+FPS=${CLIP_GIF_FPS:-10}
+COLORS=${CLIP_GIF_COLORS:-96}
 
 rm -rf capture
 # ${ARR[@]+"${ARR[@]}"} rather than "${ARR[@]}": macOS ships bash 3.2, where
@@ -47,7 +53,7 @@ rm -rf capture
 # width. The capture is 30 fps worth of orbit steps; the fps filter drops
 # to the target rate evenly.
 ffmpeg -y -framerate 30 -i capture/frame_%04d.png \
-    -vf "fps=$FPS,scale=$WIDTH:-1:flags=lanczos,palettegen=max_colors=128" \
+    -vf "fps=$FPS,scale=$WIDTH:-1:flags=lanczos,palettegen=max_colors=$COLORS" \
     /tmp/clip_palette.png
 ffmpeg -y -framerate 30 -i capture/frame_%04d.png -i /tmp/clip_palette.png \
     -lavfi "fps=$FPS,scale=$WIDTH:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5" \

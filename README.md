@@ -9,9 +9,11 @@ out of it. Numbers below are from my Apple M4.
 ![Sunset over the biome triple point: desert ridges, forest valley, snow field](docs/media/vista_sunset.jpg)
 
 625 chunks streamed and drawn, low sun, distance fog carrying the scale.
-Every still here is a deterministic capture, not a lucky frame - the
-camera pose, the seed, and the hour of the day are all arguments, so
-anyone can reproduce the exact image:
+The clouds, the sun disc, and the first stars in that sky are one
+fullscreen triangle and a fragment shader - no skybox texture, no cloud
+mesh, nothing in a vertex buffer. Every still here is a deterministic
+capture, not a lucky frame: the camera pose, the seed, and the hour of
+the day are all arguments, so anyone can reproduce the exact image:
 
 ```
 ./build/voxel_engine --pose-at 40,98,40,-135,-22 --seed 1337 \
@@ -24,6 +26,15 @@ The same world an hour later and a hundred blocks lower
 (`--pose-at 10,78,10,-150,-6 --time-of-day 0.755`). Sun disc and bloom
 come from the HDR chain: multisampled scene buffer, dual-filter Kawase
 bloom pyramid, ACES tonemap, then grading.
+
+![Moonrise: crescent moon, procedural cloud deck, and a hashed starfield](docs/media/moonrise.jpg)
+
+Half a day later, same shader. The moon rides the sun's own arc a half
+turn behind it, so it rises exactly as the sun sets without a second
+schedule to keep in sync; the stars are hashed out of the view direction
+and turn with the night. Reproduce:
+`--pose-at 300,105,-360,60,-4 --time-of-day 0.79`. There is more on how
+the sky is built in [The sky is a shader](#the-sky-is-a-shader).
 
 ![Orbit over the biome triple point](docs/media/orbit.gif)
 
@@ -146,6 +157,8 @@ scripts/bench_sweep.sh                     # scaling table across radii 8..16
 POSES="center ground high" scripts/bench_sweep.sh 12
 scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 workers
 ./build/voxel_engine --bench-edit 200      # block-edit remesh latency distribution
+./build/voxel_engine --bench-frame 300 --pass-breakdown --sky-overdraw
+                                           # sky drawn first and undepth-tested, for the A/B
 ./build/voxel_engine --validate            # read GPU meshes back, verify vs voxel data
 ./build/voxel_engine --verify-edit-persistence  # edits must survive chunk eviction
 scripts/verify_occlusion.sh                # occlusion on/off renders must be byte-identical
@@ -543,12 +556,12 @@ worth optimizing:
 
 | Pass | ms | Share |
 | --- | ---: | ---: |
-| post-process (HDR -> bloom -> ACES tonemap) | 3.73 | 37% |
-| terrain (visible sections, atlas + CSM sample) | 2.19 | 22% |
-| shadow pass (3 cascades, staggered) | 2.14 | 21% |
-| water (sine-animated plane + Fresnel + depth fog) | 1.07 | 11% |
-| sky (gradient + sun glow) | 0.90 | 9% |
-| sum of measured passes | 10.03 | |
+| post-process (HDR -> bloom -> ACES tonemap) | 2.80 | 32% |
+| terrain (visible sections, atlas + CSM sample) | 1.88 | 21% |
+| sky (clouds, stars, moon, sun) | 1.57 | 18% |
+| shadow pass (3 cascades, staggered) | 1.55 | 18% |
+| water (sine-animated plane + Fresnel + depth fog) | 1.05 | 12% |
+| sum of measured passes | 8.86 | |
 
 Most of that post-process cost was the bloom blur: one half-res buffer run
 through eight fixed-resolution Gaussian passes, so a wider glow cost
@@ -556,8 +569,76 @@ linearly more. I rebuilt it as a dual-filter (Kawase) downsample/upsample
 pyramid, where the blur work shrinks geometrically down a seven-level mip
 chain. A/B runs that hold machine load constant (using the untouched
 terrain pass as a control) put the post-process pass about 20% cheaper for
-an equal-or-wider glow. The frame-time tables above were captured before
-that change, so they slightly understate where the engine sits now.
+an equal-or-wider glow, which is the drop from 3.73 ms to 2.80 ms in this
+table against the pre-rework capture.
+
+**Read the sky row with a caveat.** Every bracket in this mode is a pair
+of `glFinish` calls, and on a tile-based GPU that forces the framebuffer
+out to memory and back between passes, so each row carries a fixed floor
+that has nothing to do with the pass's own work. The flat gradient this
+sky replaced measured 0.90 ms in the same instrument while doing almost
+nothing, and pointing the camera straight up versus straight down - all
+sky versus no sky at all - moves the row only 1.6 -> 2.0 ms. The clouds
+are the difference between those two, not the 1.57 in the table. The
+whole-frame number below is the one to trust.
+
+### The sky is a shader
+
+There is no skybox texture, no cloud mesh, and no star billboards. The
+sky is the same fullscreen triangle it always was - three vertices
+generated from `gl_VertexID`, zero bytes of vertex buffer - and
+everything in it is evaluated from the view direction in
+[`shaders/sky.frag`](shaders/sky.frag).
+
+**Clouds are a shell, not a plane.** The obvious projection for a cloud
+deck is a flat plane overhead: divide the ray's `xz` by its `y` and index
+noise with the result. It falls apart at exactly the wrong place. As the
+ray levels out, `dir.y` goes to zero, the coordinate runs to infinity,
+and the deck aliases into a shimmer right along the horizon - which is
+where a landscape shot puts most of its sky. Intersecting the ray with a
+shell instead bottoms out at a finite distance (about 11x the overhead
+scale at grazing angles), so the deck reaches the horizon and compresses
+there the way a real one does. Detail is then dropped in step with that
+compression: the noise octaves whose period has fallen below a pixel are
+faded out rather than left to sparkle, and the fbm renormalizes as they
+go so the coverage threshold does not have to move with the level of
+detail. Lighting is one extra noise sample displaced toward the sun -
+where density is falling off in the sun's direction the cloud is facing
+the light, which is a gradient, and a gradient is a normal for free.
+
+**Stars are a hash, not a list.** Space is cut into a 3D cell grid that
+the unit sphere passes through, and each cell holds at most one star at a
+hashed offset. Sampling the containing cell alone would clip any star
+that landed near a wall, and checking the 3x3x3 neighbourhood to fix that
+would cost 108 hashes per pixel; instead the offsets are squeezed into
+the middle half of the cell, so a star can never reach a boundary and one
+cell - four hashes - is always enough.
+
+**The moon shares the sun's arc.** It is the same curve evaluated half a
+turn later, so it rises as the sun sets and can never drift out of sync,
+because there is no second schedule to drift. The crescent is a second
+disc subtracted from the first, offset along the moon's own tangent by a
+real fraction of its angular radius - offset too little and it lands
+concentric, hollowing the moon into a ring instead of cutting a crescent.
+
+**What it costs: 0.15 ms.** Frame time at the standard bench pose went
+from 4.40 ms to 4.55 ms p50 (medians of six `--bench-frame 300` runs per
+build, A/B against the previous commit), so the whole sky is about 3% of
+this engine's frame and under 1% of a 60 Hz budget.
+
+**And one thing it didn't cost.** The sky is drawn *after* the terrain
+now, with the depth test left on and flipped to `LEQUAL`, so its
+far-plane triangle survives only where the world wrote nothing and the
+shader never runs on a pixel the terrain already covers.
+`--sky-overdraw` restores the old draw-first order for the A/B, and the
+honest result is that at the bench pose the two are indistinguishable -
+six interleaved pairs, every difference inside the run-to-run spread. The
+reason is visible in the shader: the expensive branches are the cloud
+deck and the starfield, both of which only run for rays pointing *up*,
+and those are exactly the rays terrain rarely covers. The ordering stays
+because it bounds the worst case for free - the guarantee does not depend
+on that branch structure staying cheap - but it is not a measured win and
+is not claimed as one.
 
 ## What's in here
 
@@ -577,7 +658,10 @@ Rendering
   downsample/upsample bloom pyramid, ACES tonemap, saturation/contrast/vignette
   grading).
 - Fresnel-blended water plane with sine-animated normals and depth fog.
-- Sky gradient + sun glow, distance fog matched to the horizon.
+- Procedural sky in one fragment shader: shell-projected fbm cloud deck
+  lit by the day/night sun, hashed starfield on a rotating celestial
+  frame, crescent moon on the sun's own arc, and distance fog matched to
+  the horizon. No textures, no geometry.
 - Per-face texture atlas with PNG override; grass and wood have distinct top
   and side textures.
 - Per-vertex ambient occlusion baked into the mesh.
@@ -603,7 +687,7 @@ Tooling
   Concurrency + logic are checked under TSan / ASan / UBSan in CI.
 - Day/night cycle with sun arc and palette ramp:
 
-  ![One full day/night cycle: sun arc, sweeping shadows, moonlit night](docs/media/daycycle.gif)
+  ![One full day/night cycle: sun arc, sweeping shadows, cloud deck going from lit to slate, stars coming out](docs/media/daycycle.gif)
 
   (`./scripts/capture_clip.sh cycle` regenerates it: fixed camera, one
   full day of time-of-day stepped per frame, seamless loop.)
