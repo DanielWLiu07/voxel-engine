@@ -1,5 +1,7 @@
 #include "render/lighting.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <cmath>
 
 namespace render {
@@ -11,16 +13,24 @@ glm::vec3 mix3(const glm::vec3& a, const glm::vec3& b, float t) {
     return a * (1.0f - t) + b * t;
 }
 
+// The arc both the sun and the moon ride. Sharing it is the whole reason
+// the moon never needs a schedule of its own: it is this curve half a
+// turn behind the sun, so it rises exactly as the sun sets.
+glm::vec3 celestial_dir(float angle) {
+    return glm::normalize(glm::vec3(
+        std::cos(angle) * 0.3f + 0.05f,
+        std::sin(angle),
+        std::cos(angle) * 0.6f));
+}
+
 }  // namespace
 
 LightingFrame compute_lighting(float time_of_day) {
     LightingFrame f;
 
     float sun_angle = (time_of_day - 0.25f) * 6.2831853f;
-    f.sun_dir = glm::normalize(glm::vec3(
-        std::cos(sun_angle) * 0.3f + 0.05f,
-        std::sin(sun_angle),
-        std::cos(sun_angle) * 0.6f));
+    f.sun_dir    = celestial_dir(sun_angle);
+    f.moon_dir   = celestial_dir(sun_angle + 3.14159265f);
     f.sun_height = f.sun_dir.y;
 
     const glm::vec3 sun_noon (1.30f, 1.20f, 1.05f);
@@ -51,6 +61,22 @@ LightingFrame compute_lighting(float time_of_day) {
         : glm::normalize(glm::vec3(f.sun_dir.x * 0.2f, 0.4f, f.sun_dir.z * 0.2f));
 
     f.shadow_strength = glm::clamp(f.sun_height * 4.0f, 0.0f, 1.0f);
+
+    // Stars come out as the sun drops through the horizon and are fully
+    // gone before it is high enough to matter. Squared so the last of them
+    // lingers into twilight instead of switching off on a straight line.
+    float sf = glm::clamp((0.10f - f.sun_height) / 0.14f, 0.0f, 1.0f);
+    f.star_fade = sf * sf;
+
+    // The night sky turns about the normal of that shared arc, which is
+    // what keeps the stars fixed relative to the moon while both sweep
+    // overhead. The shader maps a view ray back into this frame, so the
+    // rotation stored here is the inverse of the sky's own.
+    const glm::vec3 arc_normal = glm::normalize(
+        glm::cross(glm::normalize(glm::vec3(0.3f, 0.0f, 0.6f)),
+                   glm::vec3(0.0f, 1.0f, 0.0f)));
+    f.star_rot = glm::mat3(
+        glm::rotate(glm::mat4(1.0f), -sun_angle, arc_normal));
 
     return f;
 }

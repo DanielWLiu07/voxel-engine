@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <glm/mat3x3.hpp>
 
 namespace render {
 
@@ -16,6 +17,12 @@ struct LightingFrame {
     float     sun_height;       // sun_dir.y, in [-1, 1]
     float     shadow_strength;  // 0 below horizon, ramps to 1 above
     glm::vec3 light_dir;        // sun_dir, or slightly-up below horizon
+
+    // Night sky. The moon rides the sun's arc half a day behind it, so it
+    // rises as the sun sets without any second schedule to keep in sync.
+    glm::vec3 moon_dir;         // points toward the moon, normalized
+    float     star_fade;        // 0 in daylight, 1 once the sun is down
+    glm::mat3 star_rot;         // turns the fixed stars with the night
 };
 
 // Mean channel of (ambient + sun) at noon - what compute_lighting's

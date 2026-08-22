@@ -39,8 +39,13 @@ void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const LightingFrame& light,
                       uint32_t cascade_update_mask = 0xFFFFFFFFu);
 
+// depth_test: keep the depth buffer's verdict, so the sky's far-plane
+// triangle survives only where the terrain wrote nothing. Requires the
+// call to come AFTER the terrain pass. Pass false to restore the old
+// draw-first-and-let-the-world-paint-over-it order.
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
-              const FrameView& fv, const LightingFrame& light);
+              const FrameView& fv, const LightingFrame& light,
+              bool depth_test = true);
 
 // Returns the visible chunks / triangles draw stats. occlusion_cull routes
 // through the section-graph BFS (camera at fv.camera_pos); off = frustum

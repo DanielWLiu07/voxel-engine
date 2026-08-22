@@ -40,6 +40,10 @@ struct CliOptions {
     // should play in - it exists so the greedy win can be looked at in a
     // wireframe rather than only quoted as a ratio.
     bool naive_mesh = false;
+    // Draw the sky first with the depth test off, the way it was drawn
+    // before the procedural clouds landed. Kept as an A/B so the cost of
+    // shading sky under the terrain stays measurable from the repo.
+    bool sky_overdraw = false;
     // --demo-lights: scatter emissive blocks around the camera once the
     // world settles. A capture aid, like --time-of-day: block light is
     // only visible where something emits, and terrain generates none, so
