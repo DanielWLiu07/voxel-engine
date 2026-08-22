@@ -80,7 +80,8 @@ The performance section is the long one, and it is meant to be skimmed by
 heading: [the hardware-independent
 numbers](#the-numbers-that-do-not-depend-on-the-machine) first, then
 [frame cost](#frame-cost-on-an-m4), [scaling](#scaling-with-world-size),
-[memory](#where-the-gpu-memory-went), and [culling](#culling-measured).
+[memory](#where-the-gpu-memory-went), [culling](#culling-measured), and
+[the sky shader](#the-sky-is-a-shader).
 
 ## Build
 
