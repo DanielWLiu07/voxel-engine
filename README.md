@@ -2,9 +2,14 @@
 
 [![CI](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml)
 
-A desktop voxel engine I built solo over three weeks in C++20 and OpenGL 4.1
-Core, to learn graphics from scratch and get some measurable performance wins
-out of it. Numbers below are from my Apple M4.
+A desktop voxel engine in C++20 and OpenGL 4.1 Core, written solo in three
+weeks. The engine is the workload; the point is that every performance
+number below is checkable rather than claimed. The greedy mesher is fuzzed
+face-for-face against a naive reference, the occlusion culler has to render
+byte-identical PNGs or the audit fails, `--validate` reads meshes back off
+the GPU and checks each triangle against the voxel data, and CI fails the
+build if the merge ratio or the world's mesh footprint regresses in either
+direction. Numbers are from an Apple M4.
 
 ![Sunset over the biome triple point: desert ridges, forest valley, snow field](docs/media/vista_sunset.jpg)
 
