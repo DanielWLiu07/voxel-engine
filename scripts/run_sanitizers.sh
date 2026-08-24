@@ -22,11 +22,15 @@ echo "==== AddressSanitizer + UndefinedBehaviorSanitizer: full logic suite ===="
 cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVOXEL_BUILD_BENCH=OFF \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -g -O1" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" >/dev/null
-cmake --build build-asan --target voxel_tests mpmc_tests
+cmake --build build-asan --target voxel_tests mpmc_tests mesher_fuzz_tests
 export ASAN_OPTIONS="halt_on_error=1"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$SUPP"
 ./build-asan/voxel_tests
 ./build-asan/mpmc_tests
+# The differential fuzzer walks randomized meshes vertex by vertex and
+# indexes back into the chunk, so ASan here is checking the oracle's own
+# bounds as much as the mesher's.
+./build-asan/mesher_fuzz_tests
 
 echo ""
 echo "All sanitizer runs clean (TSan + ASan + UBSan)."
