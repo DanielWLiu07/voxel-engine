@@ -196,6 +196,25 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME world_unit COMMAND voxel_tests)
 
+  # Differential fuzz: greedy vs naive, decomposed to unit faces and
+  # compared as sets, over randomized fills x neighbour configurations.
+  # Own binary because it is its own oracle and worth failing on its own
+  # line; no GL, so it runs anywhere the mesher compiles.
+  add_executable(mesher_fuzz_tests
+    tests/test_mesher_equivalence.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_light.cpp
+    src/world/terrain_gen.cpp
+  )
+  target_include_directories(mesher_fuzz_tests PRIVATE src)
+  target_link_libraries(mesher_fuzz_tests PRIVATE glm::glm fastnoise glad)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(mesher_fuzz_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Wno-unused-parameter
+    )
+  endif()
+  add_test(NAME mesher_equivalence COMMAND mesher_fuzz_tests)
+
   # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
   # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
   add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)

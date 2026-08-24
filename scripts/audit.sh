@@ -47,6 +47,7 @@ grep_step() {
 }
 
 step      "unit tests"          ctest --test-dir build --output-on-failure
+step      "mesher differential fuzz" ./build/mesher_fuzz_tests
 # The ratio counts only faces a camera can reach: the chunk is meshed
 # against its four real neighbours, so faces buried against the next chunk
 # along are never emitted by either mesher. That is a smaller number than
