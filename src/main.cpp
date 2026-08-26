@@ -8,6 +8,7 @@
 #include "core/cpu_time.h"
 #include "core/frame_stats.h"
 #include "core/input.h"
+#include "core/key_bindings.h"
 #include "core/profiler.h"
 #include "core/thread_pool.h"
 #include "core/window.h"
@@ -470,13 +471,7 @@ int main(int argc, char** argv) {
     int   capture_frame = 0;
     int   capture_settle = 0;
 
-    std::printf("[input] WASD = move, Space = jump (walk) / up (fly), LCtrl = down (fly)\n");
-    std::printf("[input] LClick = break, RClick = place, 1-8 = pick block (8 = Glow, a light source), Shift = sprint\n");
-    std::printf("[input] F = toggle walk/fly, Tab = mouse capture, F2 = HUD, ESC = quit\n");
-    std::printf("[input] T = pause time, [/] = step time, V = toggle vsync\n");
-    std::printf("[input] O = toggle occlusion culling, G = toggle wireframe\n");
-    std::printf("[input] F5 = save world, F6 = load world (./saves/world1)\n");
-    std::printf("[input] F12 = screenshot (./screenshots)\n");
+    core::print_bindings();
 
     double last_time = glfwGetTime();
     double prev_frame_time = glfwGetTime();
@@ -512,29 +507,29 @@ int main(int argc, char** argv) {
         float instant_fps = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
         smoothed_fps = smoothed_fps * 0.9f + instant_fps * 0.1f;
 
-        if (input.key_down(GLFW_KEY_ESCAPE))    glfwSetWindowShouldClose(window, GLFW_TRUE);
-        if (input.key_pressed(GLFW_KEY_TAB))    input.set_cursor_captured(!input.cursor_captured());
-        if (input.key_pressed(GLFW_KEY_F2))     hud.toggle_visible();
-        if (input.key_pressed(GLFW_KEY_F12)) {
+        if (input.key_down(core::key_of(core::Bind::Quit)))    glfwSetWindowShouldClose(window, GLFW_TRUE);
+        if (input.key_pressed(core::key_of(core::Bind::Cursor)))    input.set_cursor_captured(!input.cursor_captured());
+        if (input.key_pressed(core::key_of(core::Bind::Hud)))     hud.toggle_visible();
+        if (input.key_pressed(core::key_of(core::Bind::Screenshot))) {
             std::string path = gfx::save_screenshot(fb_w, fb_h);
             if (!path.empty()) std::printf("[screenshot] %s\n", path.c_str());
         }
-        if (input.key_pressed(GLFW_KEY_T))      time_paused = !time_paused;
-        if (input.key_pressed(GLFW_KEY_O)) {
+        if (input.key_pressed(core::key_of(core::Bind::PauseTime)))      time_paused = !time_paused;
+        if (input.key_pressed(core::key_of(core::Bind::Occlusion))) {
             occlusion_cull_enabled = !occlusion_cull_enabled;
             std::printf("[world] occlusion culling %s\n",
                         occlusion_cull_enabled ? "on" : "off");
         }
-        if (input.key_pressed(GLFW_KEY_V)) {
+        if (input.key_pressed(core::key_of(core::Bind::Vsync))) {
             vsync_enabled = !vsync_enabled;
             win->set_vsync(vsync_enabled);
             std::printf("[gfx] vsync %s\n", vsync_enabled ? "on" : "off");
         }
-        if (input.key_pressed(GLFW_KEY_G)) {
+        if (input.key_pressed(core::key_of(core::Bind::Wireframe))) {
             wireframe = !wireframe;
             std::printf("[gfx] wireframe %s\n", wireframe ? "on" : "off");
         }
-        if (input.key_pressed(GLFW_KEY_F5)) {
+        if (input.key_pressed(core::key_of(core::Bind::Save))) {
             auto t0 = std::chrono::steady_clock::now();
             auto s = world::save_world(wrld, kSaveDir, terrain_seed);
             double ms = std::chrono::duration<double, std::milli>(
@@ -542,7 +537,7 @@ int main(int argc, char** argv) {
             print_io_report("save", s.chunks_written, ms,
                             s.bytes_written, s.bytes_raw, s.ok);
         }
-        if (input.key_pressed(GLFW_KEY_F6)) {
+        if (input.key_pressed(core::key_of(core::Bind::Load))) {
             auto t0 = std::chrono::steady_clock::now();
             wrld.clear_all();
             auto l = world::load_world(wrld, kSaveDir, pool, terrain_seed);
@@ -562,13 +557,13 @@ int main(int argc, char** argv) {
                 static_cast<std::int32_t>(std::floor(cam.position().x / world::kChunkSizeX)) + 1,
                 last_center.z};
         }
-        if (input.key_down(GLFW_KEY_RIGHT_BRACKET)) time_of_day += dt * 0.05f;
-        if (input.key_down(GLFW_KEY_LEFT_BRACKET))  time_of_day -= dt * 0.05f;
+        if (input.key_down(core::key_of(core::Bind::StepTimeForward))) time_of_day += dt * 0.05f;
+        if (input.key_down(core::key_of(core::Bind::StepTimeBack)))  time_of_day -= dt * 0.05f;
         if (!time_paused) time_of_day += dt * day_speed;
         time_of_day -= std::floor(time_of_day);
 
-        bool copy_perf_requested = input.key_pressed(GLFW_KEY_C);
-        if (input.key_pressed(GLFW_KEY_F)) {
+        bool copy_perf_requested = input.key_pressed(core::key_of(core::Bind::CopyPerf));
+        if (input.key_pressed(core::key_of(core::Bind::WalkFly))) {
             walk_mode = !walk_mode;
             if (walk_mode) {
                 player.set_position(cam.position()
