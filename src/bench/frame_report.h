@@ -60,4 +60,71 @@ struct PassSamples {
 
 void print_pass_breakdown(const PassSamples& p);
 
+// The --bench-frame sampling harness: the settle countdown, the per-frame
+// wall and CPU samples, the triangle total, and the optional glFinish-
+// bracketed per-pass timers.
+//
+// This was eight locals and two lambdas declared together at the top of
+// main and then used 700 lines apart. They are one mechanism - a state
+// machine that decides when a frame counts - and three of its rules were
+// only discoverable by reading every use site:
+//
+//   sampling starts only after the world has settled AND a further
+//   settle countdown, so the samples miss the streaming ramp and the
+//   post-load driver settling;
+//   the CPU clock is read every frame from the moment the world settles,
+//   including during the countdown, so the first counted sample is a
+//   frame's worth of CPU time and not the countdown's;
+//   the number of samples collected is also the orbit bench's phase,
+//   which is what holds the camera at the start pose until counting
+//   begins.
+class FrameSampler {
+public:
+    FrameSampler(int target_frames, bool pass_breakdown);
+
+    bool enabled() const { return target_frames_ > 0; }
+
+    // The world has finished streaming. Sampling and pass timing are both
+    // gated on this; set it every frame.
+    void set_settled(bool settled) { settled_ = settled; }
+
+    // Frames counted so far, which the orbit bench uses as its phase.
+    int collected() const { return static_cast<int>(wall_ms_.size()); }
+
+    // Offers one frame to the run. Returns true when the target count has
+    // been reached and the report should be printed.
+    bool record(double frame_ms, std::size_t triangles);
+
+    // glFinish-bracketed pass timing. Both no-op unless pass timing was
+    // asked for and the world has settled, so call sites stay unguarded.
+    void begin_pass();
+    void end_pass(std::vector<double>& acc);
+
+    PassSamples& passes() { return passes_; }
+    const PassSamples& passes() const { return passes_; }
+
+    core::FrameStats stats() const;
+    double triangles_sum() const { return triangles_sum_; }
+
+private:
+    // Generous (~200 ms at typical bench frame times) but cleanly clears
+    // post-load shader re-jit, driver buffer-orphan settling, and the
+    // cascade-warmup spike that was still surfacing in the radius-8
+    // center-pose tail with a 10-frame settle.
+    static constexpr int kSettleFrames = 30;
+
+    int  target_frames_ = 0;
+    bool pass_breakdown_ = false;
+    bool settled_ = false;
+    int  settle_remaining_ = kSettleFrames;
+
+    std::vector<double> wall_ms_;
+    std::vector<double> cpu_ms_;
+    double last_cpu_ms_ = 0.0;
+    double triangles_sum_ = 0.0;
+
+    PassSamples passes_;
+    double pass_t0_ = 0.0;
+};
+
 }  // namespace bench
