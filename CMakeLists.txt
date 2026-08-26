@@ -101,6 +101,7 @@ add_executable(voxel_engine
   src/core/cli_options.cpp
   src/core/frame_stats.cpp
   src/core/input.cpp
+  src/core/key_bindings.cpp
   src/core/thread_pool.cpp
   src/core/window.cpp
   src/game/player.cpp
