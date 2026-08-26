@@ -1,7 +1,12 @@
 #include "bench/frame_report.h"
 
+#include <glad/gl.h>
+
+#include <chrono>
 #include <cstdio>
 #include <sys/resource.h>
+
+#include "core/cpu_time.h"
 
 namespace bench {
 namespace {
@@ -68,6 +73,76 @@ void print_pass_breakdown(const PassSamples& p) {
                 p.shadow.size(),
                 s_sh, s_sk, s_te, s_wa, s_pf,
                 s_sh + s_sk + s_te + s_wa + s_pf);
+}
+
+}  // namespace bench
+
+namespace bench {
+namespace {
+
+// One monotonic clock, in milliseconds, for the pass brackets. Kept local
+// because nothing outside the brackets needs it.
+double mono_ms() {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+}  // namespace
+
+FrameSampler::FrameSampler(int target_frames, bool pass_breakdown)
+    : target_frames_(target_frames),
+      pass_breakdown_(pass_breakdown),
+      last_cpu_ms_(core::thread_cpu_ms()) {
+    if (target_frames_ > 0) {
+        wall_ms_.reserve(static_cast<std::size_t>(target_frames_));
+        cpu_ms_.reserve(static_cast<std::size_t>(target_frames_));
+    }
+    if (pass_breakdown_) {
+        const std::size_t n = target_frames_ > 0
+            ? static_cast<std::size_t>(target_frames_) : 1024;
+        passes_.shadow.reserve(n);
+        passes_.sky.reserve(n);
+        passes_.terrain.reserve(n);
+        passes_.water.reserve(n);
+        passes_.postfx.reserve(n);
+    }
+}
+
+bool FrameSampler::record(double frame_ms, std::size_t triangles) {
+    if (!enabled() || !settled_) return false;
+    // Read every settled frame, countdown included: charging the countdown
+    // to the first counted sample would put the streaming ramp's CPU time
+    // into a steady-state number.
+    const double cpu_now = core::thread_cpu_ms();
+    const double cpu_dt  = cpu_now - last_cpu_ms_;
+    last_cpu_ms_ = cpu_now;
+    if (settle_remaining_ > 0) {
+        --settle_remaining_;
+        return false;
+    }
+    wall_ms_.push_back(frame_ms);
+    cpu_ms_.push_back(cpu_dt);
+    triangles_sum_ += static_cast<double>(triangles);
+    return collected() >= target_frames_;
+}
+
+void FrameSampler::begin_pass() {
+    if (!pass_breakdown_ || !settled_) return;
+    // The GPU has to drain before the bracket means anything: without it
+    // these would time command submission, not execution.
+    glFinish();
+    pass_t0_ = mono_ms();
+}
+
+void FrameSampler::end_pass(std::vector<double>& acc) {
+    if (!pass_breakdown_ || !settled_) return;
+    glFinish();
+    acc.push_back(mono_ms() - pass_t0_);
+}
+
+core::FrameStats FrameSampler::stats() const {
+    return core::compute_frame_stats(wall_ms_, cpu_ms_);
 }
 
 }  // namespace bench

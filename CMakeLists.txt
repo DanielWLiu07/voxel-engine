@@ -116,6 +116,7 @@ add_executable(voxel_engine
   src/gfx/wireframe_cube.cpp
   src/render/lighting.cpp
   src/render/passes.cpp
+  src/render/shader_set.cpp
   src/ui/debug_hud.cpp
   src/world/chunk_light.cpp
   src/world/chunk_mesh.cpp

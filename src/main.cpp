@@ -23,6 +23,7 @@
 #include "gfx/wireframe_cube.h"
 #include "render/lighting.h"
 #include "render/passes.h"
+#include "render/shader_set.h"
 #include "ui/debug_hud.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
@@ -95,14 +96,6 @@ fs::path find_asset_root(const char* argv0) {
         if (p == p.root_path()) break;
     }
     return fs::current_path();
-}
-
-bool load_shader(gfx::Shader& s, const fs::path& root,
-                 const char* vert, const char* frag, const char* tag) {
-    if (s.load((root / "shaders" / vert).string(),
-               (root / "shaders" / frag).string())) return true;
-    std::fprintf(stderr, "[shader] %s load failed\n", tag);
-    return false;
 }
 
 void handle_block_interaction(core::Input& input,
@@ -295,21 +288,8 @@ int main(int argc, char** argv) {
     fs::path root = find_asset_root(argv[0]);
     std::printf("[boot] asset root = %s\n", root.string().c_str());
 
-    gfx::Shader shader, sky_shader, shadow_shader, water_shader;
-    gfx::Shader bright_shader, bloom_down_shader, bloom_up_shader, tonemap_shader;
-    gfx::Shader wireframe_shader, crosshair_shader;
-    if (!load_shader(shader,           root, "basic.vert",        "basic.frag",         "terrain")   ||
-        !load_shader(sky_shader,       root, "sky.vert",          "sky.frag",           "sky")       ||
-        !load_shader(shadow_shader,    root, "shadow_depth.vert", "shadow_depth.frag",  "shadow")    ||
-        !load_shader(water_shader,     root, "water.vert",        "water.frag",         "water")     ||
-        !load_shader(bright_shader,    root, "fullscreen.vert",   "bright_extract.frag","bright")    ||
-        !load_shader(bloom_down_shader,root, "fullscreen.vert",   "bloom_down.frag",    "bloom_down")||
-        !load_shader(bloom_up_shader,  root, "fullscreen.vert",   "bloom_up.frag",      "bloom_up")  ||
-        !load_shader(tonemap_shader,   root, "fullscreen.vert",   "tonemap.frag",       "tonemap")   ||
-        !load_shader(wireframe_shader, root, "wireframe.vert",    "wireframe.frag",     "wireframe") ||
-        !load_shader(crosshair_shader, root, "crosshair.vert",    "crosshair.frag",     "crosshair")) {
-        return EXIT_FAILURE;
-    }
+    render::ShaderSet shaders;
+    if (!shaders.load(root)) return EXIT_FAILURE;
 
     gfx::PostProcess postfx;
     if (!postfx.init(fb_w, fb_h)) {
@@ -513,65 +493,13 @@ int main(int argc, char** argv) {
     float smoothed_fps      = 0.0f;
     float smoothed_frame_ms = 0.0f;
 
-    // --bench-frame state: collected per-frame after the initial chunk load
-    // settles plus a short warmup, so the samples reflect steady-state
-    // rendering rather than the streaming ramp or first-frame GL state
-    // transitions.
-    std::vector<double> bench_samples;
-    // Main-thread CPU time per sampled frame, paired with the wall
-    // time above. The gap between them is time the render thread was
-    // not on a core, which is the machine's jitter and not the
-    // engine's (core/cpu_time.h).
-    std::vector<double> bench_cpu_samples;
-    double last_cpu_ms = core::thread_cpu_ms();
-    // Triangles summed over the same sampled frames. A moving camera (orbit
-    // bench) draws a different count each frame, so throughput has to divide
-    // total triangles by total time, not multiply the average frame time by
-    // one arbitrary frame's count.
-    double bench_tris_sum = 0.0;
-    if (bench_frames > 0) {
-        bench_samples.reserve(static_cast<std::size_t>(bench_frames));
-        bench_cpu_samples.reserve(static_cast<std::size_t>(bench_frames));
-    }
-    // 30 settle frames after initial_load_logged is generous (~200 ms at
-    // typical bench frame times) but cleanly clears post-load shader
-    // re-jit, driver buffer-orphan settling, and the cascade-warmup spike
-    // that was still surfacing in the radius-8 center-pose tail with a
-    // 10-frame settle.
-    constexpr int kBenchSettleFrames = 30;
-    int bench_settle_remaining = kBenchSettleFrames;
-
-    // --pass-breakdown state. Each per-pass accumulator captures one entry
-    // per frame after initial_load_logged becomes true. glFinish bracketing
-    // forces the GPU to drain before timing, so these reflect actual
-    // dispatch+execution wall time rather than CPU command-submission only;
-    // the trade-off is that the per-frame sync stalls inflate the frame-level
-    // avg_ms heavily (~2.7x measured at radius 12) - never quote avg_ms from
-    // this mode as frame time; use plain --bench-frame for that.
-    bench::PassSamples pass_ms;
-    if (bench_pass_breakdown) {
-        const std::size_t reserve_n = bench_frames > 0
-            ? static_cast<std::size_t>(bench_frames) : 1024;
-        pass_ms.shadow.reserve(reserve_n);
-        pass_ms.sky.reserve(reserve_n);
-        pass_ms.terrain.reserve(reserve_n);
-        pass_ms.water.reserve(reserve_n);
-        pass_ms.postfx.reserve(reserve_n);
-    }
-    std::chrono::steady_clock::time_point pass_t0{};
-    auto pass_start = [&](void) {
-        if (bench_pass_breakdown && world_settled) {
-            glFinish();
-            pass_t0 = std::chrono::steady_clock::now();
-        }
-    };
-    auto pass_end = [&](std::vector<double>& acc) {
-        if (bench_pass_breakdown && world_settled) {
-            glFinish();
-            acc.push_back(std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - pass_t0).count());
-        }
-    };
+    // --bench-frame sampling: settle countdown, per-frame wall/CPU samples,
+    // triangle total, and the optional glFinish-bracketed pass timers, all
+    // in one object (bench/frame_report.h) rather than eight locals used
+    // 700 lines apart. Note for --pass-breakdown: the per-frame glFinish
+    // stalls inflate the frame-level avg_ms heavily (~2.7x measured at
+    // radius 12), so never quote avg_ms from that mode as frame time.
+    bench::FrameSampler sampler(bench_frames, bench_pass_breakdown);
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -693,7 +621,7 @@ int main(int argc, char** argv) {
         // never pays.
         if (bench_frames > 0 && bench_orbit && world_settled) {
             const OrbitPose op = orbit_pose_at(
-                static_cast<int>(bench_samples.size()), bench_frames,
+                sampler.collected(), bench_frames,
                 orbit_center);
             cam.set_position(op.pos);
             cam.set_yaw_pitch(op.yaw, op.pitch);
@@ -921,10 +849,10 @@ int main(int argc, char** argv) {
 
         // Shadow pass writes to its own FBO; the other scene passes write
         // into the HDR FBO via begin_scene().
-        pass_start();
-        render::draw_shadow_pass(shadow_map, shadow_shader, wrld, fv, light,
+        sampler.begin_pass();
+        render::draw_shadow_pass(shadow_map, shaders.shadow, wrld, fv, light,
                                  shadow_cascade_mask);
-        pass_end(pass_ms.shadow);
+        sampler.end_pass(sampler.passes().shadow);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, block_atlas);
@@ -936,29 +864,29 @@ int main(int argc, char** argv) {
         // stars only shade the pixels the world left empty. --sky-overdraw
         // restores the old sky-first order for the A/B.
         if (sky_overdraw) {
-            pass_start();
-            render::draw_sky(sky_shader, sky_vao, fv, light, false);
-            pass_end(pass_ms.sky);
+            sampler.begin_pass();
+            render::draw_sky(shaders.sky, sky_vao, fv, light, false);
+            sampler.end_pass(sampler.passes().sky);
         }
-        pass_start();
+        sampler.begin_pass();
         // Wireframe wraps only the terrain color pass; the shadow depth pass
         // is already done and the sky, water, and post-process fullscreen
         // quad must stay filled, so bracket the draw and restore immediately.
         if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        last_stats = render::draw_terrain(shader, shadow_map, wrld, fv, light,
+        last_stats = render::draw_terrain(shaders.terrain, shadow_map, wrld, fv, light,
                                           kBlockPalette, view_frustum,
                                           occlusion_cull_enabled);
         if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        pass_end(pass_ms.terrain);
+        sampler.end_pass(sampler.passes().terrain);
         if (!sky_overdraw) {
-            pass_start();
-            render::draw_sky(sky_shader, sky_vao, fv, light, true);
-            pass_end(pass_ms.sky);
+            sampler.begin_pass();
+            render::draw_sky(shaders.sky, sky_vao, fv, light, true);
+            sampler.end_pass(sampler.passes().sky);
         }
-        pass_start();
-        render::draw_water(water_shader, water, fv, light,
+        sampler.begin_pass();
+        render::draw_water(shaders.water, water, fv, light,
                            static_cast<float>(world::kSeaLevel));
-        pass_end(pass_ms.water);
+        sampler.end_pass(sampler.passes().water);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.
@@ -974,21 +902,21 @@ int main(int argc, char** argv) {
             target = wrld.raycast(cam.position(), cam.forward(), 8.0f);
         }
         if (!capturing_image) render::draw_crosshair_and_selection(
-            wireframe_shader, selection_cube,
-            crosshair_shader, crosshair_vao,
+            shaders.wireframe, selection_cube,
+            shaders.crosshair, crosshair_vao,
             fv,
             target.hit,
             target.block_x, target.block_y, target.block_z);
 
         // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
-        pass_start();
-        postfx.resolve_to_backbuffer(bright_shader, bloom_down_shader,
-                                     bloom_up_shader, tonemap_shader,
+        sampler.begin_pass();
+        postfx.resolve_to_backbuffer(shaders.bright, shaders.bloom_down,
+                                     shaders.bloom_up, shaders.tonemap,
                                      fb_w, fb_h,
                                      /*threshold*/ 1.0f,
                                      /*intensity*/ 0.7f,
                                      /*exposure*/  1.0f);
-        pass_end(pass_ms.postfx);
+        sampler.end_pass(sampler.passes().postfx);
 
         // Scripted clip capture: save the frame just rendered (pre-HUD),
         // one PNG per step after a settle period for streaming and shadows.
@@ -1237,36 +1165,26 @@ int main(int argc, char** argv) {
         ++frame_count;
         ++frame_index;
 
-        if (bench_frames > 0 && world_settled) {
-            const double cpu_now = core::thread_cpu_ms();
-            const double cpu_dt  = cpu_now - last_cpu_ms;
-            last_cpu_ms = cpu_now;
-            if (bench_settle_remaining > 0) { --bench_settle_remaining; }
-            else {
-                bench_samples.push_back(static_cast<double>(dt) * 1000.0);
-                bench_cpu_samples.push_back(cpu_dt);
-                bench_tris_sum += static_cast<double>(last_stats.triangles_drawn);
+        sampler.set_settled(world_settled);
+        if (sampler.record(static_cast<double>(dt) * 1000.0,
+                           last_stats.triangles_drawn)) {
+            bench::print_frame_report({
+                .stream_radius   = stream_radius,
+                .pose            = bench_pose,
+                .total_chunks    = total_chunks,
+                .stats           = sampler.stats(),
+                .triangles_sum   = sampler.triangles_sum(),
+                .chunks_drawn    = last_stats.chunks_drawn,
+                .sections_drawn  = last_stats.sections_drawn,
+                .triangles_drawn = last_stats.triangles_drawn,
+                .gpu_buffers_mb  = static_cast<double>(wrld.resident_gpu_bytes())
+                                   / (1024.0 * 1024.0),
+            });
+            if (bench_pass_breakdown) {
+                bench::print_pass_breakdown(sampler.passes());
             }
-            if (static_cast<int>(bench_samples.size()) >= bench_frames) {
-                const core::FrameStats fs = core::compute_frame_stats(
-                    bench_samples, bench_cpu_samples);
-
-                bench::print_frame_report({
-                    .stream_radius   = stream_radius,
-                    .pose            = bench_pose,
-                    .total_chunks    = total_chunks,
-                    .stats           = fs,
-                    .triangles_sum   = bench_tris_sum,
-                    .chunks_drawn    = last_stats.chunks_drawn,
-                    .sections_drawn  = last_stats.sections_drawn,
-                    .triangles_drawn = last_stats.triangles_drawn,
-                    .gpu_buffers_mb  = static_cast<double>(wrld.resident_gpu_bytes())
-                                       / (1024.0 * 1024.0),
-                });
-                if (bench_pass_breakdown) bench::print_pass_breakdown(pass_ms);
-                std::fflush(stdout);
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-            }
+            std::fflush(stdout);
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
         if (now - last_time >= 1.0) {
