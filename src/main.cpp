@@ -71,11 +71,20 @@ const glm::vec3 kBlockPalette[world::kBlockPaletteSize] = {
     {1.00f, 0.86f, 0.55f},  // Glow (emissive)
 };
 
+// Which way the bytes went. This used to be inferred from the first
+// character of the verb string - `verb[0] == 's' ? "wrote" : "read"` -
+// which is correct for exactly the two words that were passed and
+// silently wrong for any third: "store" prints "wrote" by luck, "restore"
+// prints "read" by luck, "sync" prints "wrote" and means neither.
+enum class IoDirection { Save, Load };
+
 // Shared save/load console report: both directions measure and print
 // identically, so the two lines stay comparable at a glance.
-void print_io_report(const char* verb, int chunks, double ms,
+void print_io_report(IoDirection dir, int chunks, double ms,
                      std::size_t bytes_disk, std::size_t bytes_raw,
                      bool ok) {
+    const char* verb = dir == IoDirection::Save ? "save" : "load";
+    const char* past = dir == IoDirection::Save ? "wrote" : "read";
     const double ratio = bytes_disk > 0
         ? static_cast<double>(bytes_raw) / bytes_disk : 0.0;
     const double secs = ms / 1000.0;
@@ -84,11 +93,43 @@ void print_io_report(const char* verb, int chunks, double ms,
     std::printf("[%s] %s %d chunks in %.1f ms  |  "
                 "%.2f MB on disk vs %.2f MB raw  |  %.1fx ratio  |  "
                 "%.0f MB/s disk, %.0f MB/s raw  |  %s\n",
-                verb, verb[0] == 's' ? "wrote" : "read", chunks, ms,
+                verb, past, chunks, ms,
                 mb_disk, mb_raw, ratio,
                 secs > 0.0 ? mb_disk / secs : 0.0,
                 secs > 0.0 ? mb_raw  / secs : 0.0,
                 ok ? "ok" : "ERRORS");
+}
+
+// F5 / F6. Both time the operation and report through print_io_report, so
+// an interactive save and the --bench-io numbers describe the same thing.
+void save_world_to_disk(world::World& wrld, std::uint32_t seed) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto s = world::save_world(wrld, kSaveDir, seed);
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    print_io_report(IoDirection::Save, s.chunks_written, ms,
+                    s.bytes_written, s.bytes_raw, s.ok);
+}
+
+// Skipped files are a warning rather than a failure: a corrupt chunk file
+// costs that chunk, and the streaming path will regenerate it. Silently
+// loading a partial world would not be obvious from the report line,
+// which is why the count is printed separately from the ok flag.
+void load_world_from_disk(world::World& wrld, core::ThreadPool& pool,
+                          std::uint32_t seed) {
+    const auto t0 = std::chrono::steady_clock::now();
+    wrld.clear_all();
+    const auto l = world::load_world(wrld, kSaveDir, pool, seed);
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    print_io_report(IoDirection::Load, l.chunks_read, ms,
+                    l.bytes_read, l.bytes_raw,
+                    l.ok && l.files_skipped == 0);
+    if (l.files_skipped > 0) {
+        std::fprintf(stderr, "[load] WARNING: %d chunk file%s corrupt "
+                     "or unreadable, skipped\n",
+                     l.files_skipped, l.files_skipped == 1 ? "" : "s");
+    }
 }
 
 fs::path find_asset_root(const char* argv0) {
@@ -535,27 +576,10 @@ int main(int argc, char** argv) {
             std::printf("[gfx] wireframe %s\n", wireframe ? "on" : "off");
         }
         if (input.key_pressed(core::key_of(core::Bind::Save))) {
-            auto t0 = std::chrono::steady_clock::now();
-            auto s = world::save_world(wrld, kSaveDir, terrain_seed);
-            double ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - t0).count();
-            print_io_report("save", s.chunks_written, ms,
-                            s.bytes_written, s.bytes_raw, s.ok);
+            save_world_to_disk(wrld, terrain_seed);
         }
         if (input.key_pressed(core::key_of(core::Bind::Load))) {
-            auto t0 = std::chrono::steady_clock::now();
-            wrld.clear_all();
-            auto l = world::load_world(wrld, kSaveDir, pool, terrain_seed);
-            double ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - t0).count();
-            print_io_report("load", l.chunks_read, ms,
-                            l.bytes_read, l.bytes_raw,
-                            l.ok && l.files_skipped == 0);
-            if (l.files_skipped > 0) {
-                std::fprintf(stderr, "[load] WARNING: %d chunk file%s corrupt "
-                             "or unreadable, skipped\n",
-                             l.files_skipped, l.files_skipped == 1 ? "" : "s");
-            }
+            load_world_from_disk(wrld, pool, terrain_seed);
             // Reset streaming bookkeeping so the next move triggers a refill
             // around the player for anything missing on disk.
             last_center = world::ChunkCoord{
