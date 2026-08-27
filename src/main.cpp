@@ -7,6 +7,7 @@
 #include "core/cli_options.h"
 #include "core/cpu_time.h"
 #include "core/frame_stats.h"
+#include "core/capture_mode.h"
 #include "core/input.h"
 #include "core/key_bindings.h"
 #include "core/profiler.h"
@@ -245,6 +246,11 @@ int main(int argc, char** argv) {
     const int thread_override = opt.thread_override;
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
+    // The two capture questions, named once (core/capture_mode.h). Built
+    // from the same values the locals above carry; shot_after is the one
+    // that counts down, so `capture` is rebuilt where that matters.
+    core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
+                              bench_frames};
     const bool no_occlusion = opt.no_occlusion;
     const glm::vec3 pose_at = opt.pose_at;
     const float pose_at_yaw = opt.pose_at_yaw;
@@ -466,8 +472,7 @@ int main(int argc, char** argv) {
     // spike) or change the lighting between A/B captures. The orbit capture
     // pauses it too: constant light is what lets the last frame meet the
     // first for a seamless loop.
-    bool  time_paused = (bench_frames > 0 || shot_after > 0 ||
-                         orbit_frames > 0 || cycle_frames > 0);
+    bool  time_paused = capture.pins_time_of_day();
     int   capture_frame = 0;
     int   capture_settle = 0;
 
@@ -580,8 +585,8 @@ int main(int argc, char** argv) {
         }
         // Scripted capture locks the pose: live mouse/keys would steer the
         // camera mid-run and make the shot non-reproducible.
-        if (input.cursor_captured() && shot_after == 0 && orbit_frames == 0 &&
-            cycle_frames == 0) {
+        capture.shot_after = shot_after;  // counts down as the shot settles
+        if (input.cursor_captured() && !capture.scripted_camera()) {
             update_movement(input, dt, cam, player, wrld, walk_mode);
             handle_block_interaction(input, cam, player, walk_mode, wrld, place_id);
         }
@@ -799,8 +804,7 @@ int main(int argc, char** argv) {
         fv.proj       = cam.proj_matrix(aspect, 70.0f, 0.1f, kCameraFar);
         // Scripted captures freeze the water phase: shots stay diffable and
         // the orbit's last frame meets its first.
-        fv.time_seconds = (shot_after > 0 || orbit_frames > 0 ||
-                           cycle_frames > 0)
+        fv.time_seconds = capture.scripted_camera()
                               ? 100.0f
                               : static_cast<float>(now);
 
@@ -890,8 +894,7 @@ int main(int argc, char** argv) {
         // are interface, not scene, and every capture this repo commits is
         // meant to show the renderer. They were quietly appearing in the
         // middle of every documentation image.
-        const bool capturing_image = shot_after > 0 || orbit_frames > 0 ||
-                                     cycle_frames > 0 || bench_frames > 0;
+        const bool capturing_image = capture.suppresses_interface();
         world::World::RayHit target{};
         if (!capturing_image) {
             target = wrld.raycast(cam.position(), cam.forward(), 8.0f);
@@ -915,8 +918,7 @@ int main(int argc, char** argv) {
 
         // Scripted clip capture: save the frame just rendered (pre-HUD),
         // one PNG per step after a settle period for streaming and shadows.
-        const int capture_frames =
-            (orbit_frames > 0) ? orbit_frames : cycle_frames;
+        const int capture_frames = capture.image_sequence_frames();
         if (capture_frames > 0 && world_settled) {
             constexpr int kCaptureSettleFrames = 90;
             if (capture_settle < kCaptureSettleFrames) {
