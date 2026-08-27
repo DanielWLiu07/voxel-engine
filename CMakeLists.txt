@@ -205,6 +205,7 @@ if(VOXEL_BUILD_TESTS)
   add_executable(mesher_fuzz_tests
     tests/test_mesher_equivalence.cpp
     src/world/chunk_mesh.cpp
+    src/world/chunk_serialize.cpp
     src/world/chunk_light.cpp
     src/world/terrain_gen.cpp
   )
