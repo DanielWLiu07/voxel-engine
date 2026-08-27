@@ -40,6 +40,7 @@
 #include "world/block.h"
 #include "world/chunk.h"
 #include "world/chunk_mesh.h"
+#include "world/chunk_serialize.h"
 #include "world/terrain_gen.h"
 
 #include <algorithm>
@@ -442,6 +443,82 @@ void test_empty_chunk_meshes_to_nothing() {
            "and the naive mesher agrees");
 }
 
+// The chunk serializer, fuzzed on the same inputs as the mesher.
+//
+// encode_chunk_rle / decode_chunk_rle had three hand-written cases: empty,
+// one populated chunk, and a garbage buffer. That covers the shape of the
+// format and not the space of chunks that reach it, and the two are
+// different: a run-length encoder's edge cases are runs that end exactly
+// on a boundary, single-cell runs, and runs longer than one length field
+// can hold, none of which a hand-picked chunk reliably contains.
+//
+// These fills already exist for the mesher and already produce those
+// shapes - the checkerboard is every run length 1, the solid band is runs
+// that span the whole chunk, the sparse columns are long air runs broken
+// by single cells. Reusing them costs nothing and is the same argument as
+// the mesher fuzz itself: the oracle is exact equality, so a case either
+// round-trips or it does not.
+void test_rle_roundtrip_on_every_fill() {
+    char label[192];
+    for (int fill = 0; fill < kFillCount; ++fill) {
+        for (unsigned seed : {1u, 7u, 99u}) {
+            std::mt19937 rng(seed);
+            world::Chunk original;
+            fill_chunk(original, fill, rng);
+
+            // The edited bit alternates so both header states are covered
+            // on every fill: it is what stops a modified chunk being
+            // silently regenerated when the player walks back to it, so it
+            // has to survive the round trip as exactly as the blocks do.
+            const bool edited_in = (seed % 2u) == 1u;
+            const auto bytes = world::encode_chunk_rle(original, edited_in);
+            world::Chunk restored;
+            bool edited_out = !edited_in;
+            const bool decoded =
+                world::decode_chunk_rle(bytes, restored, &edited_out);
+            std::snprintf(label, sizeof(label),
+                          "fill %d seed %u decodes", fill, seed);
+            EXPECT(decoded, label);
+            if (!decoded) continue;
+
+            // Byte identity over the whole volume, not a sampled check and
+            // not solid_count(): two different chunks can share a solid
+            // count, and the encoder is allowed to reorder nothing.
+            int mismatches = 0, fx = -1, fy = -1, fz = -1;
+            for (int y = 0; y < world::kChunkSizeY; ++y) {
+                for (int z = 0; z < world::kChunkSizeZ; ++z) {
+                    for (int x = 0; x < world::kChunkSizeX; ++x) {
+                        if (original.get(x, y, z) == restored.get(x, y, z)) continue;
+                        if (mismatches == 0) { fx = x; fy = y; fz = z; }
+                        ++mismatches;
+                    }
+                }
+            }
+            std::snprintf(label, sizeof(label),
+                          "fill %d seed %u round-trips exactly "
+                          "(%d cells differ, first at %d,%d,%d)",
+                          fill, seed, mismatches, fx, fy, fz);
+            EXPECT(mismatches == 0, label);
+
+            // solid_count is derived state the setter maintains
+            // incrementally, so it can drift from the blocks even when the
+            // blocks themselves are right.
+            std::snprintf(label, sizeof(label),
+                          "fill %d seed %u restores solid_count (%d vs %d)",
+                          fill, seed, original.solid_count(),
+                          restored.solid_count());
+            EXPECT(original.solid_count() == restored.solid_count(), label);
+
+            std::snprintf(label, sizeof(label),
+                          "fill %d seed %u preserves the edited bit "
+                          "(wrote %d, read %d)",
+                          fill, seed, static_cast<int>(edited_in),
+                          static_cast<int>(edited_out));
+            EXPECT(edited_in == edited_out, label);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -450,6 +527,7 @@ int main() {
     test_greedy_matches_naive_face_for_face();
     test_greedy_actually_merges();
     test_empty_chunk_meshes_to_nothing();
+    test_rle_roundtrip_on_every_fill();
 
     std::printf("%s  %d checks, %d failures\n",
                 g_failures == 0 ? "PASS" : "FAIL", g_checks, g_failures);
