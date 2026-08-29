@@ -64,6 +64,8 @@ jobs:
           SECTION_TOTAL=$(echo "$SUMMARY"    | grep -oE 'section_total=[0-9]+\.[0-9]+'    | cut -d= -f2)
           OCCL_CAVE=$(echo "$SUMMARY"        | grep -oE 'occl_cave=[0-9]+\.[0-9]+'        | cut -d= -f2)
           WORLD_MESH=$(echo "$SUMMARY"       | grep -oE 'world_mesh_mb=[0-9]+\.[0-9]+'   | cut -d= -f2)
+          VERTEX_BYTES=$(echo "$SUMMARY"     | grep -oE 'vertex_bytes=[0-9]+'           | cut -d= -f2)
+          NAIVE_MESH=$(echo "$SUMMARY"       | grep -oE 'world_mesh_naive_mb=[0-9]+\.[0-9]+' | cut -d= -f2)
 
           echo "Measured: greedy=${GREEDY}x  chunk_tight=${CHUNK_TIGHT}x  section_nonempty=${SECTION_NONEMPTY}x  section_total=${SECTION_TOTAL}x  occl_cave=${OCCL_CAVE}x  world_mesh=${WORLD_MESH}MB"
 
@@ -103,6 +105,21 @@ jobs:
           # emitting nothing, which a ceiling alone would happily pass.
           gate_max world_mesh_mb "$WORLD_MESH"       11.5
           gate     world_mesh_mb "$WORLD_MESH"       10.0
+          # Both of these are quoted in the README's headline claims and
+          # neither was checked. The packed vertex is exactly 12 bytes by
+          # static_assert in the header, so this gate is not guarding the
+          # layout - it is guarding that --bench still REPORTS what the
+          # README says it reports, which is the half a static_assert
+          # cannot cover.
+          gate_max vertex_bytes  "$VERTEX_BYTES"      12
+          gate     vertex_bytes  "$VERTEX_BYTES"      12
+          # The naive whole-world footprint is the left-hand end of the
+          # "127 MB to 10.9 MB" span, so a drift here silently rescales the
+          # headline ratio without touching the shipped number. Bounded
+          # both sides for the same reason world_mesh_mb is: a naive
+          # baseline that collapsed would make the ratio look better.
+          gate_max world_mesh_naive_mb "$NAIVE_MESH" 132.0
+          gate     world_mesh_naive_mb "$NAIVE_MESH" 121.0
 
   sanitizers:
     name: sanitizers (TSan + ASan/UBSan)
