@@ -58,11 +58,27 @@ component rather than a claim the engine leans on.
 
 1. **Greedy meshing.** Co-planar identical block faces merge into the largest
    possible rectangles, cutting the triangle count the GPU sees. Measured
-   **18.1x** fewer quads vs naive face culling on contiguous Perlin terrain (the
-   CI-gated number), dropping to ~7.8x once caves fragment the face runs. The
-   mesher's output is asserted area-equivalent to the naive mesher, including
-   adversarial cases (checkerboard = zero legal merges; two-material slab =
-   merges must split on block id).
+   **5.33x** fewer quads vs naive face culling on contiguous Perlin terrain
+   (CI-gated at >=4.5), dropping to **2.7x** once caves fragment the face
+   runs.
+
+   Those numbers used to read 18.1x and 7.8x, and the difference is not a
+   regression. Both meshers were counting faces on chunk boundaries as if
+   the neighbouring chunk were open air, so the naive baseline was inflated
+   with geometry no camera could reach. Cross-chunk face culling removed it
+   from both sides. 5.33x survives "merged relative to what?"; 18.1x does
+   not, and it is quoted here only as history.
+
+   The mesher's output is checked against the naive one by **exact unit-face
+   set equality**, not area equivalence: every quad from both meshers is
+   decomposed back into 1x1 faces and the sets must match on cell, facing
+   and block id, with no duplicates. That distinction is load-bearing.
+   Area equivalence is one scalar, so a misplaced face and a missing face
+   cancel - and the old area-based suite passed all 247 of its checks while
+   a real boundary-ownership bug was live. Reintroducing that bug fails 99
+   of the fuzzer's checks. 180 cases: 12 fills x 5 neighbour configurations
+   x 3 seeds, including the adversarial ones (checkerboard = zero legal
+   merges; two-material slab = merges must split on block id).
 
 2. **Hierarchical culling.** Per-chunk frustum AABBs, then 32-block section
    AABBs, then a Minecraft-style occlusion BFS over a per-section
