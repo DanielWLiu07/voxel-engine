@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -215,6 +216,11 @@ public:
     RayHit raycast(const glm::vec3& origin, const glm::vec3& direction,
                    float max_distance = 8.0f) const;
 
+    // See only_chunk_ below. nullopt draws everything, which is the
+    // default and the only state --validate and the benches ever see.
+    void set_only_chunk(std::optional<ChunkCoord> c) { only_chunk_ = c; }
+    std::optional<ChunkCoord> only_chunk() const { return only_chunk_; }
+
     DrawStats draw_visible(const gfx::Frustum& frustum, const gfx::Shader& shader) const;
     DrawStats draw_visible_with(const gfx::Frustum& frustum,
         std::function<void(const glm::mat4& model)> set_model) const;
@@ -368,6 +374,18 @@ private:
     // a section draws only if some section its AABB vertically spans is in
     // the reachable mask (greedy quads bucket by their bottom Y, so a tall
     // side face can live in a lower section than the camera sees).
+    // Draw only this chunk, when set. A capture aid, not a culling stage:
+    // the greedy mesher's merged rectangles are the engine's headline
+    // claim and a wireframe of 200 drawn chunks is an unreadable thicket
+    // of edges, so the documentation shot needs one chunk in isolation.
+    //
+    // Deliberately not part of the frustum/occlusion pipeline. Those
+    // decide what the camera can see and are gated on that being correct;
+    // this one throws away geometry the camera CAN see, on purpose, which
+    // is the opposite kind of thing and must not be confusable with them
+    // in --validate or in a bench.
+    std::optional<ChunkCoord> only_chunk_;
+
     DrawStats draw_impl(const gfx::Frustum& frustum,
                         const SectionReachableMap* reachable,
                         const std::function<void(const glm::mat4&)>& set_model) const;

@@ -40,6 +40,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --sky-overdraw            draw the sky first, no depth test\n"
                 "                                         (the pre-cloud order; A/B against\n"
                 "                                          the default with --pass-breakdown)\n"
+                "  voxel_engine --only-chunk cx,cz        draw only that chunk (wireframe\n"
+                "                                         captures; pairs with --wireframe\n"
+                "                                         and --pose-at, never with --bench)\n"
                 "  voxel_engine --naive-mesh              build with the naive mesher\n"
                 "                                         (pair with --wireframe to see the\n"
                 "                                          quads greedy meshing merges)\n"
@@ -139,6 +142,23 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 return std::nullopt;
             }
             o.orbit_center = {x, look_y, z};
+            ++i;
+            continue;
+        }
+        // Draws one chunk and discards the rest. Unlike frustum and
+        // occlusion culling this throws away geometry the camera can see,
+        // deliberately, so it exists for captures only and is never
+        // combined with --validate or a bench.
+        if (arg == "--only-chunk" && i + 1 < argc) {
+            int cx = 0, cz = 0;
+            if (std::sscanf(argv[i + 1], "%d,%d", &cx, &cz) != 2) {
+                std::fprintf(stderr, "--only-chunk expects chunk_x,chunk_z\n");
+                exit_code = EXIT_FAILURE;
+                return std::nullopt;
+            }
+            o.have_only_chunk = true;
+            o.only_chunk_x = cx;
+            o.only_chunk_z = cz;
             ++i;
             continue;
         }
