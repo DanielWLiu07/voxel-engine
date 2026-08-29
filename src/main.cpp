@@ -293,6 +293,11 @@ int main(int argc, char** argv) {
     core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
                               bench_frames};
     const bool no_occlusion = opt.no_occlusion;
+    const std::optional<world::ChunkCoord> only_chunk =
+        opt.have_only_chunk
+            ? std::optional<world::ChunkCoord>(world::ChunkCoord{
+                  opt.only_chunk_x, opt.only_chunk_z})
+            : std::nullopt;
     const glm::vec3 pose_at = opt.pose_at;
     const float pose_at_yaw = opt.pose_at_yaw;
     const float pose_at_pitch = opt.pose_at_pitch;
@@ -394,6 +399,16 @@ int main(int argc, char** argv) {
         wrld.set_mesher(world::MesherKind::Naive);
         std::printf("[world] naive mesher: one quad per visible face "
                     "(rendering aid, not the shipped path)\n");
+    }
+    // Unconditional: --only-chunk is independent of which mesher is in
+    // use, and pairing it with --naive-mesh is exactly the comparison the
+    // wireframe capture wants.
+    wrld.set_only_chunk(only_chunk);
+    if (only_chunk) {
+        std::printf("[world] drawing chunk %d,%d only "
+                    "(capture aid: geometry the camera can see is being "
+                    "discarded on purpose)\n",
+                    only_chunk->x, only_chunk->z);
     }
     core::ThreadPool pool(worker_count);
 
@@ -907,8 +922,14 @@ int main(int argc, char** argv) {
             sampler.end_pass(sampler.passes().sky);
         }
         sampler.begin_pass();
-        render::draw_water(shaders.water, water, fv, light,
-                           static_cast<float>(world::kSeaLevel));
+        // --only-chunk suppresses the water plane too. It is a capture aid
+        // for looking at one chunk's meshed geometry, and an ocean drawn
+        // across the whole frame is the thing that made the old wireframe
+        // shot unreadable in the first place. Water is not mesher output.
+        if (!only_chunk) {
+            render::draw_water(shaders.water, water, fv, light,
+                               static_cast<float>(world::kSeaLevel));
+        }
         sampler.end_pass(sampler.passes().water);
 
         // Same ray the place/break logic uses, so the outline matches a

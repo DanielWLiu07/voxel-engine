@@ -939,6 +939,7 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
               });
     for (const ChunkSlot* slot_ptr : draw_order_) {
         const ChunkSlot& slot = *slot_ptr;
+        if (only_chunk_ && !(slot.coord == *only_chunk_)) continue;
         if (!slot.any_section_has_mesh) continue;
         if (!frustum.intersects_aabb(slot.chunk_aabb)) continue;
 

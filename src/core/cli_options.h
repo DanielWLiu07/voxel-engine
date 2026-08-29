@@ -26,6 +26,12 @@ struct CliOptions {
     bool bench_orbit = false;
     std::string bench_pose = "center";
     glm::vec3 orbit_center{-10.0f, 45.0f, -10.0f};
+    // --only-chunk x,z: draw one chunk and nothing else. A capture aid for
+    // the wireframe shot, where 200 drawn chunks of merged rectangles is
+    // an unreadable thicket. Absent by default.
+    bool have_only_chunk = false;
+    int  only_chunk_x = 0;
+    int  only_chunk_z = 0;
 
     std::uint32_t terrain_seed = 1337;
     int stream_radius = 12;  // overwritten with the caller's default
