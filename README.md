@@ -652,8 +652,10 @@ is not claimed as one.
 ## What's in here
 
 Rendering
-- Greedy mesher that merges co-planar identical faces per chunk. Area-correct
-  against the naive face-culling output. Foliage runs through the same pass,
+- Greedy mesher that merges co-planar identical faces per chunk. Checked
+  against the naive face-culling output by exact unit-face set equality,
+  not by total area: area is one scalar, so a misplaced face and a missing
+  one cancel. Foliage runs through the same pass,
   so dense tree canopies merge into slab-like planes, an intentional
   consequence of optimizing for triangle count over leaf silhouette.
 - View-frustum culling against per-chunk AABBs.
@@ -748,7 +750,7 @@ Tracy.
 | F | Toggle walk / fly |
 | Left click | Break block |
 | Right click | Place block |
-| 1-7 | Pick block to place (Stone, Dirt, Grass, Sand, Wood, Leaves, Snow) |
+| 1-8 | Pick block to place (Stone, Dirt, Grass, Sand, Wood, Leaves, Snow, Glow) |
 | Tab | Toggle mouse capture |
 | F2 | Toggle HUD |
 | F5 / F6 | Save / load world (`./saves/world1/`) |

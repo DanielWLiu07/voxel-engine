@@ -44,6 +44,12 @@ jobs:
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
 
+      - name: README flag check
+        # Prose is the only part of the project with no failure mode, so it
+        # is the part that quietly stops being true. This checks the slice
+        # a machine can: every --flag the README documents exists.
+        run: ./scripts/check_readme_flags.py ./build/voxel_engine
+
       - name: Run benchmark and validate ratios
         run: |
           set -euo pipefail
