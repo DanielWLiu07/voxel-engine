@@ -75,6 +75,21 @@ void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
     glDepthMask(GL_TRUE);
 }
 
+world::DrawStats draw_terrain_wireframe(const gfx::Shader& wire_shader,
+                                        const world::World& wrld,
+                                        const FrameView& fv,
+                                        const gfx::Frustum& frustum,
+                                        const glm::vec3& color) {
+    ZoneScopedN("terrain_wireframe_pass");
+    wire_shader.use();
+    wire_shader.set_mat4("u_view", fv.view);
+    wire_shader.set_mat4("u_proj", fv.proj);
+    wire_shader.set_vec3("u_color", color);
+    return wrld.draw_visible_with(frustum, [&](const glm::mat4& m) {
+        wire_shader.set_mat4("u_model", m);
+    });
+}
+
 world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
                               gfx::CascadedShadowMap& shadow_map,
                               const world::World& wrld,

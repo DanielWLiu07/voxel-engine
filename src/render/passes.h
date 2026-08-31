@@ -32,6 +32,25 @@ struct FrameView {
 // cascade_update_mask: bit c set => redraw cascade c's depth this frame.
 // Bits cleared keep the previous frame's depth-texture layer contents, which
 // remain valid as long as the caller also reuses the matching light_vp[c].
+// Terrain as flat constant-colour lines, for looking at what the greedy
+// mesher produced.
+//
+// Not draw_terrain with glPolygonMode(GL_LINE), which is what this
+// replaced. That runs the lines through the terrain shader, so every edge
+// is lit, atlas-sampled and - the part that ruins it - distance-fogged.
+// A wireframe fades into the fog exactly like the surface it came from,
+// which is why every capture attempt washed out.
+//
+// Occlusion culling is deliberately not applied. The question a wireframe
+// answers is "what did the mesher emit", not "what did the culler keep",
+// and hiding merged rectangles behind a visibility test would answer the
+// wrong one.
+world::DrawStats draw_terrain_wireframe(const gfx::Shader& wire_shader,
+                                        const world::World& wrld,
+                                        const FrameView& fv,
+                                        const gfx::Frustum& frustum,
+                                        const glm::vec3& color);
+
 void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,
                       const world::World& wrld,
