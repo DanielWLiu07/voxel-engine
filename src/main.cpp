@@ -910,11 +910,23 @@ int main(int argc, char** argv) {
         // Wireframe wraps only the terrain color pass; the shadow depth pass
         // is already done and the sky, water, and post-process fullscreen
         // quad must stay filled, so bracket the draw and restore immediately.
-        if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        last_stats = render::draw_terrain(shaders.terrain, shadow_map, wrld, fv, light,
-                                          kBlockPalette, view_frustum,
-                                          occlusion_cull_enabled);
-        if (wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        if (wireframe) {
+            // Dark constant-colour lines on the flat wireframe shader, not
+            // the terrain shader in line mode. The terrain shader fogs its
+            // output, so wireframe edges used to fade into the horizon at
+            // exactly the distance you need to stand back to fit a chunk
+            // in frame - which made the merged rectangles unphotographable.
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            last_stats = render::draw_terrain_wireframe(
+                shaders.wireframe, wrld, fv, view_frustum,
+                glm::vec3(0.06f, 0.07f, 0.09f));
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        } else {
+            last_stats = render::draw_terrain(shaders.terrain, shadow_map, wrld,
+                                              fv, light, kBlockPalette,
+                                              view_frustum,
+                                              occlusion_cull_enabled);
+        }
         sampler.end_pass(sampler.passes().terrain);
         if (!sky_overdraw) {
             sampler.begin_pass();

@@ -441,11 +441,29 @@ enforces (>= 15x). Caves break face runs into smaller mergeable rectangles,
 so the same algorithm produces fewer quads but a lower ratio. Both numbers
 come out of `./build/voxel_engine --bench`.
 
-![Wireframe terrain: greedy meshing merges coplanar faces into large quads](docs/media/greedy_wireframe.jpg)
-
 The wireframe view (`--wireframe`, or `G` at runtime) shows the merge
-directly: flat spans render as a few large quads rather than one per block
-face. This shot is `--wireframe --pose ground --screenshot-after 40`.
+directly. One chunk, one camera, one flag different:
+
+| greedy | naive |
+| :---: | :---: |
+| ![One chunk meshed greedily: flat spans are single large rectangles](docs/media/mesher_greedy.jpg) | ![The same chunk meshed naively: one quad per visible block face](docs/media/mesher_naive.jpg) |
+
+Left is the shipped mesher, right is `--naive-mesh`. Same seed, same
+chunk, same pose. The naive side is a grid because it emits one quad per
+visible block face; the greedy side is sparse because every flat run
+became one rectangle. That difference is the 5.3x, drawn.
+
+```
+./build/voxel_engine --only-chunk 6,6 --wireframe \
+    --pose-at 124,80,124,-135,-38 --screenshot-after 45 \
+    --shot-file mesher_greedy.jpg
+# add --naive-mesh for the right-hand image
+```
+
+`--only-chunk` is what makes this readable. A wireframe of the whole
+streamed world is 200 chunks of overlapping edges and shows nothing;
+isolating one chunk is the only way the merge is visible. It suppresses
+the water plane for the same reason.
 
 ### Culling, measured
 
