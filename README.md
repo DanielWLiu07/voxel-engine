@@ -126,7 +126,13 @@ they reproduce exactly on any GPU:
 | Index data per chunk, one shared quad EBO | **zero** |
 | Chunk serialization, RLE vs raw | 39.06 MB to 0.67 MB, **58x** |
 | Sub-chunks drawn vs loaded, underground | up to **70x fewer** |
-| Chunk pipeline scaling on 9 workers | **8.4x** parallel efficiency |
+
+Parallel efficiency used to be a row in that table and is not one any
+more. It belongs with the frame rates below: it is a property of nine
+workers on one machine's scheduler, not of the engine. Four runs today
+measured 6.3x, 6.8x, 6.9x and 8.5x purely from background load, which is
+not what "reproduces exactly on any GPU" means. Every remaining row above
+is a ratio of counts or bytes that comes out identical anywhere.
 
 ### Frame cost, on an M4
 
@@ -148,8 +154,11 @@ costs 6% of the frame rate, which is the scaling claim the sweep table
 below exists to support. Radius 16 needs the full 300-frame window to
 reach steady state; a shorter bench reports a lower RSS because the world
 has not finished streaming in.
-Chunk pipeline hits **2200 chunks/sec at 8.4x parallel efficiency** on 9
-workers. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
+Chunk pipeline hits **2200 chunks/sec** on 9 workers, at a parallel
+efficiency that ranges roughly **6.3x to 8.5x** run to run - the spread is
+scheduler placement across the M4's P/E cores and thermal state, not
+anything the engine varies. Quote the range or quote a median from a
+sweep; a single figure here is a snapshot of one machine's mood. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
 frustum + occlusion cull), 167k triangles rendered, post-process the largest
 single pass. Inside a cave, occlusion culling alone cuts drawn sections
 **70.8x** (283 -> 4).
@@ -533,8 +542,8 @@ contention between cores doing noise fill + meshing), and every GL upload
 serializes onto the main thread (the fixed fraction Amdahl's law charges
 against). Run-to-run swing widens with worker count (scheduler placement
 across the M4's P/E cores, thermal state); hence medians. The
-worker-busy ratio (worker CPU ms over wall ms) is the number the 8.4x
-headline reports, and both lines print in every sweep row.
+worker-busy ratio (worker CPU ms over wall ms) is the number the
+efficiency range reports, and both lines print in every sweep row.
 
 ### Pose sensitivity
 
