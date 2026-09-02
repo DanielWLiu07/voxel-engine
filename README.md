@@ -258,10 +258,18 @@ until the neighbour lands.
 Workers get a 16 KB copy of the four boundary layers rather than pointers
 into the chunk map, which is what lets meshing stay off the main thread
 while the main thread remains free to edit or evict anything it likes. A
-cold radius-12 load then spends **295 ms** re-meshing the chunks that were
-built before their neighbours existed; that is reported separately from
-the load figure rather than folded into it, because the load figure is
-what the chunks/sec number measures.
+cold radius-12 load then spends **630 to 670 ms** re-meshing the chunks
+that were built before their neighbours existed; that is reported
+separately from the load figure rather than folded into it, because the
+load figure is what the chunks/sec number measures.
+
+That figure read 295 ms when this section was written, and the difference
+is attributable rather than mysterious: the settle was measured when
+cross-chunk meshing landed, block light arrived three PRs later, and the
+re-mesh path relights a chunk before remeshing it. So a re-mesh now costs
+a flood fill it did not before. Four runs today measure 631, 634, 638 and
+669 ms - a tight spread, which is what says this is a real change in the
+work rather than machine noise.
 
 Two defects fell out of wiring this up, both caught by checks that already
 existed:
