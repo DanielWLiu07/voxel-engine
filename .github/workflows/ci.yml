@@ -44,6 +44,14 @@ jobs:
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
 
+      - name: Hardware-independence check
+        # The README table claims these figures reproduce exactly on any
+        # GPU. This is that claim, enforced: three --bench runs must emit a
+        # byte-identical BENCH_SUMMARY. A tolerance would hide the case
+        # this exists for, which is a machine-dependent figure being added
+        # to a table that promises the opposite.
+        run: ./scripts/check_invariance.py 3 ./build/voxel_engine
+
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
         # is the part that quietly stops being true. This checks the slice

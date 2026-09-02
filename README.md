@@ -127,6 +127,13 @@ they reproduce exactly on any GPU:
 | Chunk serialization, RLE vs raw | 39.06 MB to 0.67 MB, **58x** |
 | Sub-chunks drawn vs loaded, underground | up to **70x fewer** |
 
+Every figure in that table is checked, not asserted:
+`scripts/check_invariance.py` runs `--bench` three times in CI and requires
+a byte-identical `BENCH_SUMMARY`. Byte-identical rather than
+within-tolerance, because a tolerance would hide the case the check exists
+for - a machine-dependent figure quietly added to a table that promises
+the opposite.
+
 Parallel efficiency used to be a row in that table and is not one any
 more. It belongs with the frame rates below: it is a property of nine
 workers on one machine's scheduler, not of the engine. Four runs today
