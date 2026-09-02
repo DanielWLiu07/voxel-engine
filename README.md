@@ -129,7 +129,17 @@ they reproduce exactly on any GPU:
 
 Every figure in that table is checked, not asserted:
 `scripts/check_invariance.py` runs `--bench` three times in CI and requires
-a byte-identical `BENCH_SUMMARY`. Byte-identical rather than
+a byte-identical `BENCH_SUMMARY`. The check runs on both CI platforms, and
+the x86-64 Ubuntu runner emits the same bytes this arm64 M4 does:
+
+```
+BENCH_SUMMARY greedy=5.33 chunk_tight=2.93 section_nonempty=3.01
+section_total=12.29 occl_surface=1.03 occl_cave=70.75 vertex_bytes=12
+world_mesh_mb=10.91 world_mesh_prepack_mb=16.32 world_mesh_naive_mb=126.70
+```
+
+So "reproduces exactly on any GPU" is now a demonstrated claim across two
+architectures rather than an argument about what a ratio ought to do. Byte-identical rather than
 within-tolerance, because a tolerance would hide the case the check exists
 for - a machine-dependent figure quietly added to a table that promises
 the opposite.
