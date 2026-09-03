@@ -1016,13 +1016,6 @@ int main(int argc, char** argv) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
-        // Headless --validate: once the world is resident, read every mesh
-        // back off the GPU, check each triangle against the voxel data, and
-        // exit nonzero on offenders. Composes with --load to verify a saved
-        // world and with --seed to spot-check other maps.
-        // Wait for a settled world: chunks meshed before their neighbours
-        // arrived are still owed a re-mesh, and validating (or measuring)
-        // mid-convergence reports the pre-culling footprint.
         // Emissive blocks for a capture. Placed once the world has
         // settled, in a fixed ring around the camera so the shot is
         // deterministic, and only into air so nothing is destroyed.
@@ -1047,6 +1040,14 @@ int main(int argc, char** argv) {
             std::printf("[demo] placed %d light sources around the camera\n", placed);
         }
 
+        // Headless --validate: once the world is resident, read every mesh
+        // back off the GPU, check each triangle against the voxel data, and
+        // exit nonzero on offenders. Composes with --load to verify a saved
+        // world and with --seed to spot-check other maps.
+        //
+        // Gated on world_settled, not just on residency: chunks meshed
+        // before their neighbours arrived are still owed a re-mesh, and
+        // validating mid-convergence reports the pre-culling footprint.
         if (validate_mode && world_settled) {
             const int bad = wrld.debug_validate_gpu_meshes();
             // The engine's own resident mesh footprint, printed here
