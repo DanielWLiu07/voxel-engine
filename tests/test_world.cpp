@@ -15,6 +15,7 @@
 #include "world/chunk_serialize.h"
 #include "world/section_visibility.h"
 #include "world/world_io.h"
+#include "render/lighting.h"
 #include "world/world.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -1245,6 +1246,90 @@ static void test_light_reaches_the_vertices() {
 }
 
 
+
+// ----- day/night lighting -------------------------------------------------
+//
+// compute_lighting is 84 lines of pure math behind one entry point and had
+// no coverage. What is worth pinning is not the colour constants - those
+// are taste and will be tweaked - but the RELATIONSHIPS between outputs,
+// which are load-bearing and which a refactor can break silently.
+
+void test_sun_peaks_at_noon_and_bottoms_at_midnight() {
+    const float noon = render::compute_lighting(0.5f).sun_height;
+    const float midnight = render::compute_lighting(0.0f).sun_height;
+    const float sunrise = render::compute_lighting(0.25f).sun_height;
+    const float sunset = render::compute_lighting(0.75f).sun_height;
+    EXPECT(noon > 0.9f, "sun is near its zenith at noon");
+    EXPECT(midnight < -0.9f, "sun is near its nadir at midnight");
+    EXPECT(std::fabs(sunrise) < 0.01f, "sun sits on the horizon at sunrise");
+    EXPECT(std::fabs(sunset) < 0.01f, "sun sits on the horizon at sunset");
+}
+
+// The moon rides the sun's own arc half a turn behind, which is what lets
+// it rise exactly as the sun sets with no second schedule to keep in sync.
+// If someone gives the moon its own curve, this is the test that notices.
+void test_moon_rides_the_suns_arc_half_a_turn_behind() {
+    for (float t = 0.0f; t < 1.0f; t += 0.05f) {
+        const render::LightingFrame f = render::compute_lighting(t);
+        // Half a turn behind on a shared arc means near-antipodal, but not
+        // exactly: celestial_dir carries a constant +0.05 x offset that
+        // does not flip with the angle. Tolerate that, reject a moon that
+        // has wandered onto a different path.
+        const float d = glm::dot(f.sun_dir, f.moon_dir);
+        EXPECT(d < -0.95f, "moon is opposite the sun on the shared arc");
+    }
+    // Sunset: the sun is going down, the moon is coming up.
+    const float before = render::compute_lighting(0.74f).moon_dir.y;
+    const float after = render::compute_lighting(0.76f).moon_dir.y;
+    EXPECT(after > before, "the moon is rising as the sun sets");
+    EXPECT(render::compute_lighting(0.74f).sun_dir.y >
+           render::compute_lighting(0.76f).sun_dir.y,
+           "and the sun is setting while it does");
+}
+
+// A day is a loop. Midnight reached by counting up must equal midnight
+// reached by wrapping around, or the sky pops once per cycle - which is
+// exactly the artefact a long capture would show and a short one would not.
+void test_the_day_wraps_without_a_seam() {
+    const render::LightingFrame a = render::compute_lighting(0.0f);
+    const render::LightingFrame b = render::compute_lighting(0.9999f);
+    EXPECT(glm::distance(a.sun_dir, b.sun_dir) < 0.01f,
+           "sun direction is continuous across midnight");
+    EXPECT(glm::distance(a.moon_dir, b.moon_dir) < 0.01f,
+           "moon direction is continuous across midnight");
+    EXPECT(glm::distance(a.sky_horizon, b.sky_horizon) < 0.01f,
+           "horizon colour is continuous across midnight");
+    EXPECT(std::fabs(a.star_fade - b.star_fade) < 0.01f,
+           "star fade is continuous across midnight");
+}
+
+void test_stars_and_shadows_track_the_sun() {
+    EXPECT(render::compute_lighting(0.5f).star_fade == 0.0f,
+           "no stars at noon");
+    EXPECT(render::compute_lighting(0.0f).star_fade > 0.99f,
+           "full stars at midnight");
+    EXPECT(render::compute_lighting(0.5f).shadow_strength > 0.99f,
+           "shadows at full strength at noon");
+    EXPECT(render::compute_lighting(0.0f).shadow_strength == 0.0f,
+           "no shadows with the sun below the horizon");
+    // Below the horizon the scene is still lit from slightly above, or the
+    // ground would be lit from underneath.
+    EXPECT(render::compute_lighting(0.0f).light_dir.y > 0.0f,
+           "light still comes from above at night");
+}
+
+void test_every_direction_is_normalized() {
+    for (float t = 0.0f; t < 1.0f; t += 0.037f) {
+        const render::LightingFrame f = render::compute_lighting(t);
+        EXPECT(std::fabs(glm::length(f.sun_dir) - 1.0f) < 1e-4f,
+               "sun_dir is unit length");
+        EXPECT(std::fabs(glm::length(f.moon_dir) - 1.0f) < 1e-4f,
+               "moon_dir is unit length");
+        EXPECT(std::fabs(glm::length(f.light_dir) - 1.0f) < 1e-4f,
+               "light_dir is unit length");
+    }
+}
+
 int main() {
     std::printf("voxel_tests: running...\n");
     test_aabb_empty_chunk();
@@ -1295,6 +1380,11 @@ int main() {
     test_light_crosses_a_chunk_boundary();
     test_light_grid_is_nibble_packed();
     test_light_reaches_the_vertices();
+    test_sun_peaks_at_noon_and_bottoms_at_midnight();
+    test_moon_rides_the_suns_arc_half_a_turn_behind();
+    test_the_day_wraps_without_a_seam();
+    test_stars_and_shadows_track_the_sun();
+    test_every_direction_is_normalized();
 
     std::printf("\nvoxel_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");
