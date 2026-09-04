@@ -178,6 +178,7 @@ if(VOXEL_BUILD_TESTS)
     src/world/world_io.cpp
     src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
+    src/render/lighting.cpp
     src/gfx/frustum.cpp
     src/gfx/mesh.cpp
     src/gfx/shader.cpp
@@ -208,6 +209,7 @@ if(VOXEL_BUILD_TESTS)
     src/world/chunk_serialize.cpp
     src/world/chunk_light.cpp
     src/world/terrain_gen.cpp
+    src/render/lighting.cpp
   )
   target_include_directories(mesher_fuzz_tests PRIVATE src)
   target_link_libraries(mesher_fuzz_tests PRIVATE glm::glm fastnoise glad)
