@@ -1,10 +1,42 @@
 #include "core/cli_options.h"
 
 #include <cstdio>
+#include <cerrno>
 #include <cstdlib>
 #include <string_view>
 
 namespace core {
+
+namespace {
+
+// A count flag's argument: a whole number in [lo, hi], or a rejection.
+//
+// This exists because five flags used std::atoi, which reports failure as
+// 0 and cannot distinguish it from a literal "0". `--capture-orbit banana`
+// therefore parsed to zero frames, which every downstream `> 0` guard
+// reads as "not a capture" - so the engine silently opened the interactive
+// window instead of capturing, and a scripted capture hung on a GUI. The
+// two flags that already validated (--radius, --threads) used
+// strtol-and-range-check; this is that pattern, named once.
+//
+// Rejects trailing garbage too: strtol alone accepts "6O" as 6, which is
+// exactly the typo most likely to be made.
+bool parse_count(const char* text, long lo, long hi, const char* flag,
+                 int* out, int& exit_code) {
+    char* end = nullptr;
+    errno = 0;
+    const long v = std::strtol(text, &end, 10);
+    if (end == text || *end != '\0' || errno == ERANGE || v < lo || v > hi) {
+        std::fprintf(stderr, "%s expects a whole number between %ld and %ld "
+                     "(got \"%s\")\n", flag, lo, hi, text);
+        exit_code = EXIT_FAILURE;
+        return false;
+    }
+    *out = static_cast<int>(v);
+    return true;
+}
+
+}  // namespace
 
 std::optional<CliOptions> parse_cli(int argc, char** argv,
                                     int default_radius, int& exit_code) {
@@ -69,7 +101,10 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             return o;
         }
         if (arg == "--bench-frame" && i + 1 < argc) {
-            o.bench_frames = std::atoi(argv[i + 1]);
+            if (!parse_count(argv[i + 1], 1, 1000000, "--bench-frame",
+                             &o.bench_frames, exit_code)) {
+                return std::nullopt;
+            }
             ++i;
         }
         if (arg == "--pass-breakdown") o.bench_pass_breakdown = true;
@@ -94,7 +129,10 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             ++i;
         }
         if (arg == "--screenshot-after" && i + 1 < argc) {
-            o.shot_after = std::atoi(argv[i + 1]);
+            if (!parse_count(argv[i + 1], 1, 100000, "--screenshot-after",
+                             &o.shot_after, exit_code)) {
+                return std::nullopt;
+            }
             ++i;
         }
         if (arg == "--shot-file" && i + 1 < argc) {
@@ -111,7 +149,10 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         }
         if (arg == "--wireframe") o.start_wireframe = true;
         if (arg == "--bench-edit" && i + 1 < argc) {
-            o.bench_edit = std::atoi(argv[i + 1]);
+            if (!parse_count(argv[i + 1], 1, 1000000, "--bench-edit",
+                             &o.bench_edit, exit_code)) {
+                return std::nullopt;
+            }
             ++i;
         }
         if (arg == "--validate") o.validate_mode = true;
@@ -124,11 +165,17 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             ++i;
         }
         if (arg == "--capture-orbit" && i + 1 < argc) {
-            o.orbit_frames = std::atoi(argv[i + 1]);
+            if (!parse_count(argv[i + 1], 1, 100000, "--capture-orbit",
+                             &o.orbit_frames, exit_code)) {
+                return std::nullopt;
+            }
             ++i;
         }
         if (arg == "--capture-cycle" && i + 1 < argc) {
-            o.cycle_frames = std::atoi(argv[i + 1]);
+            if (!parse_count(argv[i + 1], 1, 100000, "--capture-cycle",
+                             &o.cycle_frames, exit_code)) {
+                return std::nullopt;
+            }
             ++i;
         }
         if (arg == "--no-occlusion") o.no_occlusion = true;
