@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <random>
 #include <vector>
@@ -648,6 +649,216 @@ void test_visibility_wall_blocks_x_only() {
            "wall keeps -Z/+Z");
     EXPECT(world::faces_connected(vis[0], world::kFaceNegY, world::kFacePosY),
            "wall keeps -Y/+Y");
+}
+
+// A second, independent answer to the same question: which pairs of a
+// section's six faces are joined by air. compute_section_visibility walks
+// components with an explicit DFS stack and accumulates faces as it pops;
+// this unions cells pairwise and only looks at faces afterwards. Different
+// traversal, different order, same claim - which is the point, because a
+// reimplementation that shared the original's structure would share its
+// mistakes.
+world::SectionVisArray flood_fill_oracle(const world::Chunk& chunk) {
+    constexpr int kW = world::kChunkSizeX;
+    constexpr int kD = world::kChunkSizeZ;
+    constexpr int kH = world::kSectionHeight;
+    constexpr int kCells = kW * kH * kD;
+    auto idx = [](int x, int ly, int z) { return (ly * kD + z) * kW + x; };
+
+    world::SectionVisArray out{};
+    std::vector<int> parent(kCells);
+    for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+        const int y0 = sy * kH;
+        for (int i = 0; i < kCells; ++i) parent[i] = i;
+
+        std::function<int(int)> find = [&](int a) {
+            while (parent[a] != a) { parent[a] = parent[parent[a]]; a = parent[a]; }
+            return a;
+        };
+        auto join = [&](int a, int b) {
+            const int ra = find(a), rb = find(b);
+            if (ra != rb) parent[ra] = rb;
+        };
+        auto air = [&](int x, int ly, int z) {
+            return !world::is_solid(chunk.get(x, y0 + ly, z));
+        };
+
+        for (int ly = 0; ly < kH; ++ly)
+            for (int z = 0; z < kD; ++z)
+                for (int x = 0; x < kW; ++x) {
+                    if (!air(x, ly, z)) continue;
+                    if (x + 1 < kW && air(x + 1, ly, z)) join(idx(x, ly, z), idx(x + 1, ly, z));
+                    if (ly + 1 < kH && air(x, ly + 1, z)) join(idx(x, ly, z), idx(x, ly + 1, z));
+                    if (z + 1 < kD && air(x, ly, z + 1)) join(idx(x, ly, z), idx(x, ly, z + 1));
+                }
+
+        // Faces each component touches, then the pairs within each.
+        std::vector<std::uint8_t> touched(kCells, 0);
+        for (int ly = 0; ly < kH; ++ly)
+            for (int z = 0; z < kD; ++z)
+                for (int x = 0; x < kW; ++x) {
+                    if (!air(x, ly, z)) continue;
+                    std::uint8_t m = 0;
+                    if (x == 0)      m |= 1u << world::kFaceNegX;
+                    if (x == kW - 1) m |= 1u << world::kFacePosX;
+                    if (ly == 0)     m |= 1u << world::kFaceNegY;
+                    if (ly == kH - 1) m |= 1u << world::kFacePosY;
+                    if (z == 0)      m |= 1u << world::kFaceNegZ;
+                    if (z == kD - 1) m |= 1u << world::kFacePosZ;
+                    touched[find(idx(x, ly, z))] |= m;
+                }
+
+        world::SectionVisMask mask = 0;
+        for (int i = 0; i < kCells; ++i) {
+            if (find(i) != i) continue;
+            const std::uint8_t faces = touched[i];
+            for (int a = 0; a < 6; ++a) {
+                if (!((faces >> a) & 1)) continue;
+                for (int b = a + 1; b < 6; ++b) {
+                    if ((faces >> b) & 1) {
+                        mask |= world::SectionVisMask(1) << world::face_pair_bit(a, b);
+                    }
+                }
+            }
+        }
+        out[sy] = mask;
+    }
+    return out;
+}
+
+// Randomized fills covering the shapes the occlusion culler actually meets.
+//
+// Two of these are here because fault injection said so. The worm carves a
+// random walk through solid rock, which is the only style that reliably
+// makes a component whose lowest cell cannot reach the rest by going up -
+// without one, deleting the downward step from the flood fill changed no
+// mask in 25 trials. The sparse style leaves a handful of blocks in an
+// otherwise empty chunk, which is the only input that can tell
+// `chunk.empty()` apart from a fast path that triggers too eagerly.
+void fill_for_visibility(world::Chunk& c, std::mt19937& rng, int style) {
+    switch (style % 7) {
+        case 0: {  // scattered rock: many small components
+            std::uniform_int_distribution<int> coin(0, 3);
+            for (int y = 0; y < world::kChunkSizeY; ++y)
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        if (coin(rng) == 0) c.set(x, y, z, world::BlockId::Stone);
+            break;
+        }
+        case 1: {  // horizontal slabs: -Y/+Y cut, sides open
+            std::uniform_int_distribution<int> gap(2, 9);
+            for (int y = 0; y < world::kChunkSizeY; y += gap(rng))
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        c.set(x, y, z, world::BlockId::Stone);
+            break;
+        }
+        case 2: {  // solid with a few vertical shafts
+            for (int y = 0; y < world::kChunkSizeY; ++y)
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        c.set(x, y, z, world::BlockId::Stone);
+            std::uniform_int_distribution<int> pos(0, world::kChunkSizeX - 1);
+            for (int shaft = 0; shaft < 4; ++shaft) {
+                const int sx = pos(rng), sz = pos(rng);
+                for (int y = 0; y < world::kChunkSizeY; ++y)
+                    c.set(sx, y, sz, world::BlockId::Air);
+            }
+            break;
+        }
+        case 3: {  // real terrain, caves included
+            static world::TerrainGen terrain(1337);
+            std::uniform_int_distribution<int> coord(-40, 40);
+            terrain.fill_chunk(coord(rng), coord(rng), c);
+            break;
+        }
+        case 4: {  // worms: random walks bored through solid rock
+            for (int y = 0; y < world::kChunkSizeY; ++y)
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        c.set(x, y, z, world::BlockId::Stone);
+            std::uniform_int_distribution<int> px(0, world::kChunkSizeX - 1);
+            std::uniform_int_distribution<int> py(0, world::kChunkSizeY - 1);
+            std::uniform_int_distribution<int> step(0, 5);
+            static constexpr int kOff[6][3] = {
+                {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+            for (int worm = 0; worm < 6; ++worm) {
+                int x = px(rng), y = py(rng), z = px(rng);
+                for (int i = 0; i < 900; ++i) {
+                    c.set(x, y, z, world::BlockId::Air);
+                    const auto& o = kOff[step(rng)];
+                    const int nx = x + o[0], ny = y + o[1], nz = z + o[2];
+                    if (!world::in_chunk_bounds(nx, ny, nz)) continue;
+                    x = nx; y = ny; z = nz;
+                }
+            }
+            break;
+        }
+        case 5: {  // a handful of blocks in an otherwise empty chunk
+            std::uniform_int_distribution<int> px(0, world::kChunkSizeX - 1);
+            std::uniform_int_distribution<int> py(0, world::kChunkSizeY - 1);
+            for (int i = 0; i < 12; ++i) {
+                c.set(px(rng), py(rng), px(rng), world::BlockId::Stone);
+            }
+            break;
+        }
+        default: break;  // empty
+    }
+}
+
+// The mask is what the occlusion BFS walks, and getting it wrong is
+// invisible in the direction that matters most: a bit set that should not
+// be lets the BFS through a wall, which draws more, and drawing more looks
+// like an open scene rather than like a bug. The published occlusion
+// ratios (up to 70x underground) are exactly the number that would move.
+void test_section_visibility_matches_an_independent_flood_fill() {
+    std::mt19937 rng(90210);
+    int compared = 0, disagreements = 0, nontrivial = 0;
+    for (int trial = 0; trial < 28; ++trial) {
+        world::Chunk c;
+        fill_for_visibility(c, rng, trial);
+        const auto got = world::compute_section_visibility(c);
+        const auto want = flood_fill_oracle(c);
+        for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+            ++compared;
+            if (got[sy] != want[sy]) ++disagreements;
+            if (got[sy] != 0 && got[sy] != world::kSectionVisAll) ++nontrivial;
+        }
+    }
+    EXPECT(compared == 28 * world::kSectionsPerChunk, "every section compared");
+    EXPECT(nontrivial > 20,
+           "the fills produced partly-connected sections, not just open and solid");
+    EXPECT(disagreements == 0,
+           "the flood fill agrees with an independent union-find on every section");
+}
+
+// Carving air can only join components, never split one, so a section's
+// mask can only gain bits. This is the direction the culler is allowed to
+// be wrong in - a bit that should be set and is not hides geometry - and
+// it is the direction the boundary work already went wrong in once, when
+// section_reachable derived its range from mesh AABBs and deleting a wall
+// collapsed it.
+void test_carving_air_only_ever_adds_sightlines() {
+    std::mt19937 rng(31337);
+    std::uniform_int_distribution<int> px(0, world::kChunkSizeX - 1);
+    std::uniform_int_distribution<int> py(0, world::kChunkSizeY - 1);
+
+    int lost_bits = 0, gained_bits = 0;
+    for (int trial = 0; trial < 14; ++trial) {
+        world::Chunk c;
+        fill_for_visibility(c, rng, trial);
+        const auto before = world::compute_section_visibility(c);
+        for (int carve = 0; carve < 200; ++carve) {
+            c.set(px(rng), py(rng), px(rng), world::BlockId::Air);
+        }
+        const auto after = world::compute_section_visibility(c);
+        for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+            if (before[sy] & ~after[sy]) ++lost_bits;
+            if (after[sy] & ~before[sy]) ++gained_bits;
+        }
+    }
+    EXPECT(lost_bits == 0, "removing blocks never removes a sightline");
+    EXPECT(gained_bits > 0, "the carving actually opened new sightlines");
 }
 
 // ----- terrain generation ---------------------------------------------------
@@ -1879,6 +2090,8 @@ int main() {
     test_frame_stats_empty_is_safe();
     test_visibility_slab_blocks_vertical_only();
     test_visibility_wall_blocks_x_only();
+    test_section_visibility_matches_an_independent_flood_fill();
+    test_carving_air_only_ever_adds_sightlines();
     test_height_at_is_deterministic_and_in_range();
     test_the_seed_actually_reaches_the_noise();
     test_neighbouring_chunks_agree_across_the_seam();
