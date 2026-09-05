@@ -38,7 +38,9 @@ float hash2d_f(int x, int z, std::uint32_t seed) {
     return (hash2d(x, z, seed) & 0x00FFFFFFu) / 16777216.0f;
 }
 
-// Small oak: 4-tall trunk, 3-wide cross canopy with corners knocked off.
+// Small oak: 5-tall trunk under a 5-wide canopy layer with its four
+// corners knocked off, a 3x3 layer above it missing a random half of its
+// corners, and one leaf on top.
 void stamp_oak(Chunk& c, int lx, int base_y, int lz) {
     constexpr int kTrunkH = 5;
     const int top = base_y + kTrunkH;
@@ -100,7 +102,7 @@ void stamp_conifer(Chunk& c, int lx, int base_y, int lz) {
     put_leaf(lx, top + 1, lz);
 }
 
-// Small bush: 1-tall stem, 3x3x2 leaf clump.
+// Small bush: 1-tall stem, one 3x3 leaf layer, one leaf above its centre.
 void stamp_bush(Chunk& c, int lx, int base_y, int lz) {
     if (in_chunk_bounds(lx, base_y, lz)) c.set(lx, base_y, lz, BlockId::Wood);
 

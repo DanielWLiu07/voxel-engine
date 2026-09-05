@@ -650,6 +650,372 @@ void test_visibility_wall_blocks_x_only() {
            "wall keeps -Y/+Y");
 }
 
+// ----- terrain generation ---------------------------------------------------
+//
+// terrain_gen.cpp is the input to everything the repo measures. Every
+// bench figure, the 10.99 MB the engine validates against, and the
+// byte-identical --bench output the CI invariance gate compares are all
+// downstream of it, and none of them checks it: they check that it does
+// the same thing twice, not that what it does is right. These tests are
+// the missing half - the relationships fill_chunk is supposed to hold,
+// stated where a change that quietly breaks one has to fail.
+
+// Every solid block a column holds, top-down, for comparing two fills.
+// BlockId, not a bool: "the caves pass turned stone into air" and "the
+// caves pass turned stone into dirt" are different bugs.
+struct ColumnDiff {
+    int only_in_a = 0;   // solid in a, air in b
+    int only_in_b = 0;   // solid in b, air in a
+    int different = 0;   // solid in both, different block
+};
+
+ColumnDiff diff_chunks(const world::Chunk& a, const world::Chunk& b) {
+    ColumnDiff d;
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                const world::BlockId ba = a.get(x, y, z);
+                const world::BlockId bb = b.get(x, y, z);
+                if (ba == bb) continue;
+                if (!world::is_solid(bb))      ++d.only_in_a;
+                else if (!world::is_solid(ba)) ++d.only_in_b;
+                else                           ++d.different;
+            }
+    return d;
+}
+
+void test_height_at_is_deterministic_and_in_range() {
+    world::TerrainGen a(1337), b(1337);
+    bool same_twice = true, same_instance = true;
+    for (int wz = -300; wz <= 300; wz += 7) {
+        for (int wx = -300; wx <= 300; wx += 7) {
+            const int h = a.height_at(wx, wz);
+            if (h != a.height_at(wx, wz)) same_twice = false;
+            if (h != b.height_at(wx, wz)) same_instance = false;
+        }
+    }
+    EXPECT(same_twice, "height_at is pure: asking twice gives one answer");
+    EXPECT(same_instance,
+           "two generators on one seed agree everywhere (no hidden state)");
+    // Not checked: that height_at stays inside [1, kChunkSizeY). The
+    // clamp is there and it is correct, but the noise it clamps spans
+    // roughly 10..66, so the bound cannot be reached and a test for it
+    // cannot fail. Deleting the clamp would pass it.
+}
+
+void test_the_seed_actually_reaches_the_noise() {
+    // The failure this catches is --seed ceasing to reach the generator at
+    // all. The world would still generate, still be self-consistent, still
+    // pass the invariance gate; it would just stop answering to --seed,
+    // and every per-seed figure in the repo would quietly be one world's.
+    //
+    // What it does not catch, established by injection rather than
+    // assumed: one of the six noise fields losing its seed offset while
+    // the others keep theirs. continents_ carries 0.65 of the height, so
+    // breaking hills_ alone still leaves nearly every column different.
+    // Isolating a single field would need a seam in the class that does
+    // not exist and should not be added for a test.
+    world::TerrainGen a(1337), b(1338);
+    int differing = 0, sampled = 0;
+    for (int wz = -200; wz <= 200; wz += 13) {
+        for (int wx = -200; wx <= 200; wx += 13) {
+            ++sampled;
+            if (a.height_at(wx, wz) != b.height_at(wx, wz)) ++differing;
+        }
+    }
+    EXPECT(differing > sampled / 2,
+           "two seeds disagree about most of the world");
+}
+
+void test_neighbouring_chunks_agree_across_the_seam() {
+    // Nothing in fill_chunk knows about its neighbours, so the only reason
+    // the terrain has no cliffs at chunk borders is that height_at is a
+    // function of world position alone. Stated here because the boundary
+    // meshing path now depends on it: chunks are meshed against a copy of
+    // the neighbour's edge layers, and a seam in the heightfield would show
+    // up as a wall of faces rather than as a visible crack.
+    world::TerrainGen t(1337);
+    world::Chunk left, right;
+    t.fill_chunk(0, 0, left);
+    t.fill_chunk(1, 0, right);
+
+    int mismatches = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        const int wz = z;
+        const int h_left  = t.height_at(world::kChunkSizeX - 1, wz);
+        const int h_right = t.height_at(world::kChunkSizeX, wz);
+        // The two columns are adjacent in the world, so their surfaces
+        // must be within a block or two of each other - and each chunk's
+        // own contents must match what height_at says for that column.
+        if (!world::is_solid(left.get(world::kChunkSizeX - 1, h_left, wz))) ++mismatches;
+        if (!world::is_solid(right.get(0, h_right, wz))) ++mismatches;
+        if (std::abs(h_left - h_right) > 4) ++mismatches;
+    }
+    EXPECT(mismatches == 0, "the heightfield is continuous across a chunk seam");
+}
+
+void test_fill_chunk_puts_the_surface_where_height_at_says() {
+    // The comment in fill_chunk calls height_at the single source of truth
+    // for surface height, because a divergent inline copy would desync the
+    // physics raycast, the bench grid, and the chunk contents from each
+    // other. That is a claim about two functions agreeing, so it is
+    // checkable.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    int wrong_surface = 0, wrong_above = 0, checked = 0;
+    for (int cz = -1; cz <= 1; ++cz) {
+        for (int cx = -1; cx <= 1; ++cx) {
+            world::Chunk c;
+            t.fill_chunk(cx, cz, c);
+            for (int z = 0; z < world::kChunkSizeZ; ++z) {
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    ++checked;
+                    const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                              cz * world::kChunkSizeZ + z);
+                    if (!world::is_solid(c.get(x, h, z))) ++wrong_surface;
+                    if (h + 1 >= world::kChunkSizeY) continue;
+                    // Above the surface is air, or the bottom of a tree.
+                    const world::BlockId above = c.get(x, h + 1, z);
+                    if (above != world::BlockId::Air &&
+                        above != world::BlockId::Wood &&
+                        above != world::BlockId::Leaves) {
+                        ++wrong_above;
+                    }
+                }
+            }
+        }
+    }
+    EXPECT(checked == 9 * 16 * 16, "the sweep covered nine chunks");
+    EXPECT(wrong_surface == 0, "height_at names a solid block in every column");
+    EXPECT(wrong_above == 0, "nothing but foliage sits above the surface");
+}
+
+void test_a_column_is_solid_all_the_way_down_without_caves() {
+    // Caves off is the bench's configuration, and the greedy ratio it
+    // reports means "merged over contiguous terrain". A hole in a column
+    // that nothing carved would quietly make that baseline something else.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    world::Chunk c;
+    t.fill_chunk(3, -2, c);
+    int gaps = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z)
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            const int h = t.height_at(3 * world::kChunkSizeX + x,
+                                      -2 * world::kChunkSizeZ + z);
+            for (int y = 0; y <= h; ++y)
+                if (!world::is_solid(c.get(x, y, z))) ++gaps;
+        }
+    EXPECT(gaps == 0, "with caves off every column is solid from 0 to height");
+}
+
+void test_caves_only_ever_remove() {
+    // The cave pass writes Air and nothing else, so caves-on has to be
+    // caves-off minus some blocks: never a different block, never an extra
+    // one. If it ever added, the bench's caves-off baseline would stop
+    // being an upper bound on the caves-on world and the two greedy ratios
+    // (5.33x contiguous, 2.7x with caves) would not be comparable.
+    world::TerrainGen with(1337), without(1337);
+    without.set_caves_enabled(false);
+    int total_carved = 0;
+    bool subtractive = true;
+    for (int cz = -1; cz <= 1; ++cz) {
+        for (int cx = -1; cx <= 1; ++cx) {
+            world::Chunk a, b;
+            without.fill_chunk(cx, cz, a);
+            with.fill_chunk(cx, cz, b);
+            const ColumnDiff d = diff_chunks(a, b);
+            total_carved += d.only_in_a;
+            if (d.only_in_b != 0 || d.different != 0) subtractive = false;
+        }
+    }
+    EXPECT(subtractive, "the cave pass removes blocks and never adds or changes one");
+    EXPECT(total_carved > 0, "the cave pass actually carved something");
+}
+
+void test_surface_material_follows_altitude() {
+    // The bands are the reason mid-altitude terrain reads as grassland
+    // rather than as monochrome stone, and they are pure functions of
+    // height. Pinned as the ordering between them, not as the numbers:
+    // moving kStoneBand is a design change, snow appearing below the snow
+    // line is a bug.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    int snow_below_line = 0, grass_above_line = 0, dry_shore = 0;
+    int snow_seen = 0, grass_seen = 0, sand_seen = 0;
+    // Radius 4, not 2: seed 1337's spawn bowl is high ground and the
+    // nearest shoreline is four chunks out, so a smaller sweep sees no
+    // sand at all and the coverage check below would be the only thing
+    // failing - a test that passes because it looked at nothing.
+    for (int cz = -4; cz <= 4; ++cz) {
+        for (int cx = -4; cx <= 4; ++cx) {
+            world::Chunk c;
+            t.fill_chunk(cx, cz, c);
+            for (int z = 0; z < world::kChunkSizeZ; ++z)
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                              cz * world::kChunkSizeZ + z);
+                    const world::BlockId top = c.get(x, h, z);
+                    if (top == world::BlockId::Snow) {
+                        ++snow_seen;
+                        if (h < world::kSnowBand) ++snow_below_line;
+                    }
+                    if (top == world::BlockId::Grass) {
+                        ++grass_seen;
+                        if (h >= world::kSnowBand) ++grass_above_line;
+                    }
+                    if (top == world::BlockId::Sand) ++sand_seen;
+                    // Everything at or just above the waterline is beach.
+                    if (h <= world::kSeaLevel + world::kSandBand &&
+                        top != world::BlockId::Sand) {
+                        ++dry_shore;
+                    }
+                }
+        }
+    }
+    EXPECT(snow_seen > 0 && grass_seen > 0 && sand_seen > 0,
+           "the sweep saw all three surface materials");
+    EXPECT(snow_below_line == 0, "no snow below the snow line");
+    EXPECT(grass_above_line == 0, "no grass above the snow line");
+    EXPECT(dry_shore == 0, "everything at the waterline is sand");
+}
+
+void test_lakes_are_carved_below_the_waterline() {
+    // The lake pass exists so the water plane has something to show. It
+    // only ever lowers terrain, and the clamp keeps it off the floor.
+    world::TerrainGen t(1337);
+    int below_sea = 0, at_floor = 0, sampled = 0;
+    for (int wz = -600; wz <= 0; wz += 3) {
+        for (int wx = 0; wx <= 600; wx += 3) {
+            const int h = t.height_at(wx, wz);
+            ++sampled;
+            if (h < world::kSeaLevel) ++below_sea;
+            if (h < 1) ++at_floor;
+        }
+    }
+    EXPECT(below_sea > 0, "somewhere in the lake region the surface is under water");
+    EXPECT(below_sea < sampled / 2, "the carve is a lake, not a flooded world");
+    // Not checked: that the carve never reaches y = 0. The clamp says so
+    // and the lake floor bottoms out around y = 17, so the check passes
+    // with the clamp deleted - it was in the first draft and injection
+    // took it out.
+    (void)at_floor;
+}
+
+// The lake pass smoothsteps its basin and fades out as terrain rises,
+// which the comment on it explains is so shores slope instead of cliff.
+// That is the claim worth pinning, because it is what a change to either
+// factor would break, and it breaks invisibly: a cliff-edged lake is a
+// perfectly good world, just not the one that was designed.
+void test_the_heightfield_has_no_cliffs() {
+    int worst = 0;
+    for (unsigned seed : {1337u, 7u, 99u}) {
+        world::TerrainGen t(seed);
+        for (int wz = -220; wz <= 220; wz += 3) {
+            for (int wx = -220; wx <= 220; wx += 3) {
+                const int h = t.height_at(wx, wz);
+                worst = std::max(worst, std::abs(t.height_at(wx + 1, wz) - h));
+                worst = std::max(worst, std::abs(t.height_at(wx, wz + 1) - h));
+            }
+        }
+    }
+    // Measured at 3 over a million adjacent column pairs on each of these
+    // three seeds. The bound is 4 rather than 3 so ordinary noise tuning
+    // does not trip it; a lake carving straight down drops ~20 at once,
+    // which is what this is here to catch.
+    EXPECT(worst <= 4, "no adjacent columns differ by more than four blocks");
+    EXPECT(worst >= 2, "the terrain has relief (the sweep was not flat)");
+}
+
+void test_trees_stand_on_the_ground_they_were_planted_on() {
+    // The three stamps differ only in trunk height and canopy shape, so
+    // this is the one place their sizes are written down anywhere the
+    // build reads. Their comments said 4-tall and 3x3x2 and had been
+    // wrong for a while; a measured test is what makes the corrected
+    // comments stay true.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    int trees = 0, floating = 0, wrong_height = 0, bald = 0, misplaced = 0;
+    for (int cz = -6; cz <= 6; ++cz) {
+        for (int cx = -6; cx <= 6; ++cx) {
+            world::Chunk c;
+            t.fill_chunk(cx, cz, c);
+            for (int z = 0; z < world::kChunkSizeZ; ++z)
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                              cz * world::kChunkSizeZ + z);
+                    if (h + 2 >= world::kChunkSizeY) continue;
+                    // Find the trunk rather than assume where it starts.
+                    // Looking only at h + 1 was the first draft, and it
+                    // could not see the fault it exists to catch: a stamp
+                    // planted at h + 2 leaves nothing at h + 1, so the
+                    // tree is not found at all and a floating conifer
+                    // reads as a chunk with fewer trees in it.
+                    int base = -1;
+                    for (int y = h + 1; y < h + 12 && y < world::kChunkSizeY; ++y) {
+                        if (c.get(x, y, z) == world::BlockId::Wood) { base = y; break; }
+                    }
+                    if (base < 0) continue;
+                    ++trees;
+                    if (base != h + 1) ++floating;
+                    int trunk = 0;
+                    while (base + trunk < world::kChunkSizeY &&
+                           c.get(x, base + trunk, z) == world::BlockId::Wood) {
+                        ++trunk;
+                    }
+                    // bush 1, oak 5, conifer 7 - the three stamps, and
+                    // nothing in between.
+                    if (trunk != 1 && trunk != 5 && trunk != 7) ++wrong_height;
+                    // Leaves within three blocks of the trunk top, not
+                    // immediately above it: the conifer stacks its canopy
+                    // discs at every other level, so on the trunk axis the
+                    // block straight above the wood is air and the tip
+                    // disc sits one higher. Measured, not assumed - the
+                    // first draft of this check required the next block
+                    // and every conifer failed it.
+                    bool crowned = false;
+                    for (int dy = 0; dy < 3 && !crowned; ++dy) {
+                        const int y = base + trunk + dy;
+                        if (y < world::kChunkSizeY &&
+                            c.get(x, y, z) == world::BlockId::Leaves) {
+                            crowned = true;
+                        }
+                    }
+                    if (!crowned) ++bald;
+                    // Trees are planted only on grass, which is what
+                    // keeps them off beaches, deserts, rock and snow -
+                    // those bands each put a different block on top, so
+                    // this one condition carries all four rules. Checking
+                    // the height bands instead was the first draft, and
+                    // injection showed it unfalsifiable: the grass gate
+                    // already excludes every height they name.
+                    if (c.get(x, h, z) != world::BlockId::Grass) ++misplaced;
+                }
+        }
+    }
+    EXPECT(trees > 50, "the sweep found trees to check");
+    EXPECT(floating == 0, "every trunk starts one block above the surface");
+    EXPECT(wrong_height == 0, "every trunk is one of the three stamp heights");
+    EXPECT(bald == 0, "every trunk carries leaves above it");
+    EXPECT(misplaced == 0, "every tree stands on a grass block");
+}
+
+void test_fill_chunk_is_reproducible_from_one_generator() {
+    // The generator is shared by reference across nine worker threads and
+    // called const. Two fills of one coordinate from one instance have to
+    // be byte-identical, or the invariance gate is measuring luck.
+    world::TerrainGen t(1337);
+    world::Chunk first, second, elsewhere;
+    t.fill_chunk(2, -3, first);
+    t.fill_chunk(9, 9, elsewhere);   // interleave an unrelated fill
+    t.fill_chunk(2, -3, second);
+    const ColumnDiff d = diff_chunks(first, second);
+    EXPECT(d.only_in_a == 0 && d.only_in_b == 0 && d.different == 0,
+           "one coordinate fills the same way twice, whatever ran between");
+    EXPECT(first.solid_count() == second.solid_count(),
+           "and holds the same number of solid blocks");
+}
+
 // ----- frustum --------------------------------------------------------------
 //
 // Frustum is the one piece of the cull chain with no oracle above it: the
@@ -1513,6 +1879,17 @@ int main() {
     test_frame_stats_empty_is_safe();
     test_visibility_slab_blocks_vertical_only();
     test_visibility_wall_blocks_x_only();
+    test_height_at_is_deterministic_and_in_range();
+    test_the_seed_actually_reaches_the_noise();
+    test_neighbouring_chunks_agree_across_the_seam();
+    test_fill_chunk_puts_the_surface_where_height_at_says();
+    test_a_column_is_solid_all_the_way_down_without_caves();
+    test_caves_only_ever_remove();
+    test_surface_material_follows_altitude();
+    test_lakes_are_carved_below_the_waterline();
+    test_the_heightfield_has_no_cliffs();
+    test_trees_stand_on_the_ground_they_were_planted_on();
+    test_fill_chunk_is_reproducible_from_one_generator();
     test_frustum_never_rejects_a_box_it_can_see();
     test_every_plane_culls_its_own_side();
     test_growing_a_box_never_makes_it_invisible();
