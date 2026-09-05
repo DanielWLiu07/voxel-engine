@@ -220,6 +220,20 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME mesher_equivalence COMMAND mesher_fuzz_tests)
 
+  # The edit log: append-only history plus seek, which is what lets a world
+  # be scrubbed through its own past. No GL, and the only voxel dependency
+  # is the block enum and the RLE codec's CRC.
+  add_executable(edit_log_tests
+    tests/test_edit_log.cpp
+    src/world/edit_log.cpp
+    src/world/chunk_serialize.cpp
+  )
+  target_include_directories(edit_log_tests PRIVATE src)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(edit_log_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME edit_log COMMAND edit_log_tests)
+
   # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
   # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
   add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)
