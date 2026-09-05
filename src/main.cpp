@@ -284,6 +284,7 @@ int main(int argc, char** argv) {
     const int bench_edit = opt.bench_edit;
     const bool validate_mode = opt.validate_mode;
     const bool verify_edit_persistence = opt.verify_edit_persistence;
+    const bool verify_history = opt.verify_history;
     const int thread_override = opt.thread_override;
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
@@ -311,6 +312,7 @@ int main(int argc, char** argv) {
     // setup helper.
     const bool headless = bench_frames > 0 || bench_io || bench_edit > 0 ||
                           validate_mode || verify_edit_persistence ||
+                          verify_history ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
@@ -1064,6 +1066,105 @@ int main(int argc, char** argv) {
             if (bad > 0) {
                 return EXIT_FAILURE;
             }
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // Headless --verify-history: prove the world can be moved back
+        // through its own edits and forward again, landing on exactly the
+        // world that existed at each point.
+        //
+        // This lives here rather than in the unit tests because a rewind
+        // remeshes and re-uploads every touched chunk, and that needs a GL
+        // context. tests/test_edit_log.cpp covers the log's own logic;
+        // this covers the wiring - that edits are recorded from the real
+        // edit path, and that a seek moves real chunk data.
+        //
+        // The comparison is a full block-for-block hash of the resident
+        // world, not a spot check on the edited cells: a rewind that
+        // restored the edits but corrupted a neighbouring chunk would pass
+        // a spot check and fail this.
+        if (verify_history && world_settled) {
+            auto world_hash = [&wrld]() {
+                // FNV-1a over every block in every resident chunk, in
+                // coordinate order so the hash does not depend on the
+                // chunk map's iteration order.
+                std::uint64_t h = 1469598103934665603ull;
+                std::vector<world::ChunkCoord> coords;
+                wrld.for_each_chunk([&](world::ChunkCoord c, const world::Chunk&) {
+                    coords.push_back(c);
+                });
+                std::sort(coords.begin(), coords.end(),
+                          [](const world::ChunkCoord& a, const world::ChunkCoord& b) {
+                              return a.z != b.z ? a.z < b.z : a.x < b.x;
+                          });
+                for (const auto& c : coords) {
+                    for (int y = 0; y < world::kChunkSizeY; ++y)
+                        for (int z = 0; z < world::kChunkSizeZ; ++z)
+                            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                                const auto b = static_cast<std::uint8_t>(
+                                    wrld.block_at(c.x * world::kChunkSizeX + x, y,
+                                                  c.z * world::kChunkSizeZ + z));
+                                h = (h ^ b) * 1099511628211ull;
+                            }
+                }
+                return h;
+            };
+
+            const std::uint64_t before = world_hash();
+            const std::uint32_t tick_before = wrld.history_tick();
+
+            // A deterministic spread of edits: some fill air, some dig out
+            // ground, and the lattice crosses chunk boundaries so the
+            // neighbour-remesh path is exercised.
+            constexpr int kEdits = 400;
+            int made = 0;
+            // Timed because this loop IS the unbatched path: every
+            // set_block remeshes, relights and re-uploads its chunk
+            // immediately. The rewind below makes the same number of block
+            // changes with one remesh per touched chunk, so the two
+            // timings are a direct measurement of what batching buys.
+            const auto edit_t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i < kEdits; ++i) {
+                const int wx = ((i * 37) % 64) - 32;
+                const int wz = ((i * 53) % 64) - 32;
+                const int wy = 24 + ((i * 7) % 40);
+                const world::BlockId now = wrld.block_at(wx, wy, wz);
+                const world::BlockId want = (now == world::BlockId::Air)
+                    ? world::BlockId::Glow : world::BlockId::Air;
+                if (wrld.set_block(wx, wy, wz, want)) ++made;
+            }
+            const double edit_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - edit_t0).count();
+            const std::uint64_t after = world_hash();
+            const std::uint32_t tick_after = wrld.history_tick();
+
+            const auto rewind = wrld.history_seek(tick_before);
+            const std::uint64_t rewound = world_hash();
+            const auto replay = wrld.history_seek(tick_after);
+            const std::uint64_t replayed = world_hash();
+
+            const bool ok = made > 0 && after != before &&
+                            tick_after == tick_before + static_cast<std::uint32_t>(made) &&
+                            rewound == before && replayed == after &&
+                            wrld.history_tick() == tick_after &&
+                            wrld.history().size() == static_cast<std::size_t>(made);
+
+            const double speedup = rewind.ms > 0.0 ? edit_ms / rewind.ms : 0.0;
+            std::printf("\nHISTORY edits=%d ticks=%u->%u "
+                        "unbatched_ms=%.1f rewind_ms=%.1f replay_ms=%.1f "
+                        "batch_speedup=%.1fx "
+                        "rewind_applied=%zu rewind_remeshed=%zu "
+                        "log_bytes=%zu bytes_per_edit=%.1f "
+                        "rewound_ok=%d replayed_ok=%d %s\n",
+                        made, tick_before, tick_after,
+                        edit_ms, rewind.ms, replay.ms, speedup,
+                        rewind.applied, rewind.chunks_remeshed,
+                        wrld.save_history(terrain_seed).size(),
+                        static_cast<double>(wrld.save_history(terrain_seed).size())
+                            / std::max(1, made),
+                        rewound == before ? 1 : 0, replayed == after ? 1 : 0,
+                        ok ? "ok" : "FAILED");
+            if (!ok) return EXIT_FAILURE;
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 

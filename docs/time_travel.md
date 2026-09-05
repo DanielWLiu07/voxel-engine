@@ -140,15 +140,73 @@ both looked correct:
   a `static_assert` guards the assumption, so a taller world fails the
   build rather than silently gaining an unvalidated field.
 
+## Wired into the engine
+
+`World::set_block` records every accepted edit, one tick each. A refused
+edit - setting a block to what it already is - consumes no tick, so the
+timeline has no gaps that mean nothing.
+
+`World::history_seek(tick)` moves the world. Recording is suspended for
+the duration, because navigating history is not a new entry in it: without
+that, scrubbing back and forth would append forever and the timeline would
+drift away from what actually happened.
+
+### Batching, which is where the work went
+
+A seek applies every block change to voxel data first and remeshes each
+touched chunk once at the end. The obvious implementation - calling
+`set_block` in a loop - remeshes, relights and re-uploads per edit, so a
+scrub across a thousand edits in one chunk costs a thousand rebuilds
+instead of one.
+
+Measured by `--verify-history`, which makes 301 edits and then rewinds
+them, so both paths perform exactly the same block changes:
+
+| | block changes | chunk remeshes | wall time (M4) |
+| --- | --- | --- | --- |
+| per edit (`set_block` loop) | 301 | 301 | 297-371 ms |
+| batched (`history_seek`) | 301 | **14** | 13.1-13.9 ms |
+
+**301 remeshes down to 14** is the durable figure: it is a ratio of
+counts, so it reproduces on any machine. The wall-clock speedup is
+**22.7-27.6x on an Apple M4** over four runs, quoted with its spread
+because a timing without one is a number waiting to rot.
+
+Fourteen rather than one because the edits are spread across a lattice
+that crosses chunk boundaries, and a boundary edit remeshes the neighbour
+too - the same rule `set_block` follows.
+
+## Verified end to end
+
+    ./build/voxel_engine --verify-history
+
+    HISTORY edits=301 ticks=0->301 unbatched_ms=356.8 rewind_ms=13.8
+    replay_ms=14.1 batch_speedup=25.8x rewind_applied=301
+    rewind_remeshed=14 log_bytes=4836 bytes_per_edit=16.1
+    rewound_ok=1 replayed_ok=1 ok
+
+This runs in the engine rather than in the unit tests because a rewind
+remeshes and re-uploads every touched chunk, which needs a GL context.
+It is in `scripts/audit.sh` alongside the other end-to-end checks.
+
+The comparison is an FNV-1a hash of **every block in every resident
+chunk**, in coordinate order, not a spot check on the edited cells. A
+rewind that restored the edits correctly but corrupted a neighbouring
+chunk would pass a spot check and fails this.
+
 ## What this does not do yet
 
-The log and its seek are complete and tested. Nothing is wired into the
-engine's edit path or exposed as a flag, so no existing behaviour changes:
-`--validate` still reports `gpu_mesh_mb=10.99` and `check_invariance.py`
-still passes.
+**Checkpoints.** A seek into a long history replays from wherever the
+world currently sits, which is fine for scrubbing (you are usually moving
+a short distance) and linear for a jump to the far end. Periodic RLE
+snapshots would bound that, and the RLE codec already exists. The open
+question is the familiar one: checkpoint interval against seek latency.
 
-What wiring it up needs, in order: record into the log from
-`World::set_block`, add periodic RLE checkpoints so a seek into a long
-history does not replay from tick 0, and a `--replay` flag that scrubs.
-The checkpoint work is the only part with a design question left in it,
-and it is a familiar one - checkpoint interval against seek latency.
+**Edits to chunks that streamed out.** Those are counted and reported as
+`skipped_unloaded` rather than silently dropped, and they are already
+preserved through `edited_stash_`, but a seek does not currently rewrite
+the stash. So scrubbing works on the resident world and a chunk that was
+away during a rewind comes back holding its latest state.
+
+**A scrub UI.** There is no `--replay` flag or timeline slider yet; the
+seek is an API and a verification flag.

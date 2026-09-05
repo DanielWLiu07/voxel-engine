@@ -624,20 +624,10 @@ BlockId World::block_at(int wx, int wy, int wz) const {
                                  floor_mod(wz, kChunkSizeZ));
 }
 
-bool World::set_block(int wx, int wy, int wz, BlockId b) {
-    if (wy < 0 || wy >= kChunkSizeY) return false;
-    ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
-    auto it = chunks_.find(cc);
-    if (it == chunks_.end()) return false;
-
-    ChunkSlot& slot = *it->second;
-    int lx = floor_mod(wx, kChunkSizeX);
-    int lz = floor_mod(wz, kChunkSizeZ);
-    if (slot.chunk.get(lx, wy, lz) == b) return false;
-
-    slot.chunk.set(lx, wy, lz, b);
-    slot.player_modified = true;
-    const auto edit_t0 = std::chrono::steady_clock::now();
+// The light + mesh + section rebuild a chunk needs after its voxels
+// change. Lifted out of set_block so a history seek can pay it once per
+// touched chunk rather than once per edit.
+void World::remesh_slot(ChunkSlot& slot, ChunkCoord cc) {
     std::uint8_t mask = 0;
     const NeighborPlanes planes = neighbor_planes_for(cc, &mask);
     const NeighborLight nlight = neighbor_light_for(cc);
@@ -657,6 +647,88 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
     apply_sections(slot, std::move(built), quad_ibo_);
     slot.section_visibility = compute_section_visibility(slot.chunk);
+}
+
+World::HistorySeekStats World::history_seek(std::uint32_t to_tick) {
+    HistorySeekStats stats;
+    const auto t0 = std::chrono::steady_clock::now();
+    if (to_tick == history_tick_) return stats;
+
+    // Recording off for the duration. Without this, undoing an edit would
+    // append the undo to the log as a fresh edit, and the history would
+    // grow every time it was replayed - the log would record the act of
+    // looking at it.
+    const bool was_recording = history_recording_;
+    history_recording_ = false;
+
+    // Voxels first, meshes after. The alternative - going through
+    // set_block per edit - remeshes the same chunk once per edit, and a
+    // scrub across a thousand edits in one chunk is one chunk's worth of
+    // work, not a thousand.
+    std::unordered_set<ChunkCoord, ChunkCoordHash> touched;
+    history_.seek(history_tick_, to_tick,
+                  [&](int wx, int wy, int wz, BlockId block) {
+        const ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+        auto it = chunks_.find(cc);
+        if (it == chunks_.end()) {
+            // The chunk streamed out. Its edits live in edited_stash_ and
+            // will be applied when it comes back, so this is reported
+            // rather than silently dropped - a seek that quietly skipped
+            // half the world would look like it worked.
+            ++stats.skipped_unloaded;
+            return;
+        }
+        const int lx = floor_mod(wx, kChunkSizeX);
+        const int lz = floor_mod(wz, kChunkSizeZ);
+        it->second->chunk.set(lx, wy, lz, block);
+        it->second->player_modified = true;
+        ++stats.applied;
+        touched.insert(cc);
+        // A boundary edit changes what the chunk next door should hide, so
+        // that neighbour is remeshed too - the same rule set_block follows.
+        if (lx == 0)                    touched.insert({cc.x - 1, cc.z});
+        else if (lx == kChunkSizeX - 1) touched.insert({cc.x + 1, cc.z});
+        if (lz == 0)                    touched.insert({cc.x, cc.z - 1});
+        else if (lz == kChunkSizeZ - 1) touched.insert({cc.x, cc.z + 1});
+    });
+
+    for (const ChunkCoord& cc : touched) {
+        auto it = chunks_.find(cc);
+        if (it == chunks_.end()) continue;
+        remesh_slot(*it->second, cc);
+        ++stats.chunks_remeshed;
+    }
+
+    history_tick_ = to_tick > history_.latest_tick() ? history_.latest_tick()
+                                                     : to_tick;
+    history_recording_ = was_recording;
+    stats.ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    return stats;
+}
+
+bool World::set_block(int wx, int wy, int wz, BlockId b) {
+    if (wy < 0 || wy >= kChunkSizeY) return false;
+    ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+    auto it = chunks_.find(cc);
+    if (it == chunks_.end()) return false;
+
+    ChunkSlot& slot = *it->second;
+    int lx = floor_mod(wx, kChunkSizeX);
+    int lz = floor_mod(wz, kChunkSizeZ);
+    if (slot.chunk.get(lx, wy, lz) == b) return false;
+
+    const BlockId prev = slot.chunk.get(lx, wy, lz);
+    slot.chunk.set(lx, wy, lz, b);
+    slot.player_modified = true;
+    // Recorded before the remesh so the log reflects the edit even if the
+    // rebuild below is changed or reordered later. Suspended during a
+    // history seek: navigating history is not a new entry in it.
+    if (history_recording_) {
+        history_.record(++history_tick_, wx, wy, wz, prev, b);
+    }
+    const auto edit_t0 = std::chrono::steady_clock::now();
+    remesh_slot(slot, cc);
     edit_last_ms_ = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - edit_t0).count();
     edit_total_ms_ += edit_last_ms_;

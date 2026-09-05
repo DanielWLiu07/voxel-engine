@@ -79,6 +79,8 @@ if [ "${AUDIT_SKIP_MESHER_AB:-0}" != "1" ]; then
   fi
 fi
 grep_step "edit persistence"    "survived=1 ok"         ./build/voxel_engine --verify-edit-persistence
+grep_step "history rewind/replay" "rewound_ok=1 replayed_ok=1 ok" \
+          ./build/voxel_engine --verify-history
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "occlusion byte-identity"   ./scripts/verify_occlusion.sh
 step      "persistence contract"      ./scripts/verify_persistence.sh

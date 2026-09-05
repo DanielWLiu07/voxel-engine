@@ -63,6 +63,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
                 "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
+                "  voxel_engine --verify-history         edit, rewind history, replay, check both match, exit\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -157,6 +158,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         }
         if (arg == "--validate") o.validate_mode = true;
         if (arg == "--verify-edit-persistence") o.verify_edit_persistence = true;
+        if (arg == "--verify-history") o.verify_history = true;
         if (arg == "--threads" && i + 1 < argc) {
             // Same strtol-then-range-check pattern as --radius: reject junk
             // and out-of-band values via the 0 sentinel checked below.

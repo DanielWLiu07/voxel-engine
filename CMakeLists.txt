@@ -122,6 +122,7 @@ add_executable(voxel_engine
   src/world/chunk_light.cpp
   src/world/chunk_mesh.cpp
   src/world/chunk_serialize.cpp
+  src/world/edit_log.cpp
   src/world/section_visibility.cpp
   src/world/terrain_gen.cpp
   src/world/world.cpp
@@ -175,6 +176,7 @@ if(VOXEL_BUILD_TESTS)
     src/world/chunk_light.cpp
     src/world/chunk_mesh.cpp
     src/world/chunk_serialize.cpp
+    src/world/edit_log.cpp
     src/world/world_io.cpp
     src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
