@@ -11,7 +11,13 @@
 
 namespace core {
 
-// Fixed-size worker pool. Joins on destruction; pending jobs dropped.
+// Fixed-size worker pool.
+//
+// Destruction stops the pool: jobs already running finish, jobs still
+// queued are dropped, and the destructor joins. It deliberately does not
+// wait out the backlog, so shutdown costs one job rather than however many
+// the caller had queued. Callers that need every job to have run wait on
+// their own counter - World tracks jobs_in_flight_ for exactly this.
 class ThreadPool {
 public:
     explicit ThreadPool(std::size_t worker_count);
