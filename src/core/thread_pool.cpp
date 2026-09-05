@@ -34,7 +34,12 @@ void ThreadPool::worker_loop() {
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this]{ return stop_ || !jobs_.empty(); });
-            if (stop_ && jobs_.empty()) return;
+            // Shutdown drops whatever is still queued. The `stop_ &&
+            // jobs_.empty()` this replaces kept popping until the queue
+            // ran dry, so ~ThreadPool did not stop the pool, it waited
+            // out the backlog - seconds, at a streaming radius, with the
+            // window already gone.
+            if (stop_) return;
             job = std::move(jobs_.front());
             jobs_.pop();
         }

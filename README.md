@@ -192,6 +192,7 @@ scripts/bench_scaling.sh                   # chunk-pipeline sweep across 1..9 wo
 ./build/voxel_engine --bench-frame 300 --pass-breakdown --sky-overdraw
                                            # sky drawn first and undepth-tested, for the A/B
 ./build/voxel_engine --validate            # read GPU meshes back, verify vs voxel data
+ctest --test-dir build                     # world, mesher fuzz, CLI, concurrency
 ctest --test-dir build -R mesher_equivalence    # greedy vs naive, face for face, fuzzed
 ./build/voxel_engine --verify-edit-persistence  # edits must survive chunk eviction
 scripts/verify_occlusion.sh                # occlusion on/off renders must be byte-identical
@@ -231,7 +232,7 @@ reference rather than something to read top to bottom.
 | Block edit, full remesh path (`--bench-edit 200`) | 0.95 ms p50 per edit: light re-propagation + greedy remesh + section re-bucket + GL re-upload + visibility recompute, synchronous (was 0.80 ms before block light) |
 | RLE chunk save compression | 39.06 MB raw -> 0.67 MB on disk (~58x) |
 | RLE save/load round trip | `roundtrip_ok=1`: every block byte-identical after save then reload |
-| Mesher differential fuzz (`ctest -R mesher_equivalence`) | every quad from both meshers decomposed back into 1x1 unit faces and compared as sets: same cells, same facing, same block id, no duplicates. 180 cases (12 fills x 5 neighbour configurations x 3 seeds). Reintroducing the boundary-ownership defect fails 99 of its checks; the 247-check suite it sits beside passes all 247 |
+| Mesher differential fuzz (`ctest -R mesher_equivalence`) | every quad from both meshers decomposed back into 1x1 unit faces and compared as sets: same cells, same facing, same block id, no duplicates. 180 cases (12 fills x 5 neighbour configurations x 3 seeds). Reintroducing the boundary-ownership defect fails 99 of its checks while the world-unit suite beside it passes regardless, which is why the fuzzer is a separate binary. The check count is deliberately not quoted here: it moves every time a test is added, and a number that rots on unrelated work is the kind this README keeps having to correct |
 | Serializer fuzz (same binary) | the RLE codec run over the same 12 fills x 3 seeds: all 65,536 cells byte-identical after a round trip, `solid_count()` restored, and the edited bit preserved. Validated by injection - forcing the edited flag false reports `wrote 1, read 0`; flipping one cell reports `1 cells differ, first at 3,40,5`. 333 checks total in 0.5 s |
 | GPU mesh validation (`--validate`) | reads every VBO/EBO back off the GPU and checks each triangle is an axis-aligned face backed by a solid block; composes with `--load`/`--seed`, exits nonzero on offenders |
 | Edit persistence (`--verify-edit-persistence`) | `stashed=1 restored=1 survived=1`: a block edit survives its chunk streaming out and back in (modified chunks are RLE-stashed on eviction instead of regenerated; saves include the stash) |
@@ -784,7 +785,7 @@ shaders/      GLSL 4.10 core
 third_party/  glad, stb, FastNoiseLite (vendored)
 scripts/      benchmark sweeps, sanitizer runs, the audit battery
 docs/         design notes, texture atlas, committed bench artifacts
-tests/        world + queue unit tests
+tests/        world, mesher-fuzz, CLI and concurrency unit suites
 ```
 
 Dependencies via CMake FetchContent: GLFW, GLM, Dear ImGui. Vendored: GLAD
