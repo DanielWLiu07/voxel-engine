@@ -650,16 +650,164 @@ void test_visibility_wall_blocks_x_only() {
            "wall keeps -Y/+Y");
 }
 
+// ----- frustum --------------------------------------------------------------
+//
+// Frustum is the one piece of the cull chain with no oracle above it: the
+// occlusion BFS is checked against line-of-sight and the mesher against a
+// naive reference, but nothing checked the six planes themselves. It is
+// also where a wrong answer is least visible. Culling too much punches
+// holes in the world, which anyone would see; culling too little just
+// draws more than it needed to and reports a smaller cull ratio, which
+// looks like a scene that happens to be open.
+
+glm::mat4 view_proj_from(const glm::vec3& eye, const glm::vec3& forward,
+                         float zfar) {
+    return glm::perspective(glm::radians(70.0f), 16.0f / 9.0f, 0.1f, zfar) *
+           glm::lookAt(eye, eye + forward, glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
+// True when p lands inside the clip volume the projection defines: what
+// the GPU will do with the vertex, computed the long way. This is the
+// oracle, and it never touches the plane extraction under test.
+bool inside_clip_volume(const glm::mat4& vp, const glm::vec3& p) {
+    const glm::vec4 c = vp * glm::vec4(p, 1.0f);
+    return c.w > 0.0f &&
+           -c.w <= c.x && c.x <= c.w &&
+           -c.w <= c.y && c.y <= c.w &&
+           -c.w <= c.z && c.z <= c.w;
+}
+
+// The property the header states: "No false negatives." A box holding a
+// point the GPU would draw must never be culled. Randomized over cameras
+// and boxes rather than over hand-picked cases, because the failure this
+// guards against - one plane reading the wrong AABB corner - only shows up
+// on the side of the volume that plane bounds, and a hand-picked box tends
+// to sit in the middle of the screen where every plane agrees.
+void test_frustum_never_rejects_a_box_it_can_see() {
+    std::mt19937 rng(20260905);
+    std::uniform_real_distribution<float> pos(-200.0f, 200.0f);
+    std::uniform_real_distribution<float> extent(0.5f, 40.0f);
+    std::uniform_real_distribution<float> dir(-1.0f, 1.0f);
+
+    int visible_boxes = 0;
+    int false_negatives = 0;
+    for (int trial = 0; trial < 4000; ++trial) {
+        glm::vec3 fwd(dir(rng), dir(rng) * 0.5f, dir(rng));
+        if (glm::length(fwd) < 0.1f) continue;
+        fwd = glm::normalize(fwd);
+        const glm::vec3 eye(pos(rng), pos(rng) * 0.25f, pos(rng));
+        const glm::mat4 vp = view_proj_from(eye, fwd, 300.0f);
+        gfx::Frustum f;
+        f.from_view_proj(vp);
+
+        const glm::vec3 lo(pos(rng), pos(rng) * 0.25f, pos(rng));
+        const gfx::AABB box{lo,
+                            lo + glm::vec3(extent(rng), extent(rng), extent(rng))};
+
+        bool any_point_visible = false;
+        for (int c = 0; c < 8 && !any_point_visible; ++c) {
+            const glm::vec3 p((c & 1) ? box.max.x : box.min.x,
+                              (c & 2) ? box.max.y : box.min.y,
+                              (c & 4) ? box.max.z : box.min.z);
+            any_point_visible = inside_clip_volume(vp, p);
+        }
+        if (!any_point_visible) {
+            any_point_visible = inside_clip_volume(vp, (box.min + box.max) * 0.5f);
+        }
+        if (!any_point_visible) continue;
+
+        ++visible_boxes;
+        if (!f.intersects_aabb(box)) ++false_negatives;
+    }
+    // Counted rather than short-circuited: bailing on the first failure
+    // leaves visible_boxes low and fails the coverage check too, which
+    // reads as "the sweep was empty" rather than "the culler is wrong".
+    EXPECT(visible_boxes > 100, "the random sweep actually produced visible boxes");
+    EXPECT(false_negatives == 0, "no box containing a drawable point was culled");
+}
+
+// Each of the six planes has to be doing something on its own. Every box
+// here is outside exactly one plane and comfortably inside the other five,
+// so a plane that is missing, mis-signed, or a copy of its neighbour
+// leaves exactly one of these surviving and the rest still passing.
+void test_every_plane_culls_its_own_side() {
+    const glm::vec3 eye{0.0f, 0.0f, 0.0f};
+    gfx::Frustum f;
+    f.from_view_proj(view_proj_from(eye, {0.0f, 0.0f, -1.0f}, 100.0f));
+
+    auto box_at = [](glm::vec3 c, float r) {
+        return gfx::AABB{c - glm::vec3(r), c + glm::vec3(r)};
+    };
+    // 70 degrees vertical at 16:9, so at z = -50 the volume is ~70 units
+    // tall and ~124 wide: these sit far past one edge and inside the rest.
+    EXPECT(f.intersects_aabb(box_at({0.0f, 0.0f, -50.0f}, 1.0f)),
+           "a box straight ahead is kept");
+    EXPECT(!f.intersects_aabb(box_at({-200.0f, 0.0f, -50.0f}, 1.0f)),
+           "left plane culls a box off the left edge");
+    EXPECT(!f.intersects_aabb(box_at({200.0f, 0.0f, -50.0f}, 1.0f)),
+           "right plane culls a box off the right edge");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, -200.0f, -50.0f}, 1.0f)),
+           "bottom plane culls a box below the view");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 200.0f, -50.0f}, 1.0f)),
+           "top plane culls a box above the view");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 0.0f, -500.0f}, 1.0f)),
+           "far plane culls a box past the draw distance");
+    // Behind the camera is NOT an isolating case for the near plane: back
+    // there w < 0, so the side planes reject the box whatever the near
+    // plane says, and a mis-signed near plane passes this happily. It was
+    // the only case here at first and fault injection caught it. This box
+    // is in front of the camera and nearer than znear (0.1), which only
+    // the near plane can object to.
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 0.0f, -0.05f}, 0.02f)),
+           "near plane culls a box in front of it but nearer than znear");
+    EXPECT(f.intersects_aabb(box_at({0.0f, 0.0f, -0.05f}, 0.5f)),
+           "a box straddling the near plane is kept");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 0.0f, 50.0f}, 1.0f)),
+           "a box behind the camera is culled");
+}
+
+// Growing a box can only add points to it, so it can only add reasons to
+// keep it. A culler that answers "outside" for a box containing one that
+// answered "inside" is testing something other than containment - the
+// p-vertex selection reading the near corner instead of the far one, say.
+void test_growing_a_box_never_makes_it_invisible() {
+    std::mt19937 rng(778);
+    std::uniform_real_distribution<float> pos(-150.0f, 150.0f);
+    std::uniform_real_distribution<float> grow(0.1f, 30.0f);
+    gfx::Frustum f;
+    f.from_view_proj(view_proj_from({5.0f, 20.0f, 5.0f},
+                                    {0.3f, -0.2f, -1.0f}, 250.0f));
+
+    int shrank_into_view = 0;
+    for (int trial = 0; trial < 3000; ++trial) {
+        const glm::vec3 lo(pos(rng), pos(rng), pos(rng));
+        const gfx::AABB inner{lo,
+                              lo + glm::vec3(grow(rng), grow(rng), grow(rng))};
+        const float g = grow(rng);
+        const gfx::AABB outer{inner.min - glm::vec3(g), inner.max + glm::vec3(g)};
+        if (f.intersects_aabb(inner) && !f.intersects_aabb(outer)) {
+            ++shrank_into_view;
+        }
+    }
+    EXPECT(shrank_into_view == 0, "a box containing a visible box is visible");
+}
+
+// Not tested here: that from_view_proj normalizes its planes. It was, and
+// the test came out after fault injection - stubbing normalize_plane down
+// to `return p;` failed nothing, its own test included. Scaling a plane by
+// a positive constant cannot change the sign of dot(n, p) + d, and that
+// sign is all intersects_aabb looks at, so through the only thing Frustum
+// exposes a normalized plane and an unnormalized one are the same object.
+// The normalization is real work for a distance query nothing asks for
+// yet. A test that cannot fail is worse than no test: it reports coverage
+// it does not have.
+
 // ----- occlusion BFS --------------------------------------------------------
 
 gfx::Frustum frustum_from(const glm::vec3& eye, const glm::vec3& forward,
                           float zfar) {
     gfx::Frustum f;
-    const glm::mat4 proj = glm::perspective(glm::radians(70.0f),
-                                            16.0f / 9.0f, 0.1f, zfar);
-    const glm::mat4 view = glm::lookAt(eye, eye + forward,
-                                       glm::vec3(0.0f, 1.0f, 0.0f));
-    f.from_view_proj(proj * view);
+    f.from_view_proj(view_proj_from(eye, forward, zfar));
     return f;
 }
 
@@ -1365,6 +1513,9 @@ int main() {
     test_frame_stats_empty_is_safe();
     test_visibility_slab_blocks_vertical_only();
     test_visibility_wall_blocks_x_only();
+    test_frustum_never_rejects_a_box_it_can_see();
+    test_every_plane_culls_its_own_side();
+    test_growing_a_box_never_makes_it_invisible();
     test_bfs_solid_chunk_blocks_sightline();
     test_bfs_never_culls_line_of_sight();
     test_atomic_write_creates_then_replaces();
