@@ -220,6 +220,16 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME mesher_equivalence COMMAND mesher_fuzz_tests)
 
+  # 4D gradient noise. Its own binary and no dependencies at all beyond the
+  # standard library: it is the one piece of a four-dimensional terrain
+  # generator that cannot come from FastNoiseLite, which stops at 3D.
+  add_executable(noise4d_tests tests/test_noise4d.cpp src/world/noise4d.cpp)
+  target_include_directories(noise4d_tests PRIVATE src)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(noise4d_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME noise4d COMMAND noise4d_tests)
+
   # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
   # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
   add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)
@@ -237,6 +247,24 @@ endif()
 # Standalone, header-only queue, no GL. Built in Release for honest numbers.
 option(VOXEL_BUILD_BENCH "Build standalone microbenchmarks" ON)
 if(VOXEL_BUILD_BENCH)
+  # Where noise4d.cpp's normalization constant comes from. Committed so the
+  # figure in that comment has an input anyone can re-run.
+  add_executable(noise4d_range src/bench/noise4d_range.cpp src/world/noise4d.cpp)
+  target_include_directories(noise4d_range PRIVATE src)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(noise4d_range PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
+  # Renders 3D slices of a 4D heightfield as PNGs. The cheap answer to
+  # whether a fourth spatial axis morphs the world coherently or just
+  # reseeds it, asked before committing the engine to 4D storage.
+  add_executable(slice4d src/bench/slice4d.cpp src/world/noise4d.cpp)
+  target_include_directories(slice4d PRIVATE src)
+  target_link_libraries(slice4d PRIVATE stb)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(slice4d PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
   add_executable(queue_bench src/bench/queue_bench.cpp)
   target_include_directories(queue_bench PRIVATE src)
   find_package(Threads REQUIRED)
