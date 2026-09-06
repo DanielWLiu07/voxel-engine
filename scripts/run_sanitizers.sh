@@ -22,7 +22,7 @@ echo "==== AddressSanitizer + UndefinedBehaviorSanitizer: full logic suite ===="
 cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVOXEL_BUILD_BENCH=OFF \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -g -O1" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" >/dev/null
-cmake --build build-asan --target voxel_tests mpmc_tests mesher_fuzz_tests
+cmake --build build-asan --target voxel_tests mpmc_tests mesher_fuzz_tests edit_log_tests
 export ASAN_OPTIONS="halt_on_error=1"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$SUPP"
 ./build-asan/voxel_tests
@@ -31,6 +31,11 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$SUPP"
 # indexes back into the chunk, so ASan here is checking the oracle's own
 # bounds as much as the mesher's.
 ./build-asan/mesher_fuzz_tests
+# The edit log decoder walks a caller-supplied byte buffer using a count
+# read out of that same buffer, so ASan is doing real work here rather
+# than standing by: the length check that stops a corrupt count from
+# overrunning the buffer is verified by this run and not by any assertion.
+./build-asan/edit_log_tests
 
 echo ""
 echo "All sanitizer runs clean (TSan + ASan + UBSan)."

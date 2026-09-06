@@ -284,6 +284,7 @@ int main(int argc, char** argv) {
     const int bench_edit = opt.bench_edit;
     const bool validate_mode = opt.validate_mode;
     const bool verify_edit_persistence = opt.verify_edit_persistence;
+    const bool verify_history = opt.verify_history;
     const int thread_override = opt.thread_override;
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
@@ -311,6 +312,7 @@ int main(int argc, char** argv) {
     // setup helper.
     const bool headless = bench_frames > 0 || bench_io || bench_edit > 0 ||
                           validate_mode || verify_edit_persistence ||
+                          verify_history ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
@@ -1064,6 +1066,244 @@ int main(int argc, char** argv) {
             if (bad > 0) {
                 return EXIT_FAILURE;
             }
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // Headless --verify-history: prove the world can be moved back
+        // through its own edits and forward again, landing on exactly the
+        // world that existed at each point.
+        //
+        // Two things are checked, and the second is the one that needs GL.
+        //
+        // The voxel side is an FNV-1a hash of every block in every
+        // resident chunk, in coordinate order - not a spot check on the
+        // edited cells, so a rewind that restored the edits and corrupted
+        // a neighbouring chunk fails here.
+        //
+        // The GPU side is debug_validate_gpu_meshes(), the same read-back
+        // --validate uses: every triangle in every uploaded mesh has to be
+        // an axis-aligned face backed by a solid block. Without it this
+        // check was voxel-only, and an adversarial review proved the point
+        // by deleting the entire remesh loop from history_seek: the world
+        // hash still matched, the flag still printed ok, audit.sh still
+        // passed, and every rewound edit would still have been on screen
+        // because the meshes described a world that no longer existed.
+        // The header comment here used to claim the check needed GL. It
+        // did not. Now it does.
+        if (verify_history && world_settled) {
+            auto world_hash = [&wrld]() {
+                // FNV-1a over every block in every resident chunk, in
+                // coordinate order so the hash does not depend on the
+                // chunk map's iteration order.
+                std::uint64_t h = 1469598103934665603ull;
+                std::vector<world::ChunkCoord> coords;
+                wrld.for_each_chunk([&](world::ChunkCoord c, const world::Chunk&) {
+                    coords.push_back(c);
+                });
+                std::sort(coords.begin(), coords.end(),
+                          [](const world::ChunkCoord& a, const world::ChunkCoord& b) {
+                              return a.z != b.z ? a.z < b.z : a.x < b.x;
+                          });
+                for (const auto& c : coords) {
+                    for (int y = 0; y < world::kChunkSizeY; ++y)
+                        for (int z = 0; z < world::kChunkSizeZ; ++z)
+                            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                                const auto b = static_cast<std::uint8_t>(
+                                    wrld.block_at(c.x * world::kChunkSizeX + x, y,
+                                                  c.z * world::kChunkSizeZ + z));
+                                h = (h ^ b) * 1099511628211ull;
+                            }
+                }
+                return h;
+            };
+
+            const std::uint64_t before = world_hash();
+            const std::uint32_t tick_before = wrld.history_tick();
+
+            // A deterministic spread of edits: some fill air, some dig out
+            // ground, and the lattice crosses chunk boundaries so the
+            // neighbour-remesh path is exercised.
+            // Edit targets are drawn from the chunks that are actually
+            // resident, not from a lattice in absolute coordinates.
+            //
+            // The lattice version silently scaled its own coverage with
+            // --radius: set_block returns false for a chunk that is not
+            // resident, `made` just counted fewer, and the check still
+            // printed ok. At radius 5 it did 200 of its intended 400 edits
+            // and passed. Worse, the figures published in
+            // docs/time_travel.md were taken at radius 6 while audit.sh
+            // runs the default, so the doc quoted numbers the documented
+            // command does not print. Sizing the lattice from
+            // stream_radius instead was not enough either - the resident
+            // set is not exactly the square the radius implies.
+            //
+            // Asking the world which chunks it has is correct at every
+            // radius by construction, and `made == kEdits` below turns any
+            // remaining shortfall into a failure instead of a quieter run.
+            constexpr int kEdits = 400;
+            std::vector<world::ChunkCoord> resident;
+            wrld.for_each_chunk([&](world::ChunkCoord c, const world::Chunk&) {
+                resident.push_back(c);
+            });
+            // Sorted so the choice of targets does not depend on the chunk
+            // map's iteration order, which would make the run
+            // non-deterministic between builds.
+            std::sort(resident.begin(), resident.end(),
+                      [](const world::ChunkCoord& a, const world::ChunkCoord& b) {
+                          return a.z != b.z ? a.z < b.z : a.x < b.x;
+                      });
+            int made = 0;
+            // Timed because this loop IS the unbatched path: every
+            // set_block remeshes, relights and re-uploads its chunk
+            // immediately. The rewind below makes the same number of block
+            // changes with one remesh per touched chunk, so the two
+            // timings are a direct measurement of what batching buys.
+            const auto edit_t0 = std::chrono::steady_clock::now();
+            // Edits are spread over a BOUNDED number of chunks rather than
+            // over every resident one, and that bound is the honest part.
+            //
+            // Batching a history seek saves work only when several edits
+            // land in the same chunk: one remesh instead of many. Spread
+            // 400 edits across all 625 chunks of a radius-12 world and
+            // each chunk gets one, so batching saves nothing and the
+            // measured speedup collapses to 1x. Concentrate them and it
+            // is large. Neither number is wrong; the win is a function of
+            // how local the edits are, which is what a player building in
+            // one place actually does.
+            //
+            // Sixteen chunks keeps the correctness sweep wide enough to be
+            // worth running while leaving ~25 edits per chunk, and it is
+            // the same at every radius, so the reported ratio no longer
+            // moves with --radius. chunks_touched is printed so the
+            // locality behind the ratio is visible rather than implied.
+            const std::size_t kEditChunks =
+                std::min<std::size_t>(resident.size(), 16);
+            for (int i = 0; i < kEdits && !resident.empty(); ++i) {
+                // Round-robin over those chunks, with local offsets stepped
+                // by strides coprime to 16 so both boundary columns get hit
+                // and the neighbour-remesh path is exercised.
+                const world::ChunkCoord cc =
+                    resident[static_cast<std::size_t>(i) % kEditChunks];
+                const int lx = (i * 7) % world::kChunkSizeX;
+                const int lz = (i * 11) % world::kChunkSizeZ;
+                const int wx = cc.x * world::kChunkSizeX + lx;
+                const int wz = cc.z * world::kChunkSizeZ + lz;
+                const int wy = 24 + ((i * 7) % 40);
+                const world::BlockId now = wrld.block_at(wx, wy, wz);
+                const world::BlockId want = (now == world::BlockId::Air)
+                    ? world::BlockId::Glow : world::BlockId::Air;
+                if (wrld.set_block(wx, wy, wz, want)) ++made;
+            }
+            const double edit_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - edit_t0).count();
+            const std::uint64_t after = world_hash();
+            const std::uint32_t tick_after = wrld.history_tick();
+
+            const auto rewind = wrld.history_seek(tick_before);
+            const std::uint64_t rewound = world_hash();
+            // Meshes checked at the rewound state, where a skipped remesh
+            // shows: the voxels say air and the GPU still holds the block.
+            const int bad_after_rewind = wrld.debug_validate_gpu_meshes();
+            const auto replay = wrld.history_seek(tick_after);
+            const std::uint64_t replayed = world_hash();
+            const int bad_after_replay = wrld.debug_validate_gpu_meshes();
+
+            // The main verdict is settled here, before the branch test
+            // below, because that test deliberately discards the future
+            // and so shortens the log it would otherwise be checked
+            // against.
+            const std::size_t log_bytes = wrld.save_history(terrain_seed).size();
+            const bool main_ok =
+                // Every intended edit has to have landed. `made > 0` was
+                // the only floor before, so a run that managed half its
+                // edits still passed and quietly measured something else.
+                made == kEdits && after != before &&
+                tick_after == tick_before + static_cast<std::uint32_t>(made) &&
+                rewound == before && replayed == after &&
+                wrld.history_tick() == tick_after &&
+                wrld.history().size() == static_cast<std::size_t>(made) &&
+                bad_after_rewind == 0 && bad_after_replay == 0 &&
+                wrld.history_dropped() == 0 &&
+                // A rewind that touched voxels must have remeshed
+                // something. Zero here with edits applied is the batching
+                // having been skipped entirely.
+                rewind.chunks_remeshed > 0;
+
+            // The case an adversarial review found: build something while
+            // the world sits in its own past. The log is tick-ordered, so
+            // without the truncate in set_block the new edit is either
+            // refused outright (rewound more than a tick) or appended with
+            // a duplicate tick (rewound exactly one), and in both cases
+            // the world and its history stop describing the same place.
+            //
+            // Checked here rather than only in the unit tests because it
+            // is the wiring that was wrong, not the log.
+            wrld.history_seek(tick_before);
+            const std::uint32_t branch_from = wrld.history_tick();
+            int branch_x = 0, branch_y = 0, branch_z = 0;
+            bool branch_made = false;
+            for (int i = 0; i < 64 && !branch_made; ++i) {
+                // Inside the window for the same reason as the lattice: a
+                // branch target outside it silently fails to be made, and
+                // the branch check then passes or fails for the wrong
+                // reason. This used to be a fixed (100, 70, 100).
+                const world::ChunkCoord bc =
+                    resident[static_cast<std::size_t>(i) % kEditChunks];
+                branch_x = bc.x * world::kChunkSizeX + (i % world::kChunkSizeX);
+                branch_y = 70;
+                branch_z = bc.z * world::kChunkSizeZ;
+                branch_made = wrld.set_block(branch_x, branch_y, branch_z,
+                                             world::BlockId::Glow);
+            }
+            const std::uint64_t branched = world_hash();
+            const std::uint32_t branch_tick = wrld.history_tick();
+            // Rewinding past the new edit must remove it. Before the fix
+            // it survived, because nothing knew it was there.
+            wrld.history_seek(tick_before);
+            const bool branch_undone =
+                wrld.block_at(branch_x, branch_y, branch_z) != world::BlockId::Glow;
+            wrld.history_seek(branch_tick);
+            const bool branch_redone = world_hash() == branched;
+            const bool branch_ok =
+                branch_made && branch_undone && branch_redone &&
+                branch_tick == branch_from + 1 &&
+                // The future was discarded, so the log now ends here.
+                wrld.history_latest_tick() == branch_tick &&
+                wrld.history_dropped() == 0;
+
+            // Finding 5: a full reload must not leave the previous world's
+            // history behind. Done last, because it empties the world.
+            //
+            // Without the clear in clear_all(), the log keeps the old
+            // world's prev/next bytes with history_tick_ still at N, and
+            // the next seek writes blocks from a world the player never
+            // saw into the one they are standing in. --bench-io exercises
+            // clear_all and passed either way, because nothing seeks after
+            // a load; this is the assertion that closes it.
+            wrld.clear_all();
+            const bool reload_ok = wrld.history().empty() &&
+                                   wrld.history_tick() == 0 &&
+                                   wrld.history_latest_tick() == 0;
+
+            const bool ok = main_ok && branch_ok && reload_ok;
+
+            const double speedup = rewind.ms > 0.0 ? edit_ms / rewind.ms : 0.0;
+            std::printf("\nHISTORY edits=%d ticks=%u->%u "
+                        "unbatched_ms=%.1f rewind_ms=%.1f replay_ms=%.1f "
+                        "batch_speedup=%.1fx "
+                        "rewind_applied=%zu rewind_remeshed=%zu edit_chunks=%zu "
+                        "log_bytes=%zu bytes_per_edit=%.1f "
+                        "bad_tris_rewind=%d bad_tris_replay=%d dropped=%zu "
+                        "main_ok=%d branch_ok=%d reload_ok=%d %s\n",
+                        made, tick_before, tick_after,
+                        edit_ms, rewind.ms, replay.ms, speedup,
+                        rewind.applied, rewind.chunks_remeshed, kEditChunks,
+                        log_bytes,
+                        static_cast<double>(log_bytes) / std::max(1, made),
+                        bad_after_rewind, bad_after_replay, wrld.history_dropped(),
+                        main_ok ? 1 : 0, branch_ok ? 1 : 0, reload_ok ? 1 : 0,
+                        ok ? "ok" : "FAILED");
+            if (!ok) return EXIT_FAILURE;
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 

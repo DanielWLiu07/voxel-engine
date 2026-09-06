@@ -600,6 +600,16 @@ void World::clear_all() {
     // A full reload replaces world state wholesale; stale stashed edits
     // from the previous state must not leak into it.
     edited_stash_.clear();
+    // Nor may the edit history, which describes a world that no longer
+    // exists. Without this, a load leaves the log holding the PREVIOUS
+    // world's prev/next bytes with history_tick_ still at N, and the next
+    // seek writes them into the new world - blocks appearing from a world
+    // the player never saw. Nothing else ties a log to the world instance
+    // it was recorded against: decode()'s seed check guards the on-disk
+    // path, and that path is not wired to this one.
+    history_.clear();
+    history_tick_ = 0;
+    history_dropped_ = 0;
     ++generation_;  // in-flight jobs are now stale; drain_finished drops them
     std::lock_guard<std::mutex> lock(finished_mutex_);
     // Results already queued but not yet drained are dropped here, so their
@@ -624,20 +634,10 @@ BlockId World::block_at(int wx, int wy, int wz) const {
                                  floor_mod(wz, kChunkSizeZ));
 }
 
-bool World::set_block(int wx, int wy, int wz, BlockId b) {
-    if (wy < 0 || wy >= kChunkSizeY) return false;
-    ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
-    auto it = chunks_.find(cc);
-    if (it == chunks_.end()) return false;
-
-    ChunkSlot& slot = *it->second;
-    int lx = floor_mod(wx, kChunkSizeX);
-    int lz = floor_mod(wz, kChunkSizeZ);
-    if (slot.chunk.get(lx, wy, lz) == b) return false;
-
-    slot.chunk.set(lx, wy, lz, b);
-    slot.player_modified = true;
-    const auto edit_t0 = std::chrono::steady_clock::now();
+// The light + mesh + section rebuild a chunk needs after its voxels
+// change. Lifted out of set_block so a history seek can pay it once per
+// touched chunk rather than once per edit.
+void World::remesh_slot(ChunkSlot& slot, ChunkCoord cc) {
     std::uint8_t mask = 0;
     const NeighborPlanes planes = neighbor_planes_for(cc, &mask);
     const NeighborLight nlight = neighbor_light_for(cc);
@@ -657,6 +657,136 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
     apply_sections(slot, std::move(built), quad_ibo_);
     slot.section_visibility = compute_section_visibility(slot.chunk);
+}
+
+World::HistorySeekStats World::history_seek(std::uint32_t to_tick) {
+    HistorySeekStats stats;
+    const auto t0 = std::chrono::steady_clock::now();
+    if (to_tick == history_tick_) return stats;
+
+    // Recording off for the duration. Without this, undoing an edit would
+    // append the undo to the log as a fresh edit, and the history would
+    // grow every time it was replayed - the log would record the act of
+    // looking at it.
+    const bool was_recording = history_recording_;
+    history_recording_ = false;
+
+    // Voxels first, meshes after. The alternative - going through
+    // set_block per edit - remeshes the same chunk once per edit, and a
+    // scrub across a thousand edits in one chunk is one chunk's worth of
+    // work, not a thousand.
+    std::unordered_set<ChunkCoord, ChunkCoordHash> touched;
+    history_.seek(history_tick_, to_tick,
+                  [&](int wx, int wy, int wz, BlockId block) {
+        const ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+        auto it = chunks_.find(cc);
+        if (it == chunks_.end()) {
+            // The chunk streamed out, and this seek does NOT reach it.
+            //
+            // An earlier comment here claimed the edit "lives in
+            // edited_stash_ and will be applied when it comes back". That
+            // is not what the stash is: it is an RLE snapshot taken at
+            // eviction and restored verbatim, so a chunk evicted at tick
+            // 100 and restored while the world sits at tick 5 comes back
+            // holding tick-100 voxels - future edits visible in the past.
+            // Nothing replays the log against the stash and history_seek
+            // does not rewrite it.
+            //
+            // Reported rather than silently dropped, because that counter
+            // is currently the only signal that a seek did not reach the
+            // whole world. Rewriting the stash on seek is the fix, and it
+            // is listed as outstanding in docs/time_travel.md rather than
+            // described here as though it already happened.
+            ++stats.skipped_unloaded;
+            return;
+        }
+        const int lx = floor_mod(wx, kChunkSizeX);
+        const int lz = floor_mod(wz, kChunkSizeZ);
+        it->second->chunk.set(lx, wy, lz, block);
+        it->second->player_modified = true;
+        ++stats.applied;
+        touched.insert(cc);
+        // A boundary edit changes what the chunk next door should hide, so
+        // that neighbour is remeshed too - the same rule set_block follows.
+        if (lx == 0)                    touched.insert({cc.x - 1, cc.z});
+        else if (lx == kChunkSizeX - 1) touched.insert({cc.x + 1, cc.z});
+        if (lz == 0)                    touched.insert({cc.x, cc.z - 1});
+        else if (lz == kChunkSizeZ - 1) touched.insert({cc.x, cc.z + 1});
+    });
+
+    // Sorted, not iterated straight out of the unordered_set.
+    //
+    // remesh_slot relights each chunk against its neighbours' CURRENT
+    // light planes, so the order chunks are rebuilt in decides what
+    // cross-chunk light gets baked. Driving that from a hash container's
+    // iteration order puts a nondeterministic input into a rendering
+    // result, in a repo whose CI gates on byte-identical output. The sort
+    // costs nothing at these sizes.
+    std::vector<ChunkCoord> ordered(touched.begin(), touched.end());
+    std::sort(ordered.begin(), ordered.end(),
+              [](const ChunkCoord& a, const ChunkCoord& b) {
+                  return a.z != b.z ? a.z < b.z : a.x < b.x;
+              });
+    for (const ChunkCoord& cc : ordered) {
+        auto it = chunks_.find(cc);
+        if (it == chunks_.end()) continue;
+        remesh_slot(*it->second, cc);
+        ++stats.chunks_remeshed;
+    }
+
+    history_tick_ = to_tick > history_.latest_tick() ? history_.latest_tick()
+                                                     : to_tick;
+    history_recording_ = was_recording;
+    stats.ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    return stats;
+}
+
+bool World::set_block(int wx, int wy, int wz, BlockId b) {
+    if (wy < 0 || wy >= kChunkSizeY) return false;
+    ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
+    auto it = chunks_.find(cc);
+    if (it == chunks_.end()) return false;
+
+    ChunkSlot& slot = *it->second;
+    int lx = floor_mod(wx, kChunkSizeX);
+    int lz = floor_mod(wz, kChunkSizeZ);
+    if (slot.chunk.get(lx, wy, lz) == b) return false;
+
+    const BlockId prev = slot.chunk.get(lx, wy, lz);
+    slot.chunk.set(lx, wy, lz, b);
+    slot.player_modified = true;
+    // Recorded before the remesh so the log reflects the edit even if the
+    // rebuild below is changed or reordered later. Suspended during a
+    // history seek: navigating history is not a new entry in it.
+    if (history_recording_) {
+        // An edit made while the world sits in its own past discards the
+        // future first, the way an editor drops the redo stack when you
+        // undo and then type.
+        //
+        // Without this the edit is applied to the world and lost from the
+        // log, silently and in two different ways. Rewound more than one
+        // tick, the new tick lands inside the existing log and record()
+        // refuses it, so the block is placed and never recorded - it then
+        // survives a full rewind to tick 0, because nothing knows it is
+        // there. Rewound exactly one tick, record() accepts it (a tick
+        // equal to the last is legal, since one tick can hold many edits)
+        // and appends a duplicate, so scrubbing across that tick resurrects
+        // the edit the player just undid.
+        if (history_tick_ < history_.latest_tick()) {
+            history_.truncate_after(history_tick_);
+        }
+        const bool logged = history_.record(++history_tick_, wx, wy, wz, prev, b);
+        // record() refuses only what it could not replay, and the
+        // truncation above removes the only reason it could refuse a live
+        // edit. Reaching here false means the world and its log have
+        // diverged, which is worth counting rather than ignoring: the
+        // return used to be discarded entirely, and that is what let the
+        // bug above exist.
+        if (!logged) ++history_dropped_;
+    }
+    const auto edit_t0 = std::chrono::steady_clock::now();
+    remesh_slot(slot, cc);
     edit_last_ms_ = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - edit_t0).count();
     edit_total_ms_ += edit_last_ms_;

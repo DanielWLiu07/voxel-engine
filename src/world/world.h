@@ -6,6 +6,7 @@
 #include "gfx/shader.h"
 #include "world/chunk.h"
 #include "world/chunk_light.h"
+#include "world/edit_log.h"
 #include "world/chunk_mesh.h"
 #include "world/section_visibility.h"
 #include "world/terrain_gen.h"
@@ -20,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -206,6 +208,57 @@ public:
 
     BlockId block_at(int wx, int wy, int wz) const;
     bool    set_block(int wx, int wy, int wz, BlockId b);
+
+    // ----- history -----------------------------------------------------
+    //
+    // Every accepted edit is appended to a log, and the world can be moved
+    // back to any earlier point in it. Terrain is a pure function of the
+    // seed, so tick 0 is free: it is the world before anything was built.
+    //
+    // One edit, one tick. That is the finest scrubbing granularity
+    // available and it costs nothing, since the tick is just the edit's
+    // index and the log is 16 bytes a record.
+
+    struct HistorySeekStats {
+        std::size_t applied = 0;           // block changes made
+        std::size_t skipped_unloaded = 0;  // edits whose chunk is not resident
+        std::size_t chunks_remeshed = 0;
+        double      ms = 0.0;
+    };
+
+    // Moves the world to `to_tick`. Forwards replays, backwards undoes;
+    // both land on the world that existed at that tick.
+    //
+    // Edits are applied to voxel data first and the touched chunks are
+    // remeshed once each at the end, rather than remeshing per edit. A
+    // seek crossing a thousand edits in one chunk is one remesh, not a
+    // thousand - see docs/time_travel.md for what that is worth.
+    //
+    // Recording is suspended for the duration: a seek is navigation
+    // through history, not a new entry in it.
+    HistorySeekStats history_seek(std::uint32_t to_tick);
+
+    const EditLog& history() const { return history_; }
+    // Edits that reached the world but not the log. Always 0 in a correct
+    // build - a non-zero value means the two have diverged.
+    std::size_t    history_dropped() const { return history_dropped_; }
+    std::uint32_t  history_tick() const { return history_tick_; }
+    std::uint32_t  history_latest_tick() const { return history_.latest_tick(); }
+    // No public setter for recording. There was one, whose comment said
+    // loading a world "replays its saved edits through set_block" - which
+    // world_io.cpp does not do; it decodes chunks directly. It had no
+    // callers, and a knob nobody turns whose documentation describes a
+    // path that does not exist is worse than no knob. history_seek
+    // suspends recording internally, which is the only case that needs it.
+    bool history_recording() const { return history_recording_; }
+    bool load_history(std::span<const std::uint8_t> bytes, std::uint32_t seed) {
+        if (!EditLog::decode(bytes, history_, seed)) return false;
+        history_tick_ = history_.latest_tick();
+        return true;
+    }
+    std::vector<std::uint8_t> save_history(std::uint32_t seed) const {
+        return history_.encode(seed);
+    }
 
     struct RayHit {
         bool  hit = false;
@@ -426,6 +479,21 @@ private:
     // cannot pick up regenerated terrain from a job the wipe outran. Only
     // touched on the main thread (submit, drain, wipe), so not atomic.
     std::uint64_t                      generation_ = 0;
+
+    // Edit history. history_tick_ is where the world currently sits, which
+    // is the log's latest tick during normal play and something earlier
+    // while the player is scrubbing backwards.
+    EditLog       history_;
+    std::uint32_t history_tick_ = 0;
+    bool          history_recording_ = true;
+    // Edits applied to the world that the log refused. Should always be 0;
+    // exposed so a test can assert that rather than assume it.
+    std::size_t   history_dropped_ = 0;
+
+    // The mesh/light/visibility rebuild set_block does after changing a
+    // block, factored out so a history seek can do it once per touched
+    // chunk instead of once per edit.
+    void remesh_slot(ChunkSlot& slot, ChunkCoord cc);
     double                             total_worker_ms_  = 0.0;
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;

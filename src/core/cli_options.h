@@ -58,6 +58,11 @@ struct CliOptions {
     int bench_edit = 0;
     bool validate_mode = false;
     bool verify_edit_persistence = false;
+    // --verify-history: edit the world, rewind it to before the edits,
+    // check every block came back, replay forward, check it matches again.
+    // Needs GL because a rewind remeshes and uploads, so it lives here
+    // rather than in the GL-free unit tests.
+    bool verify_history = false;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;
