@@ -135,6 +135,42 @@ the largest step translation ever takes between two rebuilds. That is why
 the scroll step is 0.003 rad and not the 0.05 first tried, which rebuilt
 seven eighths of the visible world per notch.
 
+### What the motion costs
+
+A 3D engine moves the camera through geometry that is already meshed. A 4D
+engine's motion **invalidates** geometry: change the slice and every chunk
+in the window holds something different. Doing that as a whole-world
+re-mesh per step is what would make a 4D voxel engine unplayable, so
+chunks converge toward the current slice individually, nearest first,
+under a bounded per-frame budget.
+
+    ./build/voxel_engine --bench-4d --radius 8      # 289 chunks, M4
+
+| motion | main thread | behind when motion stopped | settle |
+|---|---|---|---|
+| travel along w, walk speed | 0.65-0.84 ms/frame | 241 / 289 chunks | 9-54 ms |
+| rotate, ~60 notches/sec | 0.68-0.78 ms/frame | **289 / 289** | 22-34 ms |
+
+Continuous rotation leaves the entire window stale - it invalidates faster
+than any bounded stream can replace, which is true of any continuous
+motion through w and is why the stream is bounded. The number that matters
+is what happens when the motion stops: the world converges in **tens of
+milliseconds**, and 4-5% of a 60 Hz frame is what the main thread pays
+while it does.
+
+That figure is worth checking against something derived independently.
+`./build/wcost 8` builds a cost model with no engine in it - generate
+every chunk, mesh every chunk - and predicts 429 ms single-threaded for a
+full 289-chunk rebuild, 48 ms spread over the 9-worker pool. The measured
+settle lands at or under that, so converging a fully stale window through
+the streaming path costs no more than a full re-mesh, and spreads it over
+frames instead of stopping the world for one.
+
+The chunk counts above reproduce exactly run to run; the timings are given
+as ranges because they are timings. Details, including the throughput
+column this bench deliberately does not have:
+[docs/bench/4d_motion.md](docs/bench/4d_motion.md).
+
 Both motions are verified rather than asserted. `--verify-4d` steps along
 w, rotates the slice, and checks that each one changes the world, returns
 it **exactly** when reversed, leaves every triangle valid under the same

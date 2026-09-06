@@ -316,8 +316,11 @@ int main(int argc, char** argv) {
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
-                                     .vsync   = vsync_enabled});
-    if (!win) return EXIT_FAILURE;
+                                     .vsync   = vsync_enabled,
+                                     .monitor = opt.monitor,
+                                     .list_monitors = opt.list_monitors});
+    // --list-monitors prints and stops, so a null window is success there.
+    if (!win) return opt.list_monitors ? EXIT_SUCCESS : EXIT_FAILURE;
     GLFWwindow* window = win->handle();
     // Section-graph occlusion culling (O to toggle). On by default; the
     // frustum-only path stays one keypress away (or --no-occlusion) for
@@ -1595,6 +1598,150 @@ int main(int argc, char** argv) {
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // --bench-4d: what does moving through the fourth dimension cost?
+        //
+        // The engine's other benches measure a STATIC world - how fast it
+        // draws, how much memory the meshes take. Neither says anything
+        // about the thing that makes a 4D engine hard, which is that
+        // moving along the fourth axis invalidates geometry rather than
+        // just moving the camera through it. A step along w changes what
+        // is in every chunk; a rotation changes it more.
+        //
+        // So this measures the two motions the same way, under the same
+        // 60 Hz pacing the render loop uses, and reports what each costs
+        // per unit of world change rather than per unit of input. Input
+        // units are not comparable: 0.003 rad and 0.003 w are wildly
+        // different amounts of new world (63.8% of columns against under
+        // 1%), so a bench that reported "ms per radian" against "ms per w"
+        // would be measuring two different things and inviting the
+        // comparison anyway.
+        if (opt.bench_4d && world_settled) {
+            struct Phase { const char* name; float w_rate; float theta_rate; };
+            // Rates a player can actually produce. 0.4 w/s is the walk
+            // speed along w; 0.18 rad/s is a steady scroll, about 60
+            // notches a second.
+            const Phase phases[] = {
+                {"translate", world::World::kWalkSpeedW, 0.0f},
+                {"rotate",    0.0f,                      0.18f},
+            };
+            constexpr int   kFrames = 300;        // five seconds each
+            constexpr float kDt = 1.0f / 60.0f;
+            // World::stream_slice's own default, named here so the report
+            // can say what the issued count is being measured against.
+            constexpr int   kStreamBudget = 24;
+
+            std::printf("\n4D motion cost, radius %d, %d frames per phase "
+                        "at 60 Hz\n\n", opt.stream_radius, kFrames);
+            // No chunks/sec column, deliberately. The first version had
+            // one and it reported 1430 for translation and 1439 for
+            // rotation - which is 24 x 60, the per-frame streaming budget
+            // times the frame rate, to three digits. Both phases saturate
+            // the budget every frame, so that column was reporting the
+            // CONSTANT and would have been quoted as a measured
+            // throughput. What the budget leaves is reported instead:
+            // whether the world keeps up at it, and how long it takes to
+            // converge once the motion stops.
+            std::printf("  %-10s %10s %10s %12s %12s %12s\n", "motion",
+                        "mean ms", "p99 ms", "issued/frame", "behind",
+                        "settle ms");
+
+            for (const Phase& ph : phases) {
+                // Start each phase from a converged world, so the first
+                // frames measure the motion and not the leftovers of the
+                // previous phase.
+                for (int guard = 0; guard < 4000; ++guard) {
+                    wrld.drain_finished(256);
+                    wrld.flush_pending_remeshes(pool, 256);
+                    if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
+                        && wrld.stream_slice(terrain, pool) == 0) break;
+                    std::this_thread::yield();
+                }
+                std::vector<double> frame_ms;
+                frame_ms.reserve(kFrames);
+                int chunks = 0;
+
+                const auto phase_t0 = std::chrono::steady_clock::now();
+                for (int f = 0; f < kFrames; ++f) {
+                    const auto frame_end = std::chrono::steady_clock::now() +
+                        std::chrono::microseconds(16667);
+                    const auto t0 = std::chrono::steady_clock::now();
+                    // Exactly the render loop's per-frame slice work.
+                    if (ph.w_rate != 0.0f) wrld.advance_w(ph.w_rate * kDt);
+                    if (ph.theta_rate != 0.0f)
+                        wrld.rotate_slice(ph.theta_rate * kDt);
+                    chunks += wrld.stream_slice(terrain, pool);
+                    wrld.drain_finished(wrld.pending_async() > 32 ? 48 : 16);
+                    wrld.flush_pending_remeshes(pool, 4);
+                    frame_ms.push_back(
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - t0).count());
+                    // Real pacing, for the same reason --verify-4d needs
+                    // it: without wall-clock time between frames the nine
+                    // workers never run, and the main thread measures
+                    // itself waiting on work that has not started.
+                    while (std::chrono::steady_clock::now() < frame_end)
+                        std::this_thread::yield();
+                }
+                const double elapsed_s =
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - phase_t0).count();
+
+                // How much of the resident world was behind the current
+                // slice at the moment the motion stopped. Captured HERE,
+                // before the settle loop below, or it would report a
+                // converged world every time and always read 0.
+                //
+                // The first version reported a w lag from near_meshed_w,
+                // and it read 0.000 for every rotate phase - not because
+                // rotation is free but because rotating does not change
+                // slice_w, so a w-based lag is zero by construction. It
+                // was a tautology in a results column. This counts stale
+                // chunks, which means the same thing on both axes.
+                const auto lag = wrld.slice_lag();
+
+                // Then: how long to converge once the motion STOPS. This
+                // is the number a player feels as the world catching up,
+                // and it is the one a whole-world rebuild would blow out.
+                const auto settle_t0 = std::chrono::steady_clock::now();
+                for (int guard = 0; guard < 4000; ++guard) {
+                    wrld.drain_finished(48);
+                    wrld.flush_pending_remeshes(pool, 4);
+                    if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
+                        && wrld.stream_slice(terrain, pool) == 0) break;
+                    std::this_thread::yield();
+                }
+                const double settle_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - settle_t0).count();
+
+                std::sort(frame_ms.begin(), frame_ms.end());
+                double sum = 0.0;
+                for (const double v : frame_ms) sum += v;
+                const double mean = sum / static_cast<double>(frame_ms.size());
+                const double p99 = frame_ms[static_cast<std::size_t>(
+                    (frame_ms.size() - 1) * 0.99)];
+                const double issued_per_frame =
+                    static_cast<double>(chunks) / kFrames;
+                char behind[32];
+                std::snprintf(behind, sizeof behind, "%d / %d",
+                              lag.stale, lag.resident);
+                std::printf("  %-10s %10.2f %10.2f %6.1f / %-5d %12s %12.0f\n",
+                            ph.name, mean, p99, issued_per_frame, kStreamBudget,
+                            behind, settle_ms);
+                (void)elapsed_s;
+            }
+            std::printf("\nmain-thread cost only; chunk generation and "
+                        "meshing run on the %d-worker pool.\n"
+                        "issued/frame at the budget means the motion "
+                        "invalidates geometry faster than the stream\n"
+                        "replaces it, so the figures to read are behind - "
+                        "how much of the resident world was\nstale when the "
+                        "motion stopped - and settle, how long it then took "
+                        "to converge.\n",
+                        static_cast<int>(pool.worker_count()));
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 

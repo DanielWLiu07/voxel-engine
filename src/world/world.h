@@ -281,6 +281,17 @@ public:
     // is what the eye checks.
     float near_meshed_w(int chunk_radius = 4) const;
 
+    // How many resident chunks are behind the current slice, and how many
+    // there are. The honest "is the world keeping up" measure for BOTH
+    // motions through w.
+    //
+    // near_meshed_w cannot do that job for a rotation: rotating does not
+    // change slice_w, so a w-based lag is zero by construction whatever
+    // the geometry is actually doing. This counts staleness the way
+    // stream_slice decides it, so it means the same thing on either axis.
+    struct SliceLag { int stale; int resident; };
+    SliceLag slice_lag() const;
+
     // Target interval between rebuilds while travelling along w, in
     // seconds. The threshold is derived from this and the player's speed
     // rather than fixed, so the rebuild rate does not scale with speed.

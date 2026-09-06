@@ -521,6 +521,21 @@ float World::near_meshed_w(int chunk_radius) const {
     return worst;
 }
 
+World::SliceLag World::slice_lag() const {
+    SliceLag out{0, 0};
+    for (const auto& kv : chunks_) {
+        ++out.resident;
+        // The same drift stream_slice uses, deliberately duplicated in
+        // shape rather than shared: this is a measurement of the policy,
+        // and a measurement that calls the policy's own helper would keep
+        // agreeing with it after the policy changed.
+        const float drift = std::fabs(slice_w_ - kv.second->slice_w) +
+                            std::fabs(slice_theta_ - kv.second->slice_theta) * 32.0f;
+        if (drift >= kSliceStepMin) ++out.stale;
+    }
+    return out;
+}
+
 int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
                         int budget) {
     if (!slice_gen_ || budget <= 0) return 0;
