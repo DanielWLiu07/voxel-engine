@@ -1408,6 +1408,83 @@ int main(int argc, char** argv) {
             // passed.
             const bool position_ok = std::fabs(wrld.slice_w() - w0) < 1e-4f;
 
+            // Rotating the slice, which is the motion that makes this look
+            // four-dimensional rather than merely indexed by a fourth
+            // number. Same three claims as travelling - it must change the
+            // world, it must be reversible, and the meshes must be right
+            // at the tilted stop - but along the axis that produces cross
+            // sections instead of swapping one axis-aligned world for
+            // another.
+            //
+            // This exists because the rotation shipped with generator-level
+            // tests and nothing at the engine level. The generator checks
+            // prove a tilted slice samples a different heightfield; they
+            // say nothing about whether World notices theta changed, whose
+            // per-chunk staleness is a separate mechanism with its own
+            // 32-block lever arm, and which was the part more likely to
+            // silently do nothing.
+            //
+            // Driven through stream_slice, which is the path the scroll
+            // wheel actually reaches, and NOT through resample_slice.
+            //
+            // The first version of this phase called resample_slice, and
+            // it passed with the per-chunk tilt staleness deleted -
+            // because resample_slice rebuilds the whole window
+            // unconditionally, so the world changed no matter what the
+            // staleness test said. It was checking that a tilted slice
+            // generates different terrain, which the generator tests
+            // already prove, rather than that World NOTICES a tilt. The
+            // fault injection is the only reason that surfaced.
+            //
+            // Rotation has no analogue of meshed_w to converge on, so the
+            // convergence test is the world's own: keep streaming until a
+            // settled world stops asking for chunks.
+            auto settle_slice = [&]() {
+                for (int guard = 0; guard < 4000; ++guard) {
+                    settle();
+                    if (wrld.stream_slice(terrain, pool) == 0) break;
+                }
+                settle();
+            };
+            // 0.25 rad, about 14 degrees. Far past the 0.003 a scroll notch
+            // gives, so this is many notches of turning, and far short of
+            // the pi/2 where the slice's z axis becomes w outright.
+            constexpr float kTilt = 0.25f;
+            const float theta0 = wrld.slice_theta();
+            wrld.rotate_slice(+kTilt);
+            settle_slice();
+            const std::uint64_t hash_tilt = world_hash();
+            const int bad_tilt = wrld.debug_validate_gpu_meshes();
+            wrld.rotate_slice(-kTilt);
+            settle_slice();
+            const std::uint64_t hash_untilt = world_hash();
+            const int bad_untilt = wrld.debug_validate_gpu_meshes();
+
+            // One scroll notch, which is a much sharper check than the
+            // large tilt above and pins a different thing.
+            //
+            // 0.25 rad is far over every threshold, so it passes with the
+            // staleness lever arm removed - verified by injecting exactly
+            // that: 32.0f -> 1.0f still reported tilt_changed=1. A single
+            // notch is the case the lever arm exists for. 0.003 rad on its
+            // own is below kSliceStepMin and no chunk would ever be
+            // rebuilt; multiplied by the nominal 32-block arm it is 0.096
+            // and the world responds to the very first notch. That is the
+            // difference between a scroll wheel that works and one that
+            // appears dead until you spin it far enough.
+            constexpr float kNotch = 0.003f;   // main's scroll scale
+            wrld.rotate_slice(+kNotch);
+            settle_slice();
+            const bool notch_moves_world = world_hash() != hash_w0;
+            wrld.rotate_slice(-kNotch);
+            settle_slice();
+
+            const bool tilt_ok = hash_tilt != hash_w0 &&
+                                 hash_untilt == hash_w0 &&
+                                 bad_tilt == 0 && bad_untilt == 0 &&
+                                 notch_moves_world &&
+                                 std::fabs(wrld.slice_theta() - theta0) < 1e-6f;
+
             // Simulated held key: the interactive path, driven exactly as
             // the render loop drives it - move_w once per frame with a
             // frame's worth of dt, then the same per-frame drain the loop
@@ -1491,7 +1568,7 @@ int main(int argc, char** argv) {
                 wrld.block_at(ex, ey, ez) == world::BlockId::Glow;
             const bool edit_ok = placed && edit_here && absent_away && back_again;
 
-            const bool ok = edit_ok && held_ok && requested > 0 &&
+            const bool ok = edit_ok && held_ok && tilt_ok && requested > 0 &&
                             hash_w1 != hash_w0 &&      // w is a real axis
                             hash_back == hash_w0 &&    // and a reversible one
                             hash_rapid == hash_w0 &&   // even under rapid steps
@@ -1502,7 +1579,8 @@ int main(int argc, char** argv) {
             std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
                         "changed=%d returned=%d rapid_ok=%d "
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
-                        "edit_survives_w=%d "
+                        "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
+                        "notch=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
@@ -1510,6 +1588,10 @@ int main(int argc, char** argv) {
                         hash_rapid == hash_w0 ? 1 : 0,
                         rebuilds, held_travelled, held_geometry,
                         edit_ok ? 1 : 0,
+                        hash_tilt != hash_w0 ? 1 : 0,
+                        (hash_untilt == hash_w0 && bad_tilt == 0
+                         && bad_untilt == 0) ? 1 : 0,
+                        notch_moves_world ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
