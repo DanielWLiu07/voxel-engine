@@ -614,7 +614,7 @@ int main(int argc, char** argv) {
                 // the other three.
                 const float w_speed = input.key_down(GLFW_KEY_LEFT_SHIFT)
                     ? world::World::kSprintSpeedW : world::World::kWalkSpeedW;
-                wrld.move_w(w_axis * w_speed * static_cast<float>(dt),
+                wrld.move_w(w_axis * w_speed * static_cast<float>(dt), w_speed,
                             terrain, pool);
             }
         }
@@ -1176,7 +1176,7 @@ int main(int argc, char** argv) {
             // that does not exist. This drives it the way the render loop
             // does, without waiting for frames.
             auto travel_to = [&](float target) {
-                wrld.move_w(target - wrld.slice_w(), terrain, pool);
+                wrld.move_w(target - wrld.slice_w(), 0.0f, terrain, pool);
                 for (int guard = 0; guard < 1000; ++guard) {
                     settle();
                     if (std::fabs(wrld.meshed_w() - wrld.slice_w()) < 1e-4f) break;
@@ -1189,7 +1189,7 @@ int main(int argc, char** argv) {
             const int bad_w0 = wrld.debug_validate_gpu_meshes();
 
             const auto step_t0 = std::chrono::steady_clock::now();
-            const int requested = wrld.move_w(+1.0f, terrain, pool);
+            const int requested = wrld.move_w(+1.0f, 0.0f, terrain, pool);
             travel_to(w0 + 1.0f);
             const double step_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - step_t0).count();
@@ -1211,8 +1211,8 @@ int main(int argc, char** argv) {
             // results, and it predates the 4D work. The phase is here
             // because rapid stepping is a real usage pattern worth
             // covering, not because it isolates a guard.
-            for (int i = 0; i < 3; ++i) wrld.move_w(+1.0f, terrain, pool);
-            for (int i = 0; i < 3; ++i) wrld.move_w(-1.0f, terrain, pool);
+            for (int i = 0; i < 3; ++i) wrld.move_w(+1.0f, 0.0f, terrain, pool);
+            for (int i = 0; i < 3; ++i) wrld.move_w(-1.0f, 0.0f, terrain, pool);
             travel_to(w0);
             const std::uint64_t hash_rapid = world_hash();
             const int bad_rapid = wrld.debug_validate_gpu_meshes();

@@ -227,6 +227,30 @@ public:
     // up to kSliceRemeshStep while the player is moving.
     float meshed_w() const { return meshed_w_; }
 
+    // How often the world is rebuilt while travelling along w, in
+    // seconds. The THRESHOLD is derived from this and the player's speed
+    // rather than fixed, so the rebuild rate stays constant however fast
+    // they move.
+    //
+    // A fixed threshold made speed and rebuild rate proportional, so
+    // sprinting asked for three times as many rebuilds as walking and
+    // simply outran the pool - the throttle then declined most of them
+    // and the world updated LESS the faster you went. Deriving the
+    // threshold instead means sprinting takes bigger steps at the same
+    // cadence: the terrain changes more per rebuild, which is what
+    // moving faster should look like, and the pool sees the same load.
+    //
+    // 0.3 s is about three rebuilds a second, which is what the pool
+    // sustains at radius 12 (625 chunks at ~2,200 chunks/sec is ~0.28 s
+    // each).
+    static constexpr float kSliceRebuildPeriod = 0.3f;
+
+    // Floor and ceiling on the derived threshold, so a near-zero speed
+    // cannot rebuild every frame and a very large one cannot make a
+    // single step jump the world somewhere unrecognisable.
+    static constexpr float kSliceStepMin = 0.04f;
+    static constexpr float kSliceStepMax = 0.60f;
+
     // How far the player can travel along w before the world is rebuilt
     // for the new position.
     //
@@ -266,7 +290,10 @@ public:
     // Chunks are NOT cleared: the old geometry keeps drawing until its
     // replacement lands, so travelling along w morphs the world rather
     // than blinking it.
-    int move_w(float delta, const TerrainGen& terrain, core::ThreadPool& pool);
+    // `speed` is the player's current w speed in units/sec, used only to
+    // derive the rebuild threshold; pass 0 to fall back to kSliceRemeshStep.
+    int move_w(float delta, float speed, const TerrainGen& terrain,
+               core::ThreadPool& pool);
 
     // Rebuilds at the current w regardless of how far it has drifted.
     int resample_slice(const TerrainGen& terrain, core::ThreadPool& pool);

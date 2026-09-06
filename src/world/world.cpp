@@ -349,14 +349,20 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
     }
 }
 
-int World::move_w(float delta, const TerrainGen& terrain,
+int World::move_w(float delta, float speed, const TerrainGen& terrain,
                   core::ThreadPool& pool) {
     if (!slice_gen_ || delta == 0.0f) return 0;
     slice_w_ += delta;
     // Travel along w is continuous; rebuilding is not. The world is
-    // rebuilt only once the player has moved far enough from the w the
-    // geometry was built at that the difference would be visible.
-    if (std::fabs(slice_w_ - meshed_w_) < kSliceRemeshStep) return 0;
+    // rebuilt once the player has moved far enough from the w the
+    // geometry was built at that the difference would be visible - and
+    // "far enough" scales with how fast they are going, so the rebuild
+    // cadence stays put while the step size grows. See
+    // kSliceRebuildPeriod.
+    const float step = (speed > 0.0f)
+        ? std::clamp(speed * kSliceRebuildPeriod, kSliceStepMin, kSliceStepMax)
+        : kSliceRemeshStep;
+    if (std::fabs(slice_w_ - meshed_w_) < step) return 0;
     return resample_slice(terrain, pool);
 }
 

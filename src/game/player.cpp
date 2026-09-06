@@ -53,6 +53,33 @@ float move_axis(const world::World& w, glm::vec3& pos, int axis, float delta) {
 
 }  // namespace
 
+// Lifts the player out of solid rock, returning how far they were moved.
+//
+// Nothing in the movement code can recover from being inside a block:
+// move_axis refuses every direction, so the player is stuck permanently.
+// In the 3D engine that state is unreachable, because terrain only
+// changes where the player themselves edits it and they are outside it
+// when they do. Travelling along w breaks that assumption - the world is
+// regenerated around a stationary player, and it can regenerate solid.
+//
+// Upward only, and one block at a time, so the player surfaces at the
+// nearest free space rather than being flung somewhere arbitrary.
+float unstick(const world::World& w, glm::vec3& pos) {
+    if (!aabb_collides(w, pos)) return 0.0f;
+    for (int lift = 1; lift <= 96; ++lift) {
+        glm::vec3 up = pos;
+        up.y += static_cast<float>(lift);
+        if (!aabb_collides(w, up)) {
+            pos = up;
+            return static_cast<float>(lift);
+        }
+    }
+    // Buried under more than 96 blocks of new terrain, which the height
+    // range makes impossible; left where they are rather than teleported
+    // somewhere invented.
+    return 0.0f;
+}
+
 void Player::set_position(const glm::vec3& feet) {
     position_ = feet;
     velocity_ = glm::vec3(0.0f);
@@ -61,6 +88,12 @@ void Player::set_position(const glm::vec3& feet) {
 
 void Player::update(const world::World& w, const glm::vec3& wish_horiz,
                     bool jump, float dt) {
+    // Before anything else: the world may have been rebuilt around us
+    // since the last frame. See unstick().
+    if (unstick(w, position_) > 0.0f) {
+        velocity_.y = 0.0f;
+        on_ground_ = false;
+    }
     glm::vec3 wish = wish_horiz;
     wish.y = 0.0f;
     velocity_.x = wish.x;
