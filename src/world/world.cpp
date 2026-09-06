@@ -301,7 +301,19 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     const TerrainGen4D* slice_gen = slice_gen_;
     const TerrainGen4D::Slice slice = this->slice();
     NeighborLight nlight = neighbor_light_for(c);
+    // A copy of whatever the player has built here on this slice, replayed
+    // over the terrain the worker is about to generate. Copied like every
+    // other captured value, so the main thread stays free to keep editing
+    // while the job runs.
+    std::vector<VoxelEdit> edits;
+    if (auto eit = slice_edits_.find(SliceCoord{c, edit_slice()});
+        eit != slice_edits_.end()) {
+        edits = eit->second;
+    }
+    const bool had_edits = !edits.empty();
+    if (had_edits) ++stream_replayed_;
     pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice,
+                 had_edits, edits = std::move(edits),
                  planes = std::move(planes),
                  nlight = std::move(nlight)]() {
         ZoneScopedN("chunk_worker_job");
@@ -318,6 +330,16 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         // the 3D engine, which is every existing path.
         if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
         else           terrain.fill_chunk(c.x, c.z, fc.chunk);
+        // Replay the player's edits over the fresh terrain, in the order
+        // they were made.
+        for (const VoxelEdit& e : edits) {
+            const std::uint32_t i = e.index;
+            const int y  = static_cast<int>(i / (kChunkSizeZ * kChunkSizeX));
+            const int rem = static_cast<int>(i % (kChunkSizeZ * kChunkSizeX));
+            fc.chunk.set(rem % kChunkSizeX, y, rem / kChunkSizeX,
+                         static_cast<BlockId>(e.block));
+        }
+        fc.preserve_on_evict = had_edits;
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
             t_after_terrain - t0).count();
@@ -441,13 +463,13 @@ int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
     // back - which is what makes building across the fourth dimension
     // work at all. Each slice keeps its own edits.
     //
-    // Every edited chunk is written down here, under the slice it
-    // currently belongs to, BEFORE the rebuild overwrites it. Eviction by
-    // distance used to be the only thing that stashed, and travelling
-    // along w does not evict: it regenerates in place, so without this an
-    // edit would be overwritten and lost having never been recorded.
+    // Chunks that came off disk are written down here before the rebuild
+    // overwrites them; the generator cannot reproduce those. Player edits
+    // do not need it - slice_edits_ replays them over regenerated
+    // terrain, which is also what lets an edited chunk keep changing with
+    // the slice instead of freezing at the moment it was built.
     for (const auto& kv : chunks_) {
-        if (!kv.second->player_modified) continue;
+        if (!kv.second->from_disk) continue;
         edited_stash_[SliceCoord{kv.first, meshed_slice_}] =
             encode_chunk_rle(kv.second->chunk, /*edited=*/true);
     }
@@ -608,43 +630,15 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
             }
         }
 
-        // An edited chunk must be written down before anything overwrites
-        // it, and this path used to overwrite it without looking.
+        // No special case for edited chunks any more, and that is the
+        // fix rather than an omission. request_terrain_chunk regenerates
+        // the terrain for the current slice and replays slice_edits_ over
+        // it, so a built structure turns with the world.
         //
-        // resample_slice stashes every player_modified chunk before
-        // rebuilding. This path did not, and it is the path the scroll
-        // wheel takes: one notch puts drift at 0.003 * 32 = 0.096, six
-        // times kSliceStepMin, for EVERY chunk in the window at once - so
-        // a single scroll destroyed every edit in the world, and scrolling
-        // back did not bring them back because nothing had recorded them.
-        //
-        // The stash key is the chunk's OWN slice, not the current one. An
-        // edit belongs where it was made: carrying it forward under the
-        // destination key would make a hole dug at w=0 reappear at w=5, in
-        // terrain that means something else.
-        auto it = chunks_.find(st.c);
-        if (it != chunks_.end() && it->second->player_modified) {
-            const std::int32_t home = slice_gen_
-                ? static_cast<std::int32_t>(std::floor(it->second->slice_w))
-                : 0;
-            edited_stash_[SliceCoord{st.c, home}] =
-                encode_chunk_rle(it->second->chunk, /*edited=*/true);
-            if (home == edit_slice()) {
-                // Still the slice the edit belongs to, so the edit still
-                // applies here: keep the chunk and re-stamp it to the
-                // current orientation rather than regenerating over it.
-                // Regenerating and letting the next pass restore from the
-                // stash would reach the same state, one flicker later.
-                Chunk keep = it->second->chunk;
-                enqueue_decoded_chunk(st.c, std::move(keep), pool,
-                                      /*preserve_on_evict=*/true,
-                                      slice());
-                ++issued;
-                continue;
-            }
-            // Different slice: the edit stays behind with its own, and
-            // fresh terrain is correct here.
-        }
+        // This used to stash the whole chunk and hand it back verbatim,
+        // which preserved the edit and froze everything around it: one
+        // placed block pinned its entire 16x256x16 chunk against every
+        // further turn of the wheel, while its neighbours kept rotating.
         request_terrain_chunk(st.c, terrain, pool);
         ++issued;
     }
@@ -665,6 +659,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                                            const TerrainGen& terrain,
                                            core::ThreadPool& pool) {
     StreamStats stats;
+    stream_replayed_ = 0;
     last_center_ = center;
     auto in_window = [&](ChunkCoord c) {
         return std::abs(c.x - center.x) <= radius
@@ -673,10 +668,11 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
 
     for (auto it = chunks_.begin(); it != chunks_.end(); ) {
         if (!in_window(it->first)) {
-            // Edits must survive eviction: regeneration from the terrain
-            // generator would silently undo them. Unmodified chunks are
-            // cheaper to regenerate than to keep.
-            if (it->second->player_modified) {
+            // Only chunks the generator cannot reproduce. A player's
+            // edits survive eviction through slice_edits_, which is
+            // replayed over regenerated terrain - so an edited chunk no
+            // longer has to be frozen whole to be preserved.
+            if (it->second->from_disk) {
                 edited_stash_[SliceCoord{it->first, edit_slice()}] =
                     encode_chunk_rle(it->second->chunk, /*edited=*/true);
                 ++stats.stashed;
@@ -718,6 +714,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             ++stats.requested;
         }
     }
+    stats.replayed = stream_replayed_;
     return stats;
 }
 
@@ -767,6 +764,7 @@ int World::drain_finished(int max_per_frame) {
             // stashing on eviction; the terrain generator cannot reproduce
             // them.
             new_slot->player_modified = fc.preserve_on_evict;
+            new_slot->from_disk = fc.from_disk;
             slot_it = chunks_.emplace(fc.coord, std::move(new_slot)).first;
         } else {
             // A re-mesh of a chunk that is already resident. Assigning the
@@ -774,6 +772,7 @@ int World::drain_finished(int max_per_frame) {
             // on the main thread, where deleting GL objects is legal.
             new_slot->player_modified = slot_it->second->player_modified ||
                                         fc.preserve_on_evict;
+            new_slot->from_disk = slot_it->second->from_disk || fc.from_disk;
             slot_it->second = std::move(new_slot);
         }
         slot_it->second->meshed_with = landed_mask;
@@ -890,7 +889,8 @@ int World::pending_async() const { return jobs_in_flight_.load(); }
 void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
                                   core::ThreadPool& pool,
                                   bool preserve_on_evict,
-                                  TerrainGen4D::Slice stamp) {
+                                  TerrainGen4D::Slice stamp,
+                                  bool from_disk) {
     const std::uint64_t seq = ++request_seq_;
     requested_[c] = seq;
     jobs_in_flight_.fetch_add(1);
@@ -899,7 +899,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, c, gen, seq, stamp, preserve_on_evict, mask, kind,
+    pool.submit([this, c, gen, seq, stamp, preserve_on_evict, from_disk, mask, kind,
                  planes = std::move(planes),
                  nlight = std::move(nlight),
                  chunk = std::move(chunk)]() mutable {
@@ -919,6 +919,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         fc.slice_z_shift = stamp.z_shift;
         fc.chunk = std::move(chunk);
         fc.preserve_on_evict = preserve_on_evict;
+        fc.from_disk = from_disk;
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
@@ -977,6 +978,16 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
 
     slot.chunk.set(lx, wy, lz, b);
     slot.player_modified = true;
+    // Recorded as a replay entry, not just as a flag. The terrain under
+    // an edit has to be free to change when the slice does, and it can
+    // only do that if the edit is stored separately from the chunk it
+    // sits in. Appended rather than deduplicated: replay is in order, so
+    // the last write to a voxel wins by construction.
+    slice_edits_[SliceCoord{cc, edit_slice()}].push_back(
+        VoxelEdit{static_cast<std::uint32_t>(
+                      (static_cast<std::size_t>(wy) * kChunkSizeZ + lz)
+                      * kChunkSizeX + lx),
+                  static_cast<std::uint8_t>(b)});
     const auto edit_t0 = std::chrono::steady_clock::now();
     std::uint8_t mask = 0;
     const NeighborPlanes planes = neighbor_planes_for(cc, &mask);

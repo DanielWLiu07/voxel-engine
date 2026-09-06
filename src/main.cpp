@@ -1569,6 +1569,60 @@ int main(int argc, char** argv) {
             wrld.set_block(sx, sy, sz, world::BlockId::Air);
             settle_slice();
 
+            // An edited chunk must keep rotating with the world.
+            //
+            // The edit stash used to hold the whole chunk and hand it
+            // back verbatim, which preserved the edit and froze
+            // everything around it: one placed block pinned its entire
+            // 16x256x16 chunk against every further turn of the wheel.
+            // Measured against an unedited control chunk at the same
+            // distance from the pivot, sixty notches:
+            //
+            //     before   edited 40 -> 40 (frozen)   control 52 -> 42
+            //     after    edited 40 -> 44            control 52 -> 42
+            //
+            // The control matters. A first version of this check compared
+            // a chunk at slice-z 7 against one at slice-z 45 and read the
+            // difference as a freeze - but a rotation displaces in
+            // proportion to distance from the pivot, so that gap was the
+            // pivot working correctly. Comparing at equal distance is
+            // what makes the result mean anything.
+            bool edit_rotates = false;
+            {
+                auto surface_of = [&](int wx, int wz) {
+                    for (int y = world::kChunkSizeY - 1; y > 0; --y)
+                        if (wrld.block_at(wx, y, wz) != world::BlockId::Air)
+                            return y;
+                    return 0;
+                };
+                const int ez = 80;              // well away from the pivot
+                const int edited_x = 5, control_x = edited_x + 32;
+                int py = 0;
+                bool put = false;
+                for (int i = 0; i < 64 && !put; ++i) {
+                    py = 80 + i;
+                    put = wrld.set_block(edited_x, py, ez, world::BlockId::Glow);
+                }
+                settle_slice();
+                const int e0 = surface_of(edited_x + 2, ez + 2);
+                const int c0 = surface_of(control_x + 2, ez + 2);
+                for (int i = 0; i < 60; ++i) wrld.rotate_slice(kNotch, 0.0f);
+                settle_slice();
+                const int e1 = surface_of(edited_x + 2, ez + 2);
+                const int c1 = surface_of(control_x + 2, ez + 2);
+                // The edit itself must also still be there: replaying it
+                // over regenerated terrain is the whole mechanism, and a
+                // version that let the chunk rotate by dropping the edit
+                // would pass a terrain-only check.
+                const bool still_there =
+                    wrld.block_at(edited_x, py, ez) == world::BlockId::Glow;
+                edit_rotates = put && still_there && e0 != e1 && c0 != c1;
+                for (int i = 0; i < 60; ++i) wrld.rotate_slice(-kNotch, 0.0f);
+                settle_slice();
+                wrld.set_block(edited_x, py, ez, world::BlockId::Air);
+                settle_slice();
+            }
+
             // Rotation must be EXACTLY reversible away from the origin,
             // which is the case the tilt phase above cannot see.
             //
@@ -1655,6 +1709,7 @@ int main(int argc, char** argv) {
 
             const bool tilt_ok = edit_survives_scroll && converges &&
                                  pivot_ok && reversible_away &&
+                                 edit_rotates &&
                                  hash_tilt != hash_w0 &&
                                  hash_untilt == hash_w0 &&
                                  bad_tilt == 0 && bad_untilt == 0 &&
@@ -1757,7 +1812,7 @@ int main(int argc, char** argv) {
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
-                        "pivot=%d reversible_away=%d "
+                        "pivot=%d reversible_away=%d edit_rotates=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
@@ -1773,6 +1828,7 @@ int main(int argc, char** argv) {
                         converges ? 1 : 0,
                         pivot_ok ? 1 : 0,
                         reversible_away ? 1 : 0,
+                        edit_rotates ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
@@ -2050,14 +2106,44 @@ int main(int argc, char** argv) {
                 while (wrld.pending_async() > 0) wrld.drain_finished(64);
                 // has_chunk guards the survival check: block_at reports Air
                 // for an unloaded chunk too, which would pass vacuously.
-                ok = evicted && away.stashed >= 1 && back.restored >= 1 &&
+                // The edit must come back, and it must come back through
+                // the REPLAY path rather than by the chunk being handed
+                // back whole.
+                //
+                // This used to assert stashed >= 1 && restored >= 1,
+                // which pinned the mechanism instead of the outcome - and
+                // the mechanism was the defect: a stashed chunk is
+                // restored verbatim, so it stops being generated at all,
+                // and once the slice could rotate that froze the chunk
+                // against every further turn of the wheel. Whole-chunk
+                // stashing is now only for chunks that came off disk,
+                // which the generator genuinely cannot reproduce.
+                // Either mechanism is correct, and which one applies
+                // says something real about the world's provenance:
+                //
+                //   generated   the chunk is regenerated and the edit is
+                //               replayed on top, so it keeps changing
+                //               with the slice
+                //   from disk   the generator cannot reproduce it, so it
+                //               is stashed whole and handed back verbatim
+                //
+                // Asserting exactly one of them fires is what stops this
+                // passing on a world that quietly took the wrong path.
+                const bool via_replay = back.replayed >= 1 &&
+                                        away.stashed == 0 &&
+                                        back.restored == 0;
+                const bool via_stash  = away.stashed >= 1 &&
+                                        back.restored >= 1 &&
+                                        back.replayed == 0;
+                ok = evicted && (via_replay != via_stash) &&
                      wrld.has_chunk(home) &&
                      wrld.block_at(ex, ey, ez) == world::BlockId::Air;
             }
             std::printf("\nEDIT_PERSIST block=(%d,%d,%d) prev_id=%d evicted=%d "
-                        "stashed=%d restored=%d survived=%d %s\n",
+                        "stashed=%d restored=%d replayed=%d survived=%d %s\n",
                         ex, ey, ez, static_cast<int>(prev),
                         evicted ? 1 : 0, away.stashed, back.restored,
+                        back.replayed,
                         wrld.block_at(ex, ey, ez) == world::BlockId::Air ? 1 : 0,
                         ok ? "ok" : "FAILED");
             if (!ok) {

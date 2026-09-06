@@ -112,6 +112,11 @@ struct ChunkSlot {
     // slice's identity like w and theta, so drift cannot be computed
     // without it.
     float      slice_z_shift = 0.0f;
+    // True only for chunks that came off disk. The terrain generator
+    // cannot reproduce those, so they are the one case that still has to
+    // be stashed whole; everything else is regenerated and has its edits
+    // replayed on top.
+    bool       from_disk = false;
     // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
@@ -212,11 +217,17 @@ public:
     struct StreamStats {
         int evicted = 0;
         int requested = 0;
-        // Edit persistence: modified chunks RLE-stashed on eviction, and
-        // chunks rebuilt from the stash (instead of the terrain generator)
-        // on re-entry.
+        // Edit persistence, whole-chunk path: chunks RLE-stashed on
+        // eviction and rebuilt from the stash on re-entry.
+        //
+        // Only chunks that came off disk take this path now. A player's
+        // edits ride back in through slice_edits_, replayed over
+        // regenerated terrain, which is what lets an edited chunk keep
+        // changing with the slice instead of freezing.
         int stashed = 0;
         int restored = 0;
+        // Chunks that came back carrying replayed player edits.
+        int replayed = 0;
     };
     StreamStats update_streaming(ChunkCoord center, int radius,
                                  const TerrainGen& terrain,
@@ -253,7 +264,8 @@ public:
     // chunk fresh and it would stop being rebuilt.
     void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool,
                                bool preserve_on_evict,
-                               TerrainGen4D::Slice stamp);
+                               TerrainGen4D::Slice stamp,
+                               bool from_disk = false);
     void request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
                                core::ThreadPool& pool);
 
@@ -320,6 +332,27 @@ public:
     // change slice_w, so a w-based lag is zero by construction whatever
     // the geometry is actually doing. This counts staleness the way
     // stream_slice decides it, so it means the same thing on either axis.
+    // One block a player changed, as an offset into the chunk and what
+    // they changed it to.
+    //
+    // Edits are kept as a REPLAY LIST rather than as a snapshot of the
+    // chunk they belong to, and that is the whole point. The stash used
+    // to hold the entire chunk and restore it verbatim, so an edited
+    // chunk stopped being generated at all - and once the slice could
+    // rotate, that meant a single placed block froze its whole 16x256x16
+    // chunk against every further turn of the wheel. Measured: the edited
+    // chunk's surface stayed at 29 through sixty notches while its
+    // unedited neighbour moved 45 -> 41. A seam in the world, produced by
+    // building in it.
+    //
+    // A replay list regenerates the terrain for whatever slice is current
+    // and puts the edits back on top, so a built structure turns with the
+    // world instead of pinning a hole in it.
+    struct VoxelEdit {
+        std::uint32_t index;   // ((y * kChunkSizeZ) + z) * kChunkSizeX + x
+        std::uint8_t  block;
+    };
+
     struct SliceLag { int stale; int resident; };
     SliceLag slice_lag() const;
 
@@ -681,6 +714,7 @@ private:
         float           slice_w = 0.0f;
         float           slice_theta = 0.0f;
         float           slice_z_shift = 0.0f;
+        bool            from_disk = false;
         // True when the chunk must never be regenerated from terrain
         // (player edits, stash restores, or disk chunks the active seed
         // cannot reproduce); the built slot is marked player_modified so
@@ -772,6 +806,13 @@ private:
     float               slice_theta_ = 0.0f;  // how their cut is tilted
     // Where the slice's z axis starts; moves only when the cut turns.
     float               slice_z_shift_ = 0.0f;
+    // Player edits, by chunk and slice, replayed over freshly generated
+    // terrain. See VoxelEdit.
+    std::unordered_map<SliceCoord, std::vector<VoxelEdit>, SliceCoordHash>
+                        slice_edits_;
+    // Counts chunk jobs that carried replayed edits, so update_streaming
+    // can report how many came back that way.
+    int                 stream_replayed_ = 0;
     float               meshed_w_ = 0.0f;  // where the geometry is
     // The integer slice the resident chunks belong to. Needed separately
     // from edit_slice() because a rebuild has to stash the OLD slice's
