@@ -530,6 +530,9 @@ World::SliceLag World::slice_lag() const {
         // shape rather than shared: this is a measurement of the policy,
         // and a measurement that calls the policy's own helper would keep
         // agreeing with it after the policy changed.
+        //
+        // The 32 is stream_slice's threshold-tripper, not a displacement
+        // estimate; see the comment there.
         const float drift = std::fabs(slice_w_ - kv.second->slice_w) +
                             std::fabs(slice_theta_ - kv.second->slice_theta) * 32.0f;
         if (drift >= kSliceStepMin) ++out.stale;
@@ -555,10 +558,24 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
     std::vector<Stale> stale;
     for (const auto& kv : chunks_) {
         // Either axis of the slice moving makes a chunk stale. The
-        // rotation is weighted by a nominal 32-block lever arm, because a
-        // small angle displaces distant geometry far more than the same
-        // number does as a w offset - without it a rotation would look
-        // like it was doing nothing until the angle grew large.
+        // rotation is weighted by 32, and that number is a
+        // threshold-tripper rather than a model of anything.
+        //
+        // The honest version of the weight is |z|: a tilt displaces a
+        // chunk in proportion to its distance from the axis, so 32 is
+        // about right two chunks out, under-weights by 6x at the edge of
+        // a radius-12 window, and by far more further out. Using |z|
+        // would be more faithful and would change almost nothing, because
+        // what this weight actually decides is whether the FIRST scroll
+        // notch registers at all: 0.003 rad unweighted is well under
+        // kSliceStepMin, so no chunk would ever be rebuilt and the wheel
+        // would appear dead until the angle grew large. At 32 it clears
+        // the threshold by 6x, and every chunk in the window is stale
+        // after one notch regardless of which weight is used.
+        //
+        // So it is doing one job and doing it: making the wheel respond
+        // immediately. It is not estimating displacement, and an earlier
+        // comment here implied it was.
         const float drift = std::fabs(slice_w_ - kv.second->slice_w) +
                             std::fabs(slice_theta_ - kv.second->slice_theta) * 32.0f;
         if (drift < kSliceStepMin) continue;

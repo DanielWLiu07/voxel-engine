@@ -751,24 +751,35 @@ int main(int argc, char** argv) {
             if (scroll != 0.0f) {
                 // 0.003 rad a notch, about a fifth of a degree.
                 //
-                // That sounds absurdly fine and is not: a rotated
-                // hyperplane diverges from the original linearly with
-                // distance, so at the edge of a radius-6 window a fifth of
-                // a degree already displaces the cut by half a world unit.
-                // Measured against a flat slice, per notch:
+                // Fine, but not as fine as it sounds: a rotated
+                // hyperplane diverges from the original in proportion to
+                // distance, so the far edge of the window moves several
+                // times more than the ground under the player. Measured
+                // against a flat slice over a 512-block window:
                 //
-                //     0.002 rad  27% of columns change, max jump  2
-                //     0.005 rad  51%                        5
-                //     0.010 rad  66%                        9
-                //     0.050 rad  88%                       20
+                //     0.003 rad  19% of columns change, max jump  2
+                //     0.010      50%                         6
+                //     0.030      73%                        15
+                //     0.050      81%                        17
                 //
-                // The first value I picked was 0.05 - a single notch
-                // rebuilt seven eighths of the visible world, which reads
-                // as the scene being replaced rather than reshaped.
-                // 0.003 puts one notch at about a third of the columns
-                // moving by a couple of blocks, so scrolling sweeps the
-                // cross-section instead of jumping between worlds.
-                wrld.rotate_slice(scroll * 0.003f);
+                // The first value chosen was 0.05, which moves four
+                // fifths of the visible columns in one notch - the scene
+                // being replaced rather than reshaped.
+                //
+                // Clamped per frame, because a wheel is not a keyboard.
+                // GLFW reports kinetic trackpad scrolling as a stream of
+                // large deltas, and the accumulator adds them all up
+                // between frames, so one flick could apply an arbitrary
+                // angle in a single step - past a quarter turn, which no
+                // amount of streaming budget can follow and which reads
+                // as the world being swapped. Eight notches is a fast
+                // deliberate turn and already moves about half the
+                // window; anything above it is the input device, not the
+                // player.
+                constexpr float kMaxNotchesPerFrame = 8.0f;
+                const float notches =
+                    std::clamp(scroll, -kMaxNotchesPerFrame, kMaxNotchesPerFrame);
+                wrld.rotate_slice(notches * 0.003f);
             }
 
             if (!opt.auto_w) {
