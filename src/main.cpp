@@ -1561,12 +1561,27 @@ int main(int argc, char** argv) {
             // completed drain cycle rather than a spin. A guard around a
             // body that can return in two microseconds is a spin count
             // wearing a timeout's clothes.
+            // Records a failure to converge rather than spinning on it.
+            //
+            // A world that never converges used to make this loop run its
+            // full guard and return quietly, so the phases after it
+            // measured a half-built world - or, with the guard large
+            // enough, the run simply produced no VERIFY4D line at all and
+            // CI saw an opaque timeout. A check that hangs instead of
+            // failing tells you less than no check.
+            bool settle_timed_out = false;
             auto settle_slice = [&]() {
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(30);
                 for (int guard = 0; guard < 4000; ++guard) {
                     settle();
-                    if (wrld.stream_slice(terrain, pool) == 0) break;
+                    if (wrld.stream_slice(terrain, pool) == 0) { settle(); return; }
+                    if (std::chrono::steady_clock::now() > deadline) break;
                 }
-                settle();
+                settle_timed_out = true;
+                std::fprintf(stderr, "[verify-4d] the world stopped "
+                             "converging: %d of %d chunks stale\n",
+                             wrld.slice_lag().stale, wrld.slice_lag().resident);
             };
             // 0.25 rad, about 14 degrees. Far past the 0.003 a scroll notch
             // gives, so this is many notches of turning, and far short of
@@ -1831,6 +1846,94 @@ int main(int argc, char** argv) {
                 std::fabs(wrld.slice_theta() - theta0) < 1e-4f;
             settle_slice();
 
+            // A tilt must survive travelling along w.
+            //
+            // Every hash check in this mode runs at theta = 0 and every
+            // rotation check runs at w = 0, so the two axes were never
+            // combined and nothing noticed a travel that silently threw
+            // the tilt away. Setting slice_theta_ = 0 at the top of
+            // resample_slice passed the whole suite with every field 1.
+            bool tilt_survives_travel = false;
+            {
+                const float t0 = wrld.slice_theta();
+                for (int i = 0; i < 30; ++i) wrld.rotate_slice(kNotch, 0.0f);
+                const float tilted = wrld.slice_theta();
+                travel_to(w0 + 1.0f);
+                const float after_out = wrld.slice_theta();
+                travel_to(w0);
+                const float after_back = wrld.slice_theta();
+                tilt_survives_travel =
+                    std::fabs(tilted - t0) > 1e-4f &&
+                    std::fabs(after_out - tilted) < 1e-4f &&
+                    std::fabs(after_back - tilted) < 1e-4f;
+                if (!tilt_survives_travel) {
+                    std::fprintf(stderr, "[verify-4d] travel changed the tilt: "
+                                 "%.4f -> %.4f -> %.4f\n",
+                                 tilted, after_out, after_back);
+                }
+                for (int i = 0; i < 30; ++i) wrld.rotate_slice(-kNotch, 0.0f);
+                settle_slice();
+            }
+
+            // Turning about the player must leave the player's own
+            // terrain EXACTLY where it was.
+            //
+            // This is the pivot's other half, and it had no coverage at
+            // all: pivot_ok compares staleness COUNTS through
+            // slice_drift, and slice_w_ still moves with player_z in
+            // rotate_slice, so the counts stay comparable even when the
+            // sampling is wrong. Deleting z_shift from to_4d - the line
+            // that actually carries the pivot into the generator - passed
+            // the entire suite with pivot=1, while the ground under the
+            // player slid out from under them:
+            //
+            //     player's own row   pristine 0/128 moved, fault 69/128
+            //     control row        pristine 103/128,     fault 106/128
+            //
+            // So this reads the terrain, not the bookkeeping.
+            bool player_ground_fixed = false;
+            {
+                const int pz = 400;                  // away from the origin
+                const int cz = (pz / world::kChunkSizeZ) * world::kChunkSizeZ;
+                wrld.update_streaming(
+                    world::ChunkCoord{0, cz / world::kChunkSizeZ}, 4,
+                    terrain, pool);
+                settle_slice();
+                auto row = [&](std::vector<int>& out) {
+                    out.clear();
+                    for (int x = 0; x < world::kChunkSizeX; ++x) {
+                        int top = 0;
+                        for (int y = world::kChunkSizeY - 1; y > 0; --y)
+                            if (wrld.block_at(x, y, cz) != world::BlockId::Air) {
+                                top = y; break;
+                            }
+                        out.push_back(top);
+                    }
+                };
+                std::vector<int> before, after;
+                row(before);
+                const float pivot_z =
+                    static_cast<float>(cz) + world::kChunkSizeZ / 2.0f;
+                for (int i = 0; i < 20; ++i) wrld.rotate_slice(kNotch, pivot_z);
+                settle_slice();
+                row(after);
+                int moved = 0;
+                for (std::size_t i = 0; i < before.size(); ++i)
+                    if (before[i] != after[i]) ++moved;
+                // Not a tolerance: the player's own row is the fixed point
+                // of the rotation, so it must not move at all.
+                player_ground_fixed = (moved == 0);
+                if (!player_ground_fixed) {
+                    std::fprintf(stderr, "[verify-4d] the ground under the "
+                                 "player moved under a rotation about them: "
+                                 "%d of %zu columns\n", moved, before.size());
+                }
+                for (int i = 0; i < 20; ++i) wrld.rotate_slice(-kNotch, pivot_z);
+                wrld.update_streaming(world::ChunkCoord{0, 0}, opt.stream_radius,
+                                      terrain, pool);
+                settle_slice();
+            }
+
             // The wheel must do the same thing wherever the player is
             // standing, and that is a property of the PIVOT rather than
             // of the rotation.
@@ -1892,8 +1995,11 @@ int main(int argc, char** argv) {
             wrld.rotate_slice(-kNotch * 3.0f, 0.0f);
             settle_slice();
 
-            const bool tilt_ok = edit_survives_scroll && converges &&
-                                 pivot_ok && reversible_away &&
+            const bool tilt_ok = !settle_timed_out &&
+                                 edit_survives_scroll && converges &&
+                                 pivot_ok && player_ground_fixed &&
+                                 tilt_survives_travel &&
+                                 reversible_away &&
                                  edit_rotates && namespace_stable &&
                                  hash_tilt != hash_w0 &&
                                  hash_untilt == hash_w0 &&
@@ -1997,7 +2103,9 @@ int main(int argc, char** argv) {
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
-                        "pivot=%d reversible_away=%d edit_rotates=%d "
+                        "pivot=%d ground_fixed=%d tilt_survives_travel=%d "
+                        "reversible_away=%d "
+                        "edit_rotates=%d settled=%d "
                         "edit_ns_stable=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
@@ -2013,8 +2121,11 @@ int main(int argc, char** argv) {
                         edit_survives_scroll ? 1 : 0,
                         converges ? 1 : 0,
                         pivot_ok ? 1 : 0,
+                        player_ground_fixed ? 1 : 0,
+                        tilt_survives_travel ? 1 : 0,
                         reversible_away ? 1 : 0,
                         edit_rotates ? 1 : 0,
+                        settle_timed_out ? 0 : 1,
                         namespace_stable ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");

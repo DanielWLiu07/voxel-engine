@@ -546,6 +546,78 @@ void test_rotating_the_slice_changes_the_cross_section() {
            "a tilt is a place, not a mutation");
 }
 
+void test_w_is_continuous_not_a_staircase_of_worlds() {
+    // The header warns that an integer w would make the fourth axis "a
+    // menu: you jump between discrete worlds". Nothing checked it.
+    //
+    // Every w test in this file compares integer slices - {0} against
+    // {1}, {3}, {40} - so quantising w inside to_4d, which is exactly the
+    // failure the design exists to avoid, left all 65 checks passing.
+    // The engine caught it and the generator did not, and the generator
+    // is where it belongs: kSliceStepMin is 0.015 and a walk covers 0.4
+    // of a w per second, so sub-unit resolution is the whole mechanism.
+    //
+    // The theta axis has had this test since the wheel landed; this is
+    // its counterpart. Twelve steps of 0.05, measured against the
+    // previous step rather than against the start, because that is what
+    // distinguishes a slide from a sequence of jumps.
+    const world::TerrainGen4D t(1337);
+    auto step = [&](float a, float b) {
+        int diff = 0, n = 0, worst = 0;
+        for (int z = -96; z < 96; z += 2)
+            for (int x = -96; x < 96; x += 2) {
+                const int ha = t.height_at(x, z, {a, 0.0f});
+                const int hb = t.height_at(x, z, {b, 0.0f});
+                if (ha != hb) ++diff;
+                worst = std::max(worst, std::abs(ha - hb));
+                ++n;
+            }
+        return std::pair<double, int>{100.0 * diff / n, worst};
+    };
+
+    constexpr float kStep = 0.05f;
+    double most = 0.0, least = 100.0;
+    for (int i = 1; i <= 12; ++i) {
+        const auto d = step((i - 1) * kStep, i * kStep);
+        // Every sub-unit step must MOVE something. Under a quantised w
+        // eleven of these twelve are identical worlds, which is the
+        // failure stated plainly.
+        EXPECT(d.first > 1.0, "a fraction of a w changes the world");
+        EXPECT(d.second <= 3, "and does not lurch");
+        most = std::max(most, d.first);
+        least = std::min(least, d.first);
+    }
+    EXPECT(most < least * 3.0, "every step moves a comparable amount");
+}
+
+void test_w_runs_both_ways_from_the_origin() {
+    // Negative w is a place, not an error, and nothing sampled one.
+    //
+    // The whole suite lives at w >= 0, so a sign or truncation mistake
+    // anywhere on the axis was invisible - including the difference
+    // between floor and truncate, which collapses (-1, 0) onto slice 0
+    // and is what keys the edit namespace.
+    const world::TerrainGen4D t(1337);
+    auto differs = [&](world::TerrainGen4D::Slice a,
+                       world::TerrainGen4D::Slice b) {
+        int diff = 0;
+        for (int z = -64; z < 64; z += 4)
+            for (int x = -64; x < 64; x += 4)
+                if (t.height_at(x, z, a) != t.height_at(x, z, b)) ++diff;
+        return diff;
+    };
+    EXPECT(differs({-3.0f, 0.0f}, {3.0f, 0.0f}) > 0,
+           "w = -3 is not w = +3");
+    EXPECT(differs({-0.5f, 0.0f}, {0.5f, 0.0f}) > 0,
+           "and the two sides of the origin are different places");
+    EXPECT(differs({-2.0f, 0.0f}, {-2.0f, 0.0f}) == 0,
+           "a negative slice is still a place, reached the same way twice");
+    // Symmetry would be a bug: a field that mirrored about w=0 would make
+    // travelling backwards retrace the world you just left.
+    EXPECT(differs({-1.0f, 0.0f}, {1.0f, 0.0f}) > 0,
+           "the axis is not mirrored about the origin");
+}
+
 void test_scrolling_is_a_sweep_not_a_sequence_of_jumps() {
     // The claim the whole wheel rests on: turning it SWEEPS the
     // cross-section rather than stepping between unrelated worlds.
@@ -660,6 +732,8 @@ int main() {
     std::printf("terrain4d_tests: running...\n\n");
     test_w_actually_changes_the_world();
     test_rotating_the_slice_changes_the_cross_section();
+    test_w_is_continuous_not_a_staircase_of_worlds();
+    test_w_runs_both_ways_from_the_origin();
     test_scrolling_is_a_sweep_not_a_sequence_of_jumps();
     test_a_tilted_slice_is_still_the_same_kind_of_world();
     test_adjacent_slices_are_related_not_unrelated();
