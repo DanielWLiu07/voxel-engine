@@ -3,6 +3,7 @@
 #include "world/chunk.h"
 #include "world/chunk_serialize.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace world {
@@ -48,6 +49,17 @@ bool EditLog::record(std::uint32_t tick, int x, int y, int z,
                                   static_cast<std::int32_t>(z),
                                   static_cast<std::uint8_t>(y), p, n, 0});
     return true;
+}
+
+std::size_t EditLog::truncate_after(std::uint32_t tick) {
+    // Records are tick-ordered, so everything to drop is a suffix.
+    const auto first_after = std::find_if(
+        records_.begin(), records_.end(),
+        [tick](const EditRecord& r) { return r.tick > tick; });
+    const std::size_t dropped =
+        static_cast<std::size_t>(records_.end() - first_after);
+    records_.erase(first_after, records_.end());
+    return dropped;
 }
 
 std::vector<std::uint8_t> EditLog::encode(std::uint32_t seed) const {

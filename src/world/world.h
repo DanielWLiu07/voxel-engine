@@ -239,6 +239,9 @@ public:
     HistorySeekStats history_seek(std::uint32_t to_tick);
 
     const EditLog& history() const { return history_; }
+    // Edits that reached the world but not the log. Always 0 in a correct
+    // build - a non-zero value means the two have diverged.
+    std::size_t    history_dropped() const { return history_dropped_; }
     std::uint32_t  history_tick() const { return history_tick_; }
     std::uint32_t  history_latest_tick() const { return history_.latest_tick(); }
     // Loading a world replays its saved edits through set_block, which
@@ -481,6 +484,9 @@ private:
     EditLog       history_;
     std::uint32_t history_tick_ = 0;
     bool          history_recording_ = true;
+    // Edits applied to the world that the log refused. Should always be 0;
+    // exposed so a test can assert that rather than assume it.
+    std::size_t   history_dropped_ = 0;
 
     // The mesh/light/visibility rebuild set_block does after changing a
     // block, factored out so a history seek can do it once per touched

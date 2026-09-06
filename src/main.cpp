@@ -1073,16 +1073,23 @@ int main(int argc, char** argv) {
         // through its own edits and forward again, landing on exactly the
         // world that existed at each point.
         //
-        // This lives here rather than in the unit tests because a rewind
-        // remeshes and re-uploads every touched chunk, and that needs a GL
-        // context. tests/test_edit_log.cpp covers the log's own logic;
-        // this covers the wiring - that edits are recorded from the real
-        // edit path, and that a seek moves real chunk data.
+        // Two things are checked, and the second is the one that needs GL.
         //
-        // The comparison is a full block-for-block hash of the resident
-        // world, not a spot check on the edited cells: a rewind that
-        // restored the edits but corrupted a neighbouring chunk would pass
-        // a spot check and fail this.
+        // The voxel side is an FNV-1a hash of every block in every
+        // resident chunk, in coordinate order - not a spot check on the
+        // edited cells, so a rewind that restored the edits and corrupted
+        // a neighbouring chunk fails here.
+        //
+        // The GPU side is debug_validate_gpu_meshes(), the same read-back
+        // --validate uses: every triangle in every uploaded mesh has to be
+        // an axis-aligned face backed by a solid block. Without it this
+        // check was voxel-only, and an adversarial review proved the point
+        // by deleting the entire remesh loop from history_seek: the world
+        // hash still matched, the flag still printed ok, audit.sh still
+        // passed, and every rewound edit would still have been on screen
+        // because the meshes described a world that no longer existed.
+        // The header comment here used to claim the check needed GL. It
+        // did not. Now it does.
         if (verify_history && world_settled) {
             auto world_hash = [&wrld]() {
                 // FNV-1a over every block in every resident chunk, in
@@ -1140,14 +1147,68 @@ int main(int argc, char** argv) {
 
             const auto rewind = wrld.history_seek(tick_before);
             const std::uint64_t rewound = world_hash();
+            // Meshes checked at the rewound state, where a skipped remesh
+            // shows: the voxels say air and the GPU still holds the block.
+            const int bad_after_rewind = wrld.debug_validate_gpu_meshes();
             const auto replay = wrld.history_seek(tick_after);
             const std::uint64_t replayed = world_hash();
+            const int bad_after_replay = wrld.debug_validate_gpu_meshes();
 
-            const bool ok = made > 0 && after != before &&
-                            tick_after == tick_before + static_cast<std::uint32_t>(made) &&
-                            rewound == before && replayed == after &&
-                            wrld.history_tick() == tick_after &&
-                            wrld.history().size() == static_cast<std::size_t>(made);
+            // The main verdict is settled here, before the branch test
+            // below, because that test deliberately discards the future
+            // and so shortens the log it would otherwise be checked
+            // against.
+            const std::size_t log_bytes = wrld.save_history(terrain_seed).size();
+            const bool main_ok =
+                made > 0 && after != before &&
+                tick_after == tick_before + static_cast<std::uint32_t>(made) &&
+                rewound == before && replayed == after &&
+                wrld.history_tick() == tick_after &&
+                wrld.history().size() == static_cast<std::size_t>(made) &&
+                bad_after_rewind == 0 && bad_after_replay == 0 &&
+                wrld.history_dropped() == 0 &&
+                // A rewind that touched voxels must have remeshed
+                // something. Zero here with edits applied is the batching
+                // having been skipped entirely.
+                rewind.chunks_remeshed > 0;
+
+            // The case an adversarial review found: build something while
+            // the world sits in its own past. The log is tick-ordered, so
+            // without the truncate in set_block the new edit is either
+            // refused outright (rewound more than a tick) or appended with
+            // a duplicate tick (rewound exactly one), and in both cases
+            // the world and its history stop describing the same place.
+            //
+            // Checked here rather than only in the unit tests because it
+            // is the wiring that was wrong, not the log.
+            wrld.history_seek(tick_before);
+            const std::uint32_t branch_from = wrld.history_tick();
+            int branch_x = 0, branch_y = 0, branch_z = 0;
+            bool branch_made = false;
+            for (int i = 0; i < 64 && !branch_made; ++i) {
+                branch_x = 100 + i;
+                branch_y = 70;
+                branch_z = 100;
+                branch_made = wrld.set_block(branch_x, branch_y, branch_z,
+                                             world::BlockId::Glow);
+            }
+            const std::uint64_t branched = world_hash();
+            const std::uint32_t branch_tick = wrld.history_tick();
+            // Rewinding past the new edit must remove it. Before the fix
+            // it survived, because nothing knew it was there.
+            wrld.history_seek(tick_before);
+            const bool branch_undone =
+                wrld.block_at(branch_x, branch_y, branch_z) != world::BlockId::Glow;
+            wrld.history_seek(branch_tick);
+            const bool branch_redone = world_hash() == branched;
+            const bool branch_ok =
+                branch_made && branch_undone && branch_redone &&
+                branch_tick == branch_from + 1 &&
+                // The future was discarded, so the log now ends here.
+                wrld.history_latest_tick() == branch_tick &&
+                wrld.history_dropped() == 0;
+
+            const bool ok = main_ok && branch_ok;
 
             const double speedup = rewind.ms > 0.0 ? edit_ms / rewind.ms : 0.0;
             std::printf("\nHISTORY edits=%d ticks=%u->%u "
@@ -1155,14 +1216,15 @@ int main(int argc, char** argv) {
                         "batch_speedup=%.1fx "
                         "rewind_applied=%zu rewind_remeshed=%zu "
                         "log_bytes=%zu bytes_per_edit=%.1f "
-                        "rewound_ok=%d replayed_ok=%d %s\n",
+                        "bad_tris_rewind=%d bad_tris_replay=%d dropped=%zu "
+                        "main_ok=%d branch_ok=%d %s\n",
                         made, tick_before, tick_after,
                         edit_ms, rewind.ms, replay.ms, speedup,
                         rewind.applied, rewind.chunks_remeshed,
-                        wrld.save_history(terrain_seed).size(),
-                        static_cast<double>(wrld.save_history(terrain_seed).size())
-                            / std::max(1, made),
-                        rewound == before ? 1 : 0, replayed == after ? 1 : 0,
+                        log_bytes,
+                        static_cast<double>(log_bytes) / std::max(1, made),
+                        bad_after_rewind, bad_after_replay, wrld.history_dropped(),
+                        main_ok ? 1 : 0, branch_ok ? 1 : 0,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
             glfwSetWindowShouldClose(window, GLFW_TRUE);

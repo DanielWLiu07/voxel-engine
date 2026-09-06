@@ -279,6 +279,68 @@ void test_seeking_past_the_end_is_the_same_as_seeking_to_the_end() {
     EXPECT(mismatches == 0, "seeking beyond the log stops at the last edit");
 }
 
+// ----- editing after a rewind ----------------------------------------------
+//
+// The case an adversarial review found, and the one this feature is most
+// likely to be wrong about in practice: the player scrubs back, then
+// builds something. The log is tick-ordered, so a new record made while
+// the world sits in its own past is either refused (its tick goes
+// backwards) or appended with a duplicate tick. Both leave the world and
+// its history describing different places, and neither says a word.
+
+void test_editing_after_a_rewind_discards_the_future() {
+    world::EditLog log;
+    log.record(1, 0, 40, 0, world::BlockId::Air,   world::BlockId::Stone);
+    log.record(2, 1, 40, 0, world::BlockId::Air,   world::BlockId::Wood);
+    log.record(3, 2, 40, 0, world::BlockId::Air,   world::BlockId::Glow);
+
+    // Rewound to tick 1, so ticks 2 and 3 are the future.
+    const std::size_t dropped = log.truncate_after(1);
+    EXPECT(dropped == 2, "two future records were dropped");
+    EXPECT(log.size() == 1, "one record survives");
+    EXPECT(log.latest_tick() == 1, "and the log now ends where the world is");
+
+    // A new edit at tick 2 is now ordinary, not a collision.
+    EXPECT(log.record(2, 9, 40, 9, world::BlockId::Air, world::BlockId::Sand),
+           "the new edit is accepted");
+
+    Blocks blocks;
+    log.seek(0, 2, applier(blocks));
+    EXPECT(at(blocks, 0, 40, 0) == world::BlockId::Stone, "tick 1 survived");
+    EXPECT(at(blocks, 9, 40, 9) == world::BlockId::Sand,  "the new edit is there");
+    EXPECT(at(blocks, 1, 40, 0) == world::BlockId::Air, "the discarded future is gone");
+    EXPECT(at(blocks, 2, 40, 0) == world::BlockId::Air, "all of it");
+}
+
+void test_truncate_handles_its_edges() {
+    world::EditLog log;
+    for (std::uint32_t t = 1; t <= 5; ++t) {
+        log.record(t, static_cast<int>(t), 40, 0,
+                   world::BlockId::Air, world::BlockId::Stone);
+    }
+    EXPECT(log.truncate_after(5) == 0, "truncating at the end drops nothing");
+    EXPECT(log.truncate_after(99) == 0, "nor does truncating past it");
+    EXPECT(log.size() == 5, "and the log is intact");
+    EXPECT(log.truncate_after(0) == 5, "truncating at 0 drops everything");
+    EXPECT(log.empty() && log.latest_tick() == 0, "leaving an empty log");
+    EXPECT(log.truncate_after(3) == 0, "truncating an empty log is safe");
+}
+
+void test_truncate_keeps_every_edit_sharing_the_boundary_tick() {
+    // One tick can hold many edits, so truncate_after(N) must keep all of
+    // tick N and drop all of N+1. Dropping part of a tick would leave the
+    // world half-way through a moment that did exist.
+    world::EditLog log;
+    log.record(1, 0, 40, 0, world::BlockId::Air, world::BlockId::Stone);
+    log.record(2, 1, 40, 0, world::BlockId::Air, world::BlockId::Wood);
+    log.record(2, 2, 40, 0, world::BlockId::Air, world::BlockId::Wood);
+    log.record(2, 3, 40, 0, world::BlockId::Air, world::BlockId::Wood);
+    log.record(3, 4, 40, 0, world::BlockId::Air, world::BlockId::Glow);
+    EXPECT(log.truncate_after(2) == 1, "only tick 3 is dropped");
+    EXPECT(log.size() == 4, "all three of tick 2 survive");
+    EXPECT(log.latest_tick() == 2, "and the log ends at tick 2");
+}
+
 // ----- persistence ----------------------------------------------------------
 
 void test_a_log_survives_a_round_trip() {
@@ -577,6 +639,9 @@ int main() {
     test_seeking_anywhere_from_anywhere_gives_the_right_world();
     test_the_path_taken_does_not_change_the_destination();
     test_seeking_past_the_end_is_the_same_as_seeking_to_the_end();
+    test_editing_after_a_rewind_discards_the_future();
+    test_truncate_handles_its_edges();
+    test_truncate_keeps_every_edit_sharing_the_boundary_tick();
     test_a_log_survives_a_round_trip();
     test_an_empty_log_round_trips();
     test_a_log_refuses_the_wrong_world();

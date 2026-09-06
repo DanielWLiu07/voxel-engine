@@ -180,19 +180,79 @@ too - the same rule `set_block` follows.
 
     ./build/voxel_engine --verify-history
 
-    HISTORY edits=301 ticks=0->301 unbatched_ms=356.8 rewind_ms=13.8
-    replay_ms=14.1 batch_speedup=25.8x rewind_applied=301
+    HISTORY edits=301 ticks=0->301 unbatched_ms=295.5 rewind_ms=13.2
+    replay_ms=13.9 batch_speedup=22.5x rewind_applied=301
     rewind_remeshed=14 log_bytes=4836 bytes_per_edit=16.1
-    rewound_ok=1 replayed_ok=1 ok
+    bad_tris_rewind=0 bad_tris_replay=0 dropped=0
+    main_ok=1 branch_ok=1 ok
 
-This runs in the engine rather than in the unit tests because a rewind
-remeshes and re-uploads every touched chunk, which needs a GL context.
+It checks three things, and only the second genuinely needs GL:
+
+- **Voxels**: an FNV-1a hash of every block in every resident chunk, in
+  coordinate order. Not a spot check on the edited cells, so a rewind
+  that restored the edits and corrupted a neighbouring chunk fails.
+- **Meshes**: `debug_validate_gpu_meshes()`, reading every uploaded
+  triangle back off the GPU. This is what makes the check need a context,
+  and it was missing until a review proved the point - see below.
+- **Branching**: an edit made while the world sits in its past, then
+  rewound and replayed.
+
 It is in `scripts/audit.sh` alongside the other end-to-end checks.
 
-The comparison is an FNV-1a hash of **every block in every resident
-chunk**, in coordinate order, not a spot check on the edited cells. A
-rewind that restored the edits correctly but corrupted a neighbouring
-chunk would pass a spot check and fails this.
+## Two defects an adversarial review found
+
+Both were in the wiring rather than the log, both were silent, and both
+are the reason `--verify-history` looks the way it does now.
+
+### 1. An edit made after a rewind was applied to the world and dropped from the log
+
+`set_block` discarded `EditLog::record`'s return value. The log is
+tick-ordered, so a new edit recorded while the world sits in its own past
+lands inside the existing log, and `record` refuses it. The block was
+placed. The log never heard about it.
+
+That produced two different wrong worlds, depending on how far back the
+player had scrubbed:
+
+- **Rewound more than one tick**: the new edit is refused outright. It
+  becomes a block that exists in the world, is unreachable by any seek,
+  and survives a full rewind to tick 0 - because nothing knows it is
+  there.
+- **Rewound exactly one tick**: `record` *accepts* it, because a tick
+  equal to the last one is legal (one tick can hold many edits). It
+  appends a duplicate tick, and scrubbing across that tick resurrects the
+  edit the player just undid.
+
+The fix is the behaviour every text editor has: an edit made in the past
+discards the future first. `EditLog::truncate_after` drops the records
+after the current tick, and `set_block` calls it before recording. The
+return value is checked now, and a refusal increments
+`World::history_dropped()`, which `--verify-history` asserts is zero -
+the counter exists because ignoring that return is what allowed this.
+
+### 2. `--verify-history` passed with the entire batching feature deleted
+
+The check compared an FNV-1a hash of the voxel data before and after a
+rewind. Voxel data only. Deleting the whole remesh loop from
+`history_seek` left the hash matching, the flag printing `ok`, `audit.sh`
+passing, and every rewound edit still on screen, because the GPU meshes
+described a world that no longer existed.
+
+The header comment claimed the check lived in the engine "because a
+rewind remeshes and re-uploads every touched chunk, and that needs a GL
+context". Nothing it asserted needed GL. The comment described the test
+that should have been written.
+
+It does now: `debug_validate_gpu_meshes()`, the same read-back
+`--validate` uses, runs after the rewind and after the replay, and every
+triangle has to be an axis-aligned face backed by a solid block. Re-run
+the deletion and it reports `bad_tris_rewind=1338`, `FAILED`, exit 1.
+`rewind.chunks_remeshed > 0` is asserted too, so a seek that changes
+voxels and remeshes nothing cannot pass.
+
+Both fixes were verified by restoring the original defects and confirming
+the check fails: `dropped=1 branch_ok=0 FAILED` for the first,
+`bad_tris_rewind=1338 FAILED` for the second.
 
 ## What this does not do yet
 

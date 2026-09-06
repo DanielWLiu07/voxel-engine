@@ -81,6 +81,17 @@ public:
     std::span<const EditRecord> records() const { return records_; }
     void clear() { records_.clear(); }
 
+    // Drops every record after `tick`, and returns how many went.
+    //
+    // This is what an edit made after a rewind has to do first. A log is
+    // ordered by construction, so a new edit recorded while the world sits
+    // in its own past would either be refused (the tick goes backwards) or
+    // appended with a duplicate tick, and both leave the world and its
+    // history describing different places. Discarding the future is the
+    // behaviour every text editor has: undo, then type, and the redo stack
+    // is gone.
+    std::size_t truncate_after(std::uint32_t tick);
+
     // Moves a world from `from_tick` to `to_tick`, calling
     // apply(x, y, z, block) for each change in the order it must happen.
     //

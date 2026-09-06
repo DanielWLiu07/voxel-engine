@@ -725,7 +725,30 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // rebuild below is changed or reordered later. Suspended during a
     // history seek: navigating history is not a new entry in it.
     if (history_recording_) {
-        history_.record(++history_tick_, wx, wy, wz, prev, b);
+        // An edit made while the world sits in its own past discards the
+        // future first, the way an editor drops the redo stack when you
+        // undo and then type.
+        //
+        // Without this the edit is applied to the world and lost from the
+        // log, silently and in two different ways. Rewound more than one
+        // tick, the new tick lands inside the existing log and record()
+        // refuses it, so the block is placed and never recorded - it then
+        // survives a full rewind to tick 0, because nothing knows it is
+        // there. Rewound exactly one tick, record() accepts it (a tick
+        // equal to the last is legal, since one tick can hold many edits)
+        // and appends a duplicate, so scrubbing across that tick resurrects
+        // the edit the player just undid.
+        if (history_tick_ < history_.latest_tick()) {
+            history_.truncate_after(history_tick_);
+        }
+        const bool logged = history_.record(++history_tick_, wx, wy, wz, prev, b);
+        // record() refuses only what it could not replay, and the
+        // truncation above removes the only reason it could refuse a live
+        // edit. Reaching here false means the world and its log have
+        // diverged, which is worth counting rather than ignoring: the
+        // return used to be discarded entirely, and that is what let the
+        // bug above exist.
+        if (!logged) ++history_dropped_;
     }
     const auto edit_t0 = std::chrono::steady_clock::now();
     remesh_slot(slot, cc);
