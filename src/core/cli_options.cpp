@@ -134,6 +134,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine                          4D world by default; , and . step along w\n"
                 "  voxel_engine --3d                     the 3D world instead\n"
                 "  voxel_engine --trace-input            log every key the engine receives, and w\n"
+                "  voxel_engine --auto-w                 travel along w automatically, no input needed\n"
                 "  voxel_engine --4d                     force 4D on (benches and captures default to 3D)\n"
                 "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
@@ -178,6 +179,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--validate") { o.validate_mode = true; continue; }
         if (arg == "--4d") { o.four_d = true; continue; }
         if (arg == "--trace-input") { o.trace_input = true; continue; }
+        if (arg == "--auto-w") { o.auto_w = true; o.four_d = true; continue; }
         if (arg == "--3d") { o.force_3d = true; continue; }
         if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
         if (arg == "--slice-w") {

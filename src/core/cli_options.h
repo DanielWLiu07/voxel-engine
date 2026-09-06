@@ -89,6 +89,14 @@ struct CliOptions {
     // is ambiguous between the engine ignoring input and the engine never
     // being sent any, and those need completely different fixes.
     bool trace_input = false;
+    // --auto-w: travel along w by itself, forever, with no input.
+    //
+    // Exists because "it does not look 4D" and "the keys are not reaching
+    // the engine" produce the same picture, and separating them by asking
+    // someone to hold a key at the right moment does not work. With this
+    // the world morphs on its own: if it does, the fourth dimension is
+    // fine and the problem is input; if it does not, it is not.
+    bool auto_w = false;
     int  slice_w = 0;
     int thread_override = 0;
     int orbit_frames = 0;

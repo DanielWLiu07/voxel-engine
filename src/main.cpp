@@ -657,12 +657,17 @@ int main(int argc, char** argv) {
             // frozen position while the view was moving perfectly. That
             // cost a round of hunting a movement bug that did not exist.
             const glm::vec3 p = walk_mode ? player.feet_position() : cam.position();
+            // near_meshed_w, not meshed_w. The global worst is a chunk
+            // past the fog at any large radius, so tracing it showed
+            // "geometry 0.000" while the visible world was tracking
+            // within a few hundredths - the third time this trace has
+            // reported the engine broken when the instrument was wrong.
             const float w = wrld.slice_w();
             if (now - last_trace > 0.25 &&
                 (glm::distance(p, last_pos) > 0.01f ||
                  std::fabs(w - last_w) > 0.001f)) {
-                std::printf("[state] pos %.2f,%.2f,%.2f  w %.3f (geometry %.3f)\n",
-                            p.x, p.y, p.z, w, wrld.meshed_w());
+                std::printf("[state] pos %.2f,%.2f,%.2f  w %.3f (near geometry %.3f)\n",
+                            p.x, p.y, p.z, w, wrld.near_meshed_w());
                 std::fflush(stdout);
                 last_trace = now;
                 last_pos = p;
@@ -698,12 +703,25 @@ int main(int argc, char** argv) {
         // moving through one.
         if (wrld.is_4d()) {
             float w_axis = 0.0f;
+            // --auto-w: travel forever with no input, so the fourth
+            // dimension can be watched rather than driven. Reverses
+            // direction every 12 units so it stays near the origin and
+            // the same landscape keeps morphing back and forth, which is
+            // easier to read than drifting away forever.
+            if (opt.auto_w) {
+                static float auto_dir = 1.0f;
+                if (wrld.slice_w() > 12.0f)  auto_dir = -1.0f;
+                if (wrld.slice_w() < -12.0f) auto_dir =  1.0f;
+                w_axis = auto_dir;
+            }
             // . and , kept as aliases so anything that documented them
             // still works, but E and Q are the bindings that matter.
+            if (!opt.auto_w) {
             if (input.key_down(core::key_of(core::Bind::SliceForward)) ||
                 input.key_down(GLFW_KEY_PERIOD)) w_axis += 1.0f;
             if (input.key_down(core::key_of(core::Bind::SliceBack)) ||
                 input.key_down(GLFW_KEY_COMMA))  w_axis -= 1.0f;
+            }
             if (w_axis != 0.0f) {
                 // Sprint applies here too, so the fourth axis handles like
                 // the other three.
