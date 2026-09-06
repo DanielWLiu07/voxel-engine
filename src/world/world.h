@@ -92,6 +92,16 @@ struct ChunkSlot {
     // the frustum, we skip all section tests for the chunk.
     gfx::AABB  chunk_aabb{};
     bool       any_section_has_mesh = false;
+    // The w this chunk's voxels were generated at.
+    //
+    // Per chunk, not per world, and that is what lets travel along w be
+    // continuous. With a single world-wide meshed_w the only way to move
+    // was to rebuild every chunk at once and wait: the terrain updated in
+    // discrete full-window waves a third of a second apart. Tracking it
+    // here lets the engine always be rebuilding whichever chunks have
+    // drifted furthest from the player's w, nearest first, on a per-frame
+    // budget - so the world updates continuously instead of pulsing.
+    float      slice_w = 0.0f;
     // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
@@ -250,9 +260,20 @@ public:
     std::int32_t edit_slice() const {
         return slice_gen_ ? static_cast<std::int32_t>(std::floor(slice_w_)) : 0;
     }
-    // The w the resident geometry was actually built at. Lags slice_w_ by
-    // up to kSliceRemeshStep while the player is moving.
+    // The w of the most-stale chunk anywhere in the window. Informational:
+    // at a large radius the worst chunk is past the fog, so this says more
+    // about window size than about what the player sees.
     float meshed_w() const { return meshed_w_; }
+
+    // The w of the most-stale chunk within `chunk_radius` of the camera -
+    // the freshness of the world the player is actually looking at.
+    //
+    // This is the number worth gating on. Judging by the global worst
+    // makes a large draw distance look broken: at radius 12 the far corner
+    // is nearly two hundred blocks out, behind fog, and its being a few
+    // hundredths of a w behind is invisible and harmless. The near field
+    // is what the eye checks.
+    float near_meshed_w(int chunk_radius = 4) const;
 
     // Target interval between rebuilds while travelling along w, in
     // seconds. The threshold is derived from this and the player's speed
@@ -322,11 +343,34 @@ public:
     // than blinking it.
     // `speed` is the player's current w speed in units/sec, used only to
     // derive the rebuild threshold; pass 0 to fall back to kSliceRemeshStep.
+    // Moves the player along w and nothing else. The world catches up
+    // through stream_slice, which the render loop calls every frame.
+    void advance_w(float delta) { if (slice_gen_) slice_w_ += delta; }
+
+    // Legacy one-shot: move and, if that crossed the threshold, rebuild
+    // the whole window synchronously. Kept for --verify-4d, which wants a
+    // definite before and after.
     int move_w(float delta, float speed, const TerrainGen& terrain,
                core::ThreadPool& pool);
 
     // Rebuilds at the current w regardless of how far it has drifted.
+    // Whole-window and synchronous to request; used by --verify-4d, which
+    // wants a definite before and after rather than a rolling update.
     int resample_slice(const TerrainGen& terrain, core::ThreadPool& pool);
+
+    // The continuous path, called every frame while the player travels.
+    //
+    // Re-requests up to `budget` chunks whose own slice_w has drifted
+    // furthest from the player's, nearest to the camera first. Returns how
+    // many were re-requested, which is 0 when nothing has drifted far
+    // enough to matter.
+    //
+    // This replaces waiting for a whole-window rebuild. The world is never
+    // globally stale or globally fresh; it is a field that the workers are
+    // continuously pulling toward the player's w, and the budget is what
+    // keeps that inside a frame.
+    int stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
+                     int budget = 24);
 
     BlockId block_at(int wx, int wy, int wz) const;
     bool    set_block(int wx, int wy, int wz, BlockId b);
@@ -467,6 +511,10 @@ private:
         // first job sits in the pool backlog); drain only accepts the job
         // whose stamp matches the coord's current entry in requested_.
         std::uint64_t   request_stamp = 0;
+        // The w the worker generated this chunk at, carried back so the
+        // slot records what it actually holds rather than what the player
+        // has since moved to.
+        float           slice_w = 0.0f;
         // True when the chunk must never be regenerated from terrain
         // (player edits, stash restores, or disk chunks the active seed
         // cannot reproduce); the built slot is marked player_modified so

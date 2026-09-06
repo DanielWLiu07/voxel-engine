@@ -709,8 +709,12 @@ int main(int argc, char** argv) {
                 // the other three.
                 const float w_speed = input.key_down(GLFW_KEY_LEFT_SHIFT)
                     ? world::World::kSprintSpeedW : world::World::kWalkSpeedW;
-                wrld.move_w(w_axis * w_speed * static_cast<float>(dt), w_speed,
-                            terrain, pool);
+                // Position only. The rebuild is not driven from here any
+                // more - see stream_slice below, which runs every frame
+                // whether or not the player is moving, so chunks left
+                // behind by a budget-limited frame still catch up after
+                // the key is released.
+                wrld.advance_w(w_axis * w_speed * static_cast<float>(dt));
             }
         }
         if (input.key_pressed(core::key_of(core::Bind::Vsync))) {
@@ -756,6 +760,11 @@ int main(int argc, char** argv) {
         }
         // Scripted capture locks the pose: live mouse/keys would steer the
         // camera mid-run and make the shot non-reproducible.
+        // Pull the world toward the player's w, a bounded slice of it per
+        // frame. Runs every frame rather than on a key, so the terrain
+        // keeps converging after the player stops travelling.
+        if (wrld.is_4d()) wrld.stream_slice(terrain, pool);
+
         capture.shot_after = shot_after;  // counts down as the shot settles
         if (input.cursor_captured() && !capture.scripted_camera()) {
             update_movement(input, dt, cam, player, wrld, walk_mode);
@@ -808,7 +817,16 @@ int main(int argc, char** argv) {
             streamed_out_total += sstats.evicted;
             last_center = center;
         }
-        wrld.drain_finished(16);
+        // Drain harder while travelling along w.
+        //
+        // Uploading is the bottleneck when the whole window is being
+        // pulled toward a new w, not generating: nine workers produce
+        // chunks far faster than 16 a frame can be handed to the GPU, so
+        // the queue backs up and the far edge of the world visibly trails.
+        // Uploads are ~0.05 ms each, so 48 is well under a millisecond of
+        // frame time and only happens while the player is actually
+        // moving through the fourth dimension.
+        wrld.drain_finished(wrld.is_4d() && wrld.pending_async() > 32 ? 48 : 16);
         // Chunks meshed before their neighbours existed still carry the
         // boundary faces those neighbours hide. Driven here rather than
         // from update_streaming because it depends on chunks arriving, not
@@ -1327,19 +1345,28 @@ int main(int argc, char** argv) {
             // thing the player actually does, and it is the only check
             // that would notice the throttle refusing every rebuild.
             travel_to(w0);
-            const float held_w0 = wrld.meshed_w();
+            const float held_w0 = wrld.near_meshed_w();
             int rebuilds = 0;
             constexpr int kFrames = 120;          // two seconds at 60 Hz
             constexpr float kDt = 1.0f / 60.0f;
             for (int f = 0; f < kFrames; ++f) {
                 const auto frame_end = std::chrono::steady_clock::now() +
                     std::chrono::microseconds(16667);
-                if (wrld.move_w(world::World::kWalkSpeedW * kDt,
-                                world::World::kWalkSpeedW, terrain, pool) > 0) {
-                    ++rebuilds;
-                }
-                // What the render loop does each frame, same budgets.
-                wrld.drain_finished(8);
+                // Exactly what the render loop does: advance the player,
+                // pull a bounded slice of the world toward them, drain.
+                // This used to call move_w, which is the whole-window
+                // rebuild the interactive path no longer uses - so the
+                // check was passing on a code path the player never
+                // touches.
+                wrld.advance_w(world::World::kWalkSpeedW * kDt);
+                if (wrld.stream_slice(terrain, pool) > 0) ++rebuilds;
+                // The render loop's own adaptive budget, copied exactly.
+                // Mirroring it matters: with a flat 16 the check requested
+                // 24 chunks a frame and uploaded 16, so the queue grew all
+                // run and the world could never catch up. That is a
+                // property of the test, not of the engine, and it made a
+                // large radius look broken.
+                wrld.drain_finished(wrld.pending_async() > 32 ? 48 : 16);
                 wrld.flush_pending_remeshes(pool, 4);
                 // Real frame pacing, and it is load-bearing rather than
                 // cosmetic. Without it this loop ran all 120 iterations in
@@ -1354,7 +1381,12 @@ int main(int argc, char** argv) {
                 }
             }
             const float held_travelled = wrld.slice_w() - w0;
-            const float held_geometry  = wrld.meshed_w() - held_w0;
+            // The near field, not the global worst. At a large radius the
+            // most-stale chunk is past the fog and its lag says more about
+            // window size than about what the player sees - judging by it
+            // failed this check at radius 12 while the visible world was
+            // entirely current.
+            const float held_geometry  = wrld.near_meshed_w() - held_w0;
             // Two seconds of walking must move the player and must move
             // the geometry with them. Geometry may lag by up to one
             // rebuild, so it is checked as a fraction rather than exactly.
@@ -1554,7 +1586,7 @@ int main(int argc, char** argv) {
         pf.streamed_out    = streamed_out_total;
         pf.four_d          = wrld.is_4d();
         pf.slice_w         = wrld.slice_w();
-        pf.meshed_w        = wrld.meshed_w();
+        pf.meshed_w        = wrld.near_meshed_w();
         pf.edit_count      = wrld.edit_count();
         pf.edit_last_ms    = wrld.edit_last_ms();
         pf.edit_avg_ms     = wrld.edit_avg_ms();

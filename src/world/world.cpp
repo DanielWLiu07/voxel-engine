@@ -299,7 +299,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     // w while jobs are in flight, and a worker reading slice_w_ off the
     // member would then generate a chunk for a slice nobody asked for.
     const TerrainGen4D* slice_gen = slice_gen_;
-    const int slice_w = slice_w_;
+    const float slice_w = slice_w_;
     NeighborLight nlight = neighbor_light_for(c);
     pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice_w,
                  planes = std::move(planes),
@@ -311,6 +311,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.coord = c;
         fc.generation = gen;
         fc.request_stamp = stamp;
+        fc.slice_w = slice_w;
         // The one branch that makes the engine four-dimensional. Null in
         // the 3D engine, which is every existing path.
         if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice_w, fc.chunk);
@@ -501,6 +502,92 @@ int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
     return static_cast<int>(coords.size());
 }
 
+float World::near_meshed_w(int chunk_radius) const {
+    if (!slice_gen_) return slice_w_;
+    float worst = slice_w_;
+    for (const auto& kv : chunks_) {
+        const long dx = kv.first.x - last_center_.x;
+        const long dz = kv.first.z - last_center_.z;
+        if (dx * dx + dz * dz >
+            static_cast<long>(chunk_radius) * chunk_radius) {
+            continue;
+        }
+        if (std::fabs(slice_w_ - kv.second->slice_w) >
+            std::fabs(slice_w_ - worst)) {
+            worst = kv.second->slice_w;
+        }
+    }
+    return worst;
+}
+
+int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
+                        int budget) {
+    if (!slice_gen_ || budget <= 0) return 0;
+
+    // Chunks that have drifted far enough from the player's w to be worth
+    // rebuilding, nearest to the camera first so what the player is
+    // looking at is corrected before the far edge of the window.
+    //
+    // The threshold is per chunk rather than per world: a chunk generated
+    // at the player's current w is not stale no matter how far the player
+    // has travelled since the last global rebuild, and a chunk left behind
+    // by a budget-limited frame stays at the front of the queue until it
+    // is caught up. Nothing is ever globally stale, so nothing has to stop
+    // and wait.
+    struct Stale { ChunkCoord c; long dist2; float drift; };
+    std::vector<Stale> stale;
+    for (const auto& kv : chunks_) {
+        const float drift = std::fabs(slice_w_ - kv.second->slice_w);
+        if (drift < kSliceStepMin) continue;
+        if (requested_.count(kv.first)) continue;   // already on its way
+        const long dx = kv.first.x - last_center_.x;
+        const long dz = kv.first.z - last_center_.z;
+        stale.push_back({kv.first, dx * dx + dz * dz, drift});
+    }
+    if (stale.empty()) return 0;
+
+    // Nearest first; drift breaks ties so a chunk that has been skipped
+    // repeatedly is not starved by a neighbour at the same distance.
+    // Coordinates break the rest, so the order never depends on the hash
+    // map's iteration.
+    std::sort(stale.begin(), stale.end(),
+              [](const Stale& a, const Stale& b) {
+                  if (a.dist2 != b.dist2) return a.dist2 < b.dist2;
+                  if (a.drift != b.drift) return a.drift > b.drift;
+                  return a.c.z != b.c.z ? a.c.z < b.c.z : a.c.x < b.c.x;
+              });
+
+    int issued = 0;
+    for (const Stale& st : stale) {
+        if (issued >= budget) break;
+        // A stashed edit for this slice beats fresh terrain, the same
+        // priority every other path applies.
+        if (auto sit = edited_stash_.find(SliceCoord{st.c, edit_slice()});
+            sit != edited_stash_.end()) {
+            Chunk restored;
+            if (decode_chunk_rle(sit->second, restored)) {
+                enqueue_decoded_chunk(st.c, std::move(restored), pool,
+                                      /*preserve_on_evict=*/true);
+                ++issued;
+                continue;
+            }
+        }
+        request_terrain_chunk(st.c, terrain, pool);
+        ++issued;
+    }
+    // meshed_w_ is now a report rather than a control: it says how far the
+    // WORST chunk still is from the player, which is what the HUD shows.
+    float worst = slice_w_;
+    for (const auto& kv : chunks_) {
+        if (std::fabs(slice_w_ - kv.second->slice_w) >
+            std::fabs(slice_w_ - worst)) {
+            worst = kv.second->slice_w;
+        }
+    }
+    meshed_w_ = worst;
+    return issued;
+}
+
 World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                                            const TerrainGen& terrain,
                                            core::ThreadPool& pool) {
@@ -616,6 +703,7 @@ int World::drain_finished(int max_per_frame) {
             slot_it->second = std::move(new_slot);
         }
         slot_it->second->meshed_with = landed_mask;
+        slot_it->second->slice_w = fc.slice_w;
         slot_it->second->light = fc.light;
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.
