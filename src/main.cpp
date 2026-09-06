@@ -601,6 +601,20 @@ int main(int argc, char** argv) {
         float dt = static_cast<float>(now - prev_frame_time);
         prev_frame_time = now;
 
+        // No focus request here.
+        //
+        // One was tried - re-asserting glfwFocusWindow over the first few
+        // frames - because a launch from a background shell was leaving
+        // the terminal frontmost. It did not work, so it is not kept:
+        // macOS will not activate a non-bundled process that was started
+        // without a foreground session, whatever the window asks for. A
+        // normal launch from the user's own shell activates fine, and the
+        // request at window creation covers that.
+        //
+        // Keeping a fix that does not fix anything is worse than the bug,
+        // because the next person to see the symptom will believe it was
+        // handled.
+
         input.begin_frame();
 
         // --trace-input: make the input path observable from outside the
