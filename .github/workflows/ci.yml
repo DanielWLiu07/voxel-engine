@@ -62,6 +62,18 @@ jobs:
         # textually instead, and works anywhere.
         run: ./scripts/check_headers.py
 
+      - name: 4D slice verification
+        # CI never ran this, so the entire fourth-dimension feature could
+        # have been deleted and only a local audit would have noticed.
+        # Both motions: travelling along w and rotating the slice, each
+        # checked to change the world, return it exactly when reversed,
+        # keep player edits, converge, and leave every triangle valid.
+        #
+        # Radius 4 rather than the audit's 6: the runner's software GL is
+        # far slower than a real GPU and this is a correctness check, not
+        # a performance one - the properties hold at any window size.
+        run: ./build/voxel_engine --verify-4d --radius 4
+
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
         # is the part that quietly stops being true. This checks the slice

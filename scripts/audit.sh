@@ -33,11 +33,26 @@ step() {
   fi
 }
 
+# Both the exit status AND the pattern.
+#
+# This used to check only the pattern, and that made it a much weaker
+# guard than it looked. --verify-4d prints its whole result line whether
+# it passed or failed, so "changed=1 returned=1" appears in the output of
+# a FAILING run - and the step reported PASS while the engine exited 1.
+# Fault-injecting rotate_slice to a no-op produced exactly that: VERIFY4D
+# ... tilt_changed=0 ... FAILED, exit code 1, audit verdict PASS.
+#
+# The pattern is still checked, because an exit status alone would not
+# notice a mode that silently stopped measuring the thing it names.
 grep_step() {
   local name=$1 pattern=$2; shift 2
-  local out
-  out=$("$@" 2>&1)
-  if echo "$out" | grep -qE "$pattern"; then
+  local out status
+  out=$("$@" 2>&1); status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL  $name (exit $status)"
+    echo "$out" | tail -20
+    failures=$((failures + 1))
+  elif echo "$out" | grep -qE "$pattern"; then
     echo "PASS  $name"
   else
     echo "FAIL  $name (wanted /$pattern/)"
@@ -79,7 +94,12 @@ if [ "${AUDIT_SKIP_MESHER_AB:-0}" != "1" ]; then
   fi
 fi
 grep_step "edit persistence"    "survived=1 ok"         ./build/voxel_engine --verify-edit-persistence
-grep_step "4D slice step"       "changed=1 returned=1"  ./build/voxel_engine --verify-4d --radius 6
+# One run, one pattern naming BOTH motions. The pattern used to be just
+# "changed=1 returned=1", which is the translation half - so the entire
+# rotation feature could have been deleted without this step noticing.
+grep_step "4D slice step + tilt" \
+  "changed=1 returned=1.*tilt_changed=1 tilt_returned=1 notch=1 edit_survives_scroll=1 converges=1" \
+  ./build/voxel_engine --verify-4d --radius 6
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "headers self-sufficient"   ./scripts/check_headers.py
 step      "occlusion byte-identity"   ./scripts/verify_occlusion.sh
