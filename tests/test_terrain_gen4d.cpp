@@ -70,7 +70,7 @@ void test_w_actually_changes_the_world() {
     for (int wz = -150; wz <= 150; wz += 11) {
         for (int wx = -150; wx <= 150; wx += 11) {
             ++sampled;
-            if (t.height_at(wx, wz, 0) != t.height_at(wx, wz, 3)) ++differing;
+            if (t.height_at(wx, wz, {0, 0.0f}) != t.height_at(wx, wz, {3, 0.0f})) ++differing;
         }
     }
     EXPECT(differing > sampled / 2,
@@ -89,9 +89,9 @@ void test_adjacent_slices_are_related_not_unrelated() {
     int n = 0;
     for (int wz = -120; wz <= 120; wz += 7) {
         for (int wx = -120; wx <= 120; wx += 7) {
-            const int h0 = t.height_at(wx, wz, 0);
-            const int adjacent = std::abs(t.height_at(wx, wz, 1) - h0);
-            const int distant  = std::abs(t.height_at(wx, wz, 40) - h0);
+            const int h0 = t.height_at(wx, wz, {0, 0.0f});
+            const int adjacent = std::abs(t.height_at(wx, wz, {1, 0.0f}) - h0);
+            const int distant  = std::abs(t.height_at(wx, wz, {40, 0.0f}) - h0);
             worst_adjacent = std::max(worst_adjacent, adjacent);
             worst_distant  = std::max(worst_distant, distant);
             sum_adjacent += adjacent;
@@ -115,9 +115,9 @@ void test_a_slice_is_a_deterministic_pure_function() {
     for (int wz = -80; wz <= 80; wz += 9)
         for (int wx = -80; wx <= 80; wx += 9)
             for (int w = 0; w < 3; ++w) {
-                const int h = a.height_at(wx, wz, w);
-                if (h != a.height_at(wx, wz, w)) same_twice = false;
-                if (h != b.height_at(wx, wz, w)) same_instance = false;
+                const int h = a.height_at(wx, wz, {static_cast<float>(w), 0.0f});
+                if (h != a.height_at(wx, wz, {static_cast<float>(w), 0.0f})) same_twice = false;
+                if (h != b.height_at(wx, wz, {static_cast<float>(w), 0.0f})) same_instance = false;
             }
     EXPECT(same_twice, "height_at is pure across all four axes");
     EXPECT(same_instance, "two generators on one seed agree everywhere");
@@ -132,7 +132,7 @@ void test_the_seed_reaches_every_slice() {
         for (int wz = -100; wz <= 100; wz += 13)
             for (int wx = -100; wx <= 100; wx += 13) {
                 ++sampled;
-                if (a.height_at(wx, wz, w) != b.height_at(wx, wz, w)) ++differing;
+                if (a.height_at(wx, wz, {static_cast<float>(w), 0.0f}) != b.height_at(wx, wz, {static_cast<float>(w), 0.0f})) ++differing;
             }
         EXPECT(differing > sampled / 2, "two seeds disagree on this slice");
     }
@@ -149,9 +149,9 @@ void test_a_slice_has_no_cliffs() {
         const world::TerrainGen4D t(1337);
         for (int wz = -150; wz <= 150; wz += 3)
             for (int wx = -150; wx <= 150; wx += 3) {
-                const int h = t.height_at(wx, wz, w);
-                worst = std::max(worst, std::abs(t.height_at(wx + 1, wz, w) - h));
-                worst = std::max(worst, std::abs(t.height_at(wx, wz + 1, w) - h));
+                const int h = t.height_at(wx, wz, {static_cast<float>(w), 0.0f});
+                worst = std::max(worst, std::abs(t.height_at(wx + 1, wz, {static_cast<float>(w), 0.0f}) - h));
+                worst = std::max(worst, std::abs(t.height_at(wx, wz + 1, {static_cast<float>(w), 0.0f}) - h));
             }
     }
     EXPECT(worst <= 8, "no adjacent columns differ by more than eight blocks");
@@ -168,12 +168,12 @@ void test_fill_chunk_puts_the_surface_where_height_at_says() {
         for (int cz = -1; cz <= 1; ++cz) {
             for (int cx = -1; cx <= 1; ++cx) {
                 world::Chunk c;
-                t.fill_chunk(cx, cz, w, c);
+                t.fill_chunk(cx, cz, {static_cast<float>(w), 0.0f}, c);
                 for (int z = 0; z < world::kChunkSizeZ; ++z)
                     for (int x = 0; x < world::kChunkSizeX; ++x) {
                         ++checked;
                         const int h = t.height_at(cx * world::kChunkSizeX + x,
-                                                  cz * world::kChunkSizeZ + z, w);
+                                                  cz * world::kChunkSizeZ + z, {static_cast<float>(w), 0.0f});
                         if (!world::is_solid(c.get(x, h, z))) ++wrong_surface;
                         // Air, or the bottom of a tree. Caves are off in
                         // this sweep but trees are not, and a trunk
@@ -201,11 +201,11 @@ void test_a_column_is_solid_all_the_way_down_without_caves() {
     int gaps = 0;
     for (int w = 0; w < 2; ++w) {
         world::Chunk c;
-        t.fill_chunk(3, -2, w, c);
+        t.fill_chunk(3, -2, {static_cast<float>(w), 0.0f}, c);
         for (int z = 0; z < world::kChunkSizeZ; ++z)
             for (int x = 0; x < world::kChunkSizeX; ++x) {
                 const int h = t.height_at(3 * world::kChunkSizeX + x,
-                                          -2 * world::kChunkSizeZ + z, w);
+                                          -2 * world::kChunkSizeZ + z, {static_cast<float>(w), 0.0f});
                 for (int y = 0; y <= h; ++y)
                     if (!world::is_solid(c.get(x, y, z))) ++gaps;
             }
@@ -225,8 +225,8 @@ void test_caves_only_ever_remove() {
         for (int cz = -1; cz <= 1; ++cz) {
             for (int cx = -1; cx <= 1; ++cx) {
                 world::Chunk a, b;
-                without.fill_chunk(cx, cz, w, a);
-                with.fill_chunk(cx, cz, w, b);
+                without.fill_chunk(cx, cz, {static_cast<float>(w), 0.0f}, a);
+                with.fill_chunk(cx, cz, {static_cast<float>(w), 0.0f}, b);
                 const Diff d = diff_chunks(a, b);
                 carved += d.only_in_a;
                 if (d.only_in_b != 0 || d.different != 0) subtractive = false;
@@ -244,8 +244,8 @@ void test_caves_move_with_w() {
     // entirely silent inconsistency.
     const world::TerrainGen4D t(1337);
     world::Chunk a, b;
-    t.fill_chunk(0, 0, 0, a);
-    t.fill_chunk(0, 0, 2, b);
+    t.fill_chunk(0, 0, {0, 0.0f}, a);
+    t.fill_chunk(0, 0, {2, 0.0f}, b);
     int air_a = 0, air_b = 0, differing = 0;
     // Below the shallowest terrain, so surface morphing cannot account
     // for the difference - anything here is the cave field moving.
@@ -277,11 +277,11 @@ void test_surface_material_follows_altitude() {
     for (int cz = -6; cz <= 6; ++cz) {
         for (int cx = -6; cx <= 6; ++cx) {
             world::Chunk c;
-            t.fill_chunk(cx, cz, 0, c);
+            t.fill_chunk(cx, cz, {0, 0.0f}, c);
             for (int z = 0; z < world::kChunkSizeZ; ++z)
                 for (int x = 0; x < world::kChunkSizeX; ++x) {
                     const int h = t.height_at(cx * world::kChunkSizeX + x,
-                                              cz * world::kChunkSizeZ + z, 0);
+                                              cz * world::kChunkSizeZ + z, {0, 0.0f});
                     const world::BlockId top = c.get(x, h, z);
                     if (top == world::BlockId::Snow) {
                         ++snow_seen;
@@ -330,7 +330,7 @@ void test_the_world_reaches_below_sea_level() {
     int below = 0, above_snow = 0, sampled = 0;
     for (int wz = -200; wz <= 200; wz += 5)
         for (int wx = -200; wx <= 200; wx += 5) {
-            const int h = t.height_at(wx, wz, 0);
+            const int h = t.height_at(wx, wz, {0, 0.0f});
             ++sampled;
             if (h < world::kSeaLevel) ++below;
             if (h >= world::kSnowBand) ++above_snow;
@@ -345,9 +345,9 @@ void test_fill_chunk_is_reproducible() {
     // called const, exactly as the 3D one is.
     const world::TerrainGen4D t(1337);
     world::Chunk first, second, elsewhere;
-    t.fill_chunk(2, -3, 1, first);
-    t.fill_chunk(9, 9, 4, elsewhere);   // interleave an unrelated fill
-    t.fill_chunk(2, -3, 1, second);
+    t.fill_chunk(2, -3, {1, 0.0f}, first);
+    t.fill_chunk(9, 9, {4, 0.0f}, elsewhere);   // interleave an unrelated fill
+    t.fill_chunk(2, -3, {1, 0.0f}, second);
     const Diff d = diff_chunks(first, second);
     EXPECT(d.only_in_a == 0 && d.only_in_b == 0 && d.different == 0,
            "one coordinate and slice fills the same way twice");
@@ -364,11 +364,11 @@ void test_neighbouring_chunks_agree_across_the_seam() {
     int mismatches = 0;
     for (int w = 0; w < 3; ++w) {
         world::Chunk left, right;
-        t.fill_chunk(0, 0, w, left);
-        t.fill_chunk(1, 0, w, right);
+        t.fill_chunk(0, 0, {static_cast<float>(w), 0.0f}, left);
+        t.fill_chunk(1, 0, {static_cast<float>(w), 0.0f}, right);
         for (int z = 0; z < world::kChunkSizeZ; ++z) {
-            const int h_left  = t.height_at(world::kChunkSizeX - 1, z, w);
-            const int h_right = t.height_at(world::kChunkSizeX, z, w);
+            const int h_left  = t.height_at(world::kChunkSizeX - 1, z, {static_cast<float>(w), 0.0f});
+            const int h_right = t.height_at(world::kChunkSizeX, z, {static_cast<float>(w), 0.0f});
             if (!world::is_solid(left.get(world::kChunkSizeX - 1, h_left, z))) ++mismatches;
             if (!world::is_solid(right.get(0, h_right, z))) ++mismatches;
             if (std::abs(h_left - h_right) > 8) ++mismatches;
@@ -417,11 +417,11 @@ void test_trees_grow_and_respond_to_w() {
         for (int cz = -3; cz <= 3; ++cz)
             for (int cx = -3; cx <= 3; ++cx) {
                 world::Chunk c;
-                t.fill_chunk(cx, cz, w, c);
+                t.fill_chunk(cx, cz, {static_cast<float>(w), 0.0f}, c);
                 for (int z = 0; z < world::kChunkSizeZ; ++z)
                     for (int x = 0; x < world::kChunkSizeX; ++x) {
                         const int h = t.height_at(cx * world::kChunkSizeX + x,
-                                                  cz * world::kChunkSizeZ + z, w);
+                                                  cz * world::kChunkSizeZ + z, {static_cast<float>(w), 0.0f});
                         // Find the trunk rather than assume it starts at
                         // h+1. Looking only there was the first version,
                         // and it could not see the fault it exists to
@@ -468,11 +468,69 @@ void test_trees_grow_and_respond_to_w() {
     EXPECT(t1 > 0, "and the distant slice still has trees");
 }
 
+void test_rotating_the_slice_changes_the_cross_section() {
+    // The property that separates a fourth dimension a player can see
+    // from one they can only travel through.
+    //
+    // Translating along w gives a different but equally axis-aligned
+    // world: every block is still a whole cube and the scene swaps.
+    // Rotating the cut meets the 4D lattice at an angle, so the same
+    // structures present different cross-sections - which is what makes
+    // them appear to change shape rather than be replaced.
+    //
+    // Geometrically a tilted hyperplane diverges from the original
+    // linearly with distance, so rotation is far stronger per unit than
+    // translation. Measured against a flat slice over a 192-block square:
+    //
+    //     0.002 rad   27% of columns change, max jump  2
+    //     0.010 rad   66%                          9
+    //     0.050 rad   88%                         20
+    //
+    // against 34% and max jump 2 for a whole rebuild-threshold of w.
+    const world::TerrainGen4D t(1337);
+    auto changed = [&](world::TerrainGen4D::Slice a,
+                       world::TerrainGen4D::Slice b) {
+        int diff = 0, n = 0, worst = 0;
+        for (int z = -96; z < 96; z += 2)
+            for (int x = -96; x < 96; x += 2) {
+                const int ha = t.height_at(x, z, a);
+                const int hb = t.height_at(x, z, b);
+                if (ha != hb) ++diff;
+                worst = std::max(worst, std::abs(ha - hb));
+                ++n;
+            }
+        return std::pair<double, int>{100.0 * diff / n, worst};
+    };
+
+    const world::TerrainGen4D::Slice flat{0.0f, 0.0f};
+    EXPECT(changed(flat, flat).first == 0.0,
+           "the same slice is the same world");
+
+    const auto small = changed(flat, {0.0f, 0.01f});
+    EXPECT(small.first > 20.0, "a small tilt already reshapes the terrain");
+    EXPECT(small.second > 2, "and moves columns by more than translation does");
+
+    const auto quarter = changed(flat, {0.0f, 1.5708f});
+    EXPECT(quarter.first > 80.0,
+           "a quarter turn is a wholly different cross-section");
+
+    // A tilt is not a translation in disguise: at theta = pi/2 the slice's
+    // own z axis IS the fourth dimension, so no w offset can reproduce it.
+    const auto as_translation = changed(flat, {2.0f, 0.0f});
+    EXPECT(quarter.first > as_translation.first,
+           "rotating changes more than translating the same nominal amount");
+
+    // And it is reversible, like every other motion through this world.
+    const auto there_and_back = changed({0.0f, 0.7f}, {0.0f, 0.7f});
+    EXPECT(there_and_back.first == 0.0, "a tilt is a place, not a mutation");
+}
+
 }  // namespace
 
 int main() {
     std::printf("terrain4d_tests: running...\n\n");
     test_w_actually_changes_the_world();
+    test_rotating_the_slice_changes_the_cross_section();
     test_adjacent_slices_are_related_not_unrelated();
     test_a_slice_is_a_deterministic_pure_function();
     test_the_seed_reaches_every_slice();

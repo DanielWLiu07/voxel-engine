@@ -98,7 +98,7 @@ SliceCost build_slice(const world::TerrainGen4D& terrain, int radius, int w,
     for (int cz = -radius; cz <= radius; ++cz) {
         for (int cx = -radius; cx <= radius; ++cx, ++i) {
             const auto t0 = clock_type::now();
-            terrain.fill_chunk(cx, cz, w, out[i]);
+            terrain.fill_chunk(cx, cz, {static_cast<float>(w), 0.0f}, out[i]);
             cost.gen_ms += ms_since(t0);
             prints[i] = fingerprint(out[i]);
         }

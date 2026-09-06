@@ -28,10 +28,14 @@ TerrainGen4D::TerrainGen4D(std::uint32_t seed)
       biome_(seed + 4), temp_(seed + 5),
       cave_a_(seed + 6), cave_b_(seed + 7) {}
 
-int TerrainGen4D::height_at(int wx, int wz, float w) const {
+int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
     const float x = static_cast<float>(wx);
-    const float z = static_cast<float>(wz);
-    const float fw = w * kWScale;
+    // The slice's z maps into BOTH the 4D z and w axes once the cut is
+    // rotated. At theta = 0 this reduces to z4 = wz, w4 = w, which is the
+    // axis-aligned slice everything started as.
+    float z = 0.0f, fw = 0.0f;
+    to_4d(static_cast<float>(wz), s, &z, &fw);
+    fw *= kWScale;
 
     // Domain warp, then three octave stacks over a 3D slice of the 4D
     // field: world x, world z and w, with the noise's remaining axis
@@ -60,10 +64,9 @@ int TerrainGen4D::height_at(int wx, int wz, float w) const {
         1, kChunkSizeY - 1);
 }
 
-void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) const {
+void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const {
     const int origin_x = chunk_x * kChunkSizeX;
     const int origin_z = chunk_z * kChunkSizeZ;
-    const float fw = w * kWScale;
 
     int  surface[kChunkSizeZ][kChunkSizeX];
     bool is_desert[kChunkSizeZ][kChunkSizeX];
@@ -76,11 +79,16 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) con
             // Single source of truth for surface height, exactly as in the
             // 3D generator: a divergent inline copy here would desync
             // physics raycasts and the chunk contents from each other.
-            const int height = height_at(wx, wz, w);
+            const int height = height_at(wx, wz, s);
+            // The rotated 4D coordinates for this column, shared by
+            // the biome and temperature fields below.
+            float z4 = 0.0f, w4 = 0.0f;
+            to_4d(static_cast<float>(wz), s, &z4, &w4);
+            const float fw = w4 * kWScale;
             surface[z][x] = height;
 
             const float temp = temp_.sample(static_cast<float>(wx) * kTempFreq,
-                                            static_cast<float>(wz) * kTempFreq,
+                                            z4 * kTempFreq,
                                             0.0f, fw * kTempFreq);
             // 0.24, not the 3D generator's 0.35.
             //
@@ -100,7 +108,7 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) con
             // the same tail mass gives 0.2114.
             is_desert[z][x] = (temp > 0.21f) && (height < kSnowBand);
             biome_val[z][x] = biome_.sample(static_cast<float>(wx) * kBiomeFreq,
-                                            static_cast<float>(wz) * kBiomeFreq,
+                                            z4 * kBiomeFreq,
                                             0.0f, fw * kBiomeFreq);
 
             for (int y = 0; y <= height; ++y) {
@@ -148,16 +156,18 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) con
         for (int z = 0; z < kChunkSizeZ; ++z) {
             for (int x = 0; x < kChunkSizeX; ++x) {
                 const float wx = static_cast<float>(origin_x + x);
-                const float wz = static_cast<float>(origin_z + z);
+                float cz4 = 0.0f, cw4 = 0.0f;
+                to_4d(static_cast<float>(origin_z + z), s, &cz4, &cw4);
+                const float cfw = cw4 * kWScale;
                 const int y_max = surface[z][x] - kCaveCeiling;
                 for (int y = kCaveFloor; y <= y_max; ++y) {
                     // y * 1.6 matches the 3D generator's vertical squash,
                     // which keeps passages wider than they are tall.
                     const float fy = static_cast<float>(y) * 1.6f;
                     const float na = cave_a_.sample(wx * kCaveFreq, fy * kCaveFreq,
-                                                    wz * kCaveFreq, fw * kCaveFreq);
+                                                    cz4 * kCaveFreq, cfw * kCaveFreq);
                     const float nb = cave_b_.sample(wx * kCaveFreq, fy * kCaveFreq,
-                                                    wz * kCaveFreq, fw * kCaveFreq);
+                                                    cz4 * kCaveFreq, cfw * kCaveFreq);
                     if (std::abs(na) < kCaveIsoWidth && std::abs(nb) < kCaveIsoWidth) {
                         out.set(x, y, z, BlockId::Air);
                     }

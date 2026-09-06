@@ -138,6 +138,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --4d                     force 4D on (benches and captures default to 3D)\n"
                 "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
+                "  voxel_engine --slice-tilt R           start with the 3D slice rotated R radians\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -178,6 +179,15 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--wireframe") { o.start_wireframe = true; continue; }
         if (arg == "--validate") { o.validate_mode = true; continue; }
         if (arg == "--4d") { o.four_d = true; continue; }
+        if (arg == "--slice-tilt") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, -3.2f, 3.2f, "--slice-tilt",
+                                   &o.slice_tilt, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
         if (arg == "--trace-input") { o.trace_input = true; continue; }
         if (arg == "--auto-w") { o.auto_w = true; o.four_d = true; continue; }
         if (arg == "--3d") { o.force_3d = true; continue; }

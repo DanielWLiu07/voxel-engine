@@ -102,6 +102,10 @@ struct ChunkSlot {
     // drifted furthest from the player's w, nearest first, on a per-frame
     // budget - so the world updates continuously instead of pulsing.
     float      slice_w = 0.0f;
+    // The slice ROTATION this chunk was generated at. Tracked alongside w
+    // because rotating the cut changes the world exactly as translating it
+    // does, so a chunk is stale if either has moved.
+    float      slice_theta = 0.0f;
     // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
@@ -347,6 +351,18 @@ public:
     // through stream_slice, which the render loop calls every frame.
     void advance_w(float delta) { if (slice_gen_) slice_w_ += delta; }
 
+    // Rotates the slicing hyperplane in the (z, w) plane.
+    //
+    // This is the control 4D Miner puts on the scroll wheel, and it is
+    // what translation alone cannot do: a tilted cut meets the 4D lattice
+    // at an angle, so structures present a different cross-section and
+    // appear to change shape. Translation only ever swaps one axis-aligned
+    // world for another.
+    void rotate_slice(float delta) { if (slice_gen_) slice_theta_ += delta; }
+    float slice_theta() const { return slice_theta_; }
+
+    TerrainGen4D::Slice slice() const { return {slice_w_, slice_theta_}; }
+
     // Legacy one-shot: move and, if that crossed the threshold, rebuild
     // the whole window synchronously. Kept for --verify-4d, which wants a
     // definite before and after.
@@ -515,6 +531,7 @@ private:
         // slot records what it actually holds rather than what the player
         // has since moved to.
         float           slice_w = 0.0f;
+        float           slice_theta = 0.0f;
         // True when the chunk must never be regenerated from terrain
         // (player edits, stash restores, or disk chunks the active seed
         // cannot reproduce); the built slot is marked player_modified so
@@ -602,7 +619,8 @@ private:
     // Null in the 3D engine, which is the default and the only state the
     // benches and --validate ever see.
     const TerrainGen4D* slice_gen_ = nullptr;
-    float               slice_w_ = 0.0f;   // where the player is
+    float               slice_w_ = 0.0f;      // where the player is
+    float               slice_theta_ = 0.0f;  // how their cut is tilted
     float               meshed_w_ = 0.0f;  // where the geometry is
     // The integer slice the resident chunks belong to. Needed separately
     // from edit_slice() because a rebuild has to stash the OLD slice's

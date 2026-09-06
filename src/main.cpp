@@ -417,17 +417,25 @@ int main(int argc, char** argv) {
     // below is destroyed before both.
     const world::TerrainGen4D terrain4d(terrain_seed);
     if (opt.four_d) {
-        wrld.set_slice_source(&terrain4d, opt.slice_w);
+        wrld.set_slice_source(&terrain4d, static_cast<float>(opt.slice_w));
+        if (opt.slice_tilt != 0.0f) wrld.rotate_slice(opt.slice_tilt);
         std::printf("\n"
             "  ========================================================\n"
             "   FOUR-DIMENSIONAL WORLD   (--3d for the ordinary one)\n"
             "\n"
-            "   HOLD E  travel +w        HOLD Q  travel -w\n"
+            "   HOLD E / Q     travel along w, the 4th axis\n"
+            "   SCROLL WHEEL   rotate your 3D slice through 4D\n"
             "\n"
             "   WASD moves you through space and does NOT change the\n"
-            "   world - only travelling along w does. Hold E and watch\n"
-            "   the terrain flow: coastlines move, hills rise, lakes\n"
-            "   open. Hold Q the same amount and it comes back exactly.\n"
+            "   world. The other two controls do, and differently:\n"
+            "\n"
+            "   E/Q slide you along w - the world becomes a different\n"
+            "   but equally ordinary place, and Q brings it back exactly.\n"
+            "\n"
+            "   The WHEEL tilts the 3D slice you occupy. A tilted cut\n"
+            "   meets the 4D world at an angle, so terrain shows a\n"
+            "   different cross-section and structures appear to change\n"
+            "   shape. This is the one that looks four-dimensional.\n"
             "\n"
             "   F2 shows w on the HUD.  Starting at w=%d.\n"
             "  ========================================================\n\n",
@@ -542,6 +550,12 @@ int main(int argc, char** argv) {
     }
 
     core::Input input;
+    glfwSetWindowUserPointer(window, &input);
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double dy) {
+        if (auto* in = static_cast<core::Input*>(glfwGetWindowUserPointer(w))) {
+            in->add_scroll(static_cast<float>(dy));
+        }
+    });
     input.attach(window);
     // Capture the mouse straight away for an interactive run.
     //
@@ -713,9 +727,47 @@ int main(int argc, char** argv) {
                 if (wrld.slice_w() > 12.0f)  auto_dir = -1.0f;
                 if (wrld.slice_w() < -12.0f) auto_dir =  1.0f;
                 w_axis = auto_dir;
+                // Rotate as well as translate, because rotation is the
+                // half that looks four-dimensional. A slow sweep back and
+                // forth through a quarter turn shows the cross-sections
+                // changing without anyone touching the wheel.
+                static float auto_theta_dir = 1.0f;
+                if (wrld.slice_theta() >  1.5f) auto_theta_dir = -1.0f;
+                if (wrld.slice_theta() < -1.5f) auto_theta_dir =  1.0f;
+                wrld.rotate_slice(auto_theta_dir * 0.06f * static_cast<float>(dt));
             }
             // . and , kept as aliases so anything that documented them
             // still works, but E and Q are the bindings that matter.
+            // Scroll rotates the cut. This is the control that makes the
+            // world four-dimensional in the way a player can see standing
+            // still: a tilted hyperplane meets the 4D lattice at an angle,
+            // so terrain presents a different cross-section and structures
+            // appear to change shape. Travelling along w only ever swaps
+            // one axis-aligned world for another.
+            const float scroll = input.scroll_dy();
+            if (scroll != 0.0f) {
+                // 0.003 rad a notch, about a fifth of a degree.
+                //
+                // That sounds absurdly fine and is not: a rotated
+                // hyperplane diverges from the original linearly with
+                // distance, so at the edge of a radius-6 window a fifth of
+                // a degree already displaces the cut by half a world unit.
+                // Measured against a flat slice, per notch:
+                //
+                //     0.002 rad  27% of columns change, max jump  2
+                //     0.005 rad  51%                        5
+                //     0.010 rad  66%                        9
+                //     0.050 rad  88%                       20
+                //
+                // The first value I picked was 0.05 - a single notch
+                // rebuilt seven eighths of the visible world, which reads
+                // as the scene being replaced rather than reshaped.
+                // 0.003 puts one notch at about a third of the columns
+                // moving by a couple of blocks, so scrolling sweeps the
+                // cross-section instead of jumping between worlds.
+                wrld.rotate_slice(scroll * 0.003f);
+            }
+
             if (!opt.auto_w) {
             if (input.key_down(core::key_of(core::Bind::SliceForward)) ||
                 input.key_down(GLFW_KEY_PERIOD)) w_axis += 1.0f;
@@ -1604,6 +1656,7 @@ int main(int argc, char** argv) {
         pf.streamed_out    = streamed_out_total;
         pf.four_d          = wrld.is_4d();
         pf.slice_w         = wrld.slice_w();
+        pf.slice_theta     = wrld.slice_theta();
         pf.meshed_w        = wrld.near_meshed_w();
         pf.edit_count      = wrld.edit_count();
         pf.edit_last_ms    = wrld.edit_last_ms();

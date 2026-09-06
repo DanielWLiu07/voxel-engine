@@ -71,7 +71,8 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         // The lag between the two is the point, not a defect: the player
         // travels along w continuously and the world is rebuilt in steps,
         // so geometry trails position by up to one rebuild threshold.
-        ImGui::Text("w %.2f  (geometry at %.2f)", f.slice_w, f.meshed_w);
+        ImGui::Text("w %.2f (geom %.2f)   slice tilt %.3f rad",
+                    f.slice_w, f.meshed_w, f.slice_theta);
     }
         if (f.chunks_total > 0) {
             float cull_ratio = static_cast<float>(f.chunks_total) /

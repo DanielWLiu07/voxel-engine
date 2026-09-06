@@ -40,6 +40,7 @@ struct PerfFrame {
     bool  four_d = false;
     float slice_w = 0.0f;    // where the player is along w
     float meshed_w = 0.0f;   // where the geometry is; lags while moving
+    float slice_theta = 0.0f;  // tilt of the 3D slice within 4D
 };
 
 class DebugHud {

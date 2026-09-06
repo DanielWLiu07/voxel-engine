@@ -21,8 +21,10 @@ void print_bindings() {
     // Held like the movement keys, not tapped like the table's toggles -
     // w is an axis you travel along, so it belongs with WASD in spirit
     // even though the table is where its bindings live.
-    std::printf("[input] , and . = travel along w, the fourth axis "
+    std::printf("[input] E / Q = travel along w, the fourth axis "
                 "(hold; Shift sprints)\n");
+    std::printf("[input] SCROLL WHEEL = rotate your 3D slice through 4D "
+                "(this is the one that reshapes the world)\n");
 
     // Four to a line, so the list stays scannable as bindings are added.
     // The separator is written before each entry rather than after, which

@@ -299,9 +299,9 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     // w while jobs are in flight, and a worker reading slice_w_ off the
     // member would then generate a chunk for a slice nobody asked for.
     const TerrainGen4D* slice_gen = slice_gen_;
-    const float slice_w = slice_w_;
+    const TerrainGen4D::Slice slice = {slice_w_, slice_theta_};
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice_w,
+    pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice,
                  planes = std::move(planes),
                  nlight = std::move(nlight)]() {
         ZoneScopedN("chunk_worker_job");
@@ -311,10 +311,11 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.coord = c;
         fc.generation = gen;
         fc.request_stamp = stamp;
-        fc.slice_w = slice_w;
+        fc.slice_w = slice.w;
+        fc.slice_theta = slice.theta;
         // The one branch that makes the engine four-dimensional. Null in
         // the 3D engine, which is every existing path.
-        if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice_w, fc.chunk);
+        if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
         else           terrain.fill_chunk(c.x, c.z, fc.chunk);
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
@@ -537,7 +538,13 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
     struct Stale { ChunkCoord c; long dist2; float drift; };
     std::vector<Stale> stale;
     for (const auto& kv : chunks_) {
-        const float drift = std::fabs(slice_w_ - kv.second->slice_w);
+        // Either axis of the slice moving makes a chunk stale. The
+        // rotation is weighted by a nominal 32-block lever arm, because a
+        // small angle displaces distant geometry far more than the same
+        // number does as a w offset - without it a rotation would look
+        // like it was doing nothing until the angle grew large.
+        const float drift = std::fabs(slice_w_ - kv.second->slice_w) +
+                            std::fabs(slice_theta_ - kv.second->slice_theta) * 32.0f;
         if (drift < kSliceStepMin) continue;
         if (requested_.count(kv.first)) continue;   // already on its way
         const long dx = kv.first.x - last_center_.x;
@@ -704,6 +711,7 @@ int World::drain_finished(int max_per_frame) {
         }
         slot_it->second->meshed_with = landed_mask;
         slot_it->second->slice_w = fc.slice_w;
+        slot_it->second->slice_theta = fc.slice_theta;
         slot_it->second->light = fc.light;
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.

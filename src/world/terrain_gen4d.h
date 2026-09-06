@@ -32,11 +32,39 @@ class TerrainGen4D {
 public:
     explicit TerrainGen4D(std::uint32_t seed = 1337);
 
-    // Surface height for a world column at (wx, wz) on slice w.
-    int height_at(int wx, int wz, float w) const;
+    // The 3D hyperplane the player currently occupies, as an offset along
+    // w and a rotation of the slice within 4D space.
+    //
+    // Translation alone is not a fourth dimension in the sense a player
+    // experiences one. It keeps the cut axis-aligned, so every slice is a
+    // different but perfectly ordinary 3D world and every block is a whole
+    // cube - the world swaps rather than reveals. Rotating the cut is what
+    // 4D Miner does with the scroll wheel, and it is what makes structures
+    // appear to change shape: a hyperplane at an angle to the 4D lattice
+    // meets a 4D block in a cross-section that is not the block.
+    //
+    // `theta` rotates in the (z, w) plane. At 0 the slice is the familiar
+    // w = constant hyperplane and z is depth. At pi/2 the slice's own z
+    // axis IS the fourth dimension: walking forward walks through w, and
+    // what was depth is gone. Everything between is a genuine mixture.
+    struct Slice {
+        float w = 0.0f;
+        float theta = 0.0f;
+    };
 
-    // Fills `out` with the chunk at (chunk_x, chunk_z) on slice w.
-    void fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) const;
+    // Surface height for a world column at (wx, wz) on the given slice.
+    int height_at(int wx, int wz, Slice s) const;
+
+    // Fills `out` with the chunk at (chunk_x, chunk_z) on the given slice.
+    void fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const;
+
+    // Where a point of the slice lands in 4D. The whole rotation lives
+    // here so nothing else has to know the convention.
+    static void to_4d(float sz, Slice s, float* out_z4, float* out_w4) {
+        const float c = std::cos(s.theta), sn = std::sin(s.theta);
+        *out_z4 = sz * c - s.w * sn;
+        *out_w4 = sz * sn + s.w * c;
+    }
 
     void set_caves_enabled(bool e) { caves_enabled_ = e; }
     bool caves_enabled() const { return caves_enabled_; }

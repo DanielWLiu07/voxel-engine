@@ -98,6 +98,8 @@ struct CliOptions {
     // fine and the problem is input; if it does not, it is not.
     bool auto_w = false;
     int  slice_w = 0;
+    // --slice-tilt R: start with the cut rotated R radians, for captures.
+    float slice_tilt = 0.0f;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;

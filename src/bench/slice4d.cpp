@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
                 const float z = static_cast<float>(py) - kSize * 0.5f;
                 height[static_cast<std::size_t>(py) * kSize + px] =
                     terrain.height_at(static_cast<int>(x), static_cast<int>(z),
-                                      static_cast<int>(w));
+                                      {static_cast<float>(w), 0.0f});
             }
         }
         for (int py = 0; py < kSize; ++py) {
