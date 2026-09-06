@@ -452,6 +452,26 @@ public:
         const float o2 = o * c - player_z * sn;
         slice_w_ = o2 / kWScale;
         slice_theta_ += delta;
+        // Kept in [-pi, pi]. A rotation is 2pi-periodic and the sampling
+        // goes through sin and cos, so this is exactly the identity - the
+        // same slice, named by the angle a reader would name it.
+        //
+        // Not fixing an observed bug, and worth saying so: a float loses
+        // the resolution of one notch somewhere past 1e5 radians, which is
+        // six days of continuous flicking, and --slice-tilt is clamped to
+        // +/-3.2 so the command line cannot get there either. It is here
+        // because an unbounded accumulator is a bad thing to leave lying
+        // around, and because the HUD reads better showing an orientation
+        // than a running total.
+        //
+        // It is only safe because staleness is a displacement now. The old
+        // |slice_theta_ - slot.slice_theta| would have seen a wrap as a
+        // 2pi jump and marked the entire world stale at the crossing;
+        // slice_drift goes through to_4d, which is periodic, so a wrap is
+        // invisible to it.
+        constexpr float kTwoPi = 6.28318530718f;
+        if (slice_theta_ >  kTwoPi * 0.5f) slice_theta_ -= kTwoPi;
+        if (slice_theta_ < -kTwoPi * 0.5f) slice_theta_ += kTwoPi;
     }
     float slice_theta() const { return slice_theta_; }
 

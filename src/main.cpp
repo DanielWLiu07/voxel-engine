@@ -1302,6 +1302,15 @@ int main(int argc, char** argv) {
             // world on a real GPU. --bench computes the same figure from
             // the mesher alone; the two agreeing is what says the
             // streaming path is uploading what the mesher produces.
+            // 11,528,256 bytes on the default seed and radius, and it
+            // reproduces exactly: twelve of thirteen runs measured during
+            // one session were byte-identical. The thirteenth printed
+            // 11.00 and was never reproduced, including by repeating the
+            // sequence it appeared in, so it is recorded here rather than
+            // explained. The figure the CI gate actually bounds is
+            // world_mesh_mb from --bench, which check_invariance proves
+            // byte-identical across runs; this one corroborates it from
+            // the running engine.
             const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
                                   / (1024.0 * 1024.0);
             std::printf("\nVALIDATE chunks=%zu bad_triangles=%d "
