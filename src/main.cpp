@@ -1120,11 +1120,28 @@ int main(int argc, char** argv) {
             auto settle = [&]() {
                 // Drain until every re-requested chunk has landed and the
                 // boundary re-meshes owed to it are flushed.
-                for (int guard = 0; guard < 100000; ++guard) {
+                //
+                // Bounded by TIME, not by iteration count. The first
+                // version guarded with `for (guard < 100000)`, which is a
+                // spin count: the loop body is a few microseconds when
+                // there is nothing to drain, so it burned through all
+                // 100,000 iterations in milliseconds and returned while
+                // workers were still busy. The hash was then taken on a
+                // half-rebuilt world, and whether the check passed
+                // depended on how much unrelated work happened to run
+                // first - adding a debug print "fixed" it.
+                //
+                // Yielding matters as much as the deadline: the drain is
+                // main-thread work waiting on nine workers, and spinning
+                // without yielding steals the core they need.
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(60);
+                while (std::chrono::steady_clock::now() < deadline) {
                     wrld.drain_finished(256);
                     wrld.flush_pending_remeshes(pool, 256);
                     if (wrld.pending_async() == 0 &&
                         wrld.pending_remesh() == 0) break;
+                    std::this_thread::yield();
                 }
             };
             auto world_hash = [&wrld]() {
@@ -1149,20 +1166,37 @@ int main(int argc, char** argv) {
                 return h;
             };
 
+            // Travels to a target w and drives the rebuild until the
+            // geometry has caught up.
+            //
+            // move_w declines a rebuild while the previous one is still
+            // draining - that throttle is what stops a held key from
+            // saturating the pool with work it will discard - so a check
+            // that assumed one call rebuilds would be testing an engine
+            // that does not exist. This drives it the way the render loop
+            // does, without waiting for frames.
+            auto travel_to = [&](float target) {
+                wrld.move_w(target - wrld.slice_w(), terrain, pool);
+                for (int guard = 0; guard < 1000; ++guard) {
+                    settle();
+                    if (std::fabs(wrld.meshed_w() - wrld.slice_w()) < 1e-4f) break;
+                    wrld.resample_slice(terrain, pool);
+                }
+            };
+
             const float w0 = wrld.slice_w();
             const std::uint64_t hash_w0 = world_hash();
             const int bad_w0 = wrld.debug_validate_gpu_meshes();
 
             const auto step_t0 = std::chrono::steady_clock::now();
             const int requested = wrld.move_w(+1.0f, terrain, pool);
-            settle();
+            travel_to(w0 + 1.0f);
             const double step_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - step_t0).count();
             const std::uint64_t hash_w1 = world_hash();
             const int bad_w1 = wrld.debug_validate_gpu_meshes();
 
-            wrld.move_w(-1.0f, terrain, pool);
-            settle();
+            travel_to(w0);
             const std::uint64_t hash_back = world_hash();
             const int bad_back = wrld.debug_validate_gpu_meshes();
 
@@ -1179,7 +1213,7 @@ int main(int argc, char** argv) {
             // covering, not because it isolates a guard.
             for (int i = 0; i < 3; ++i) wrld.move_w(+1.0f, terrain, pool);
             for (int i = 0; i < 3; ++i) wrld.move_w(-1.0f, terrain, pool);
-            settle();
+            travel_to(w0);
             const std::uint64_t hash_rapid = world_hash();
             const int bad_rapid = wrld.debug_validate_gpu_meshes();
 

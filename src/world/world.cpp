@@ -362,6 +362,25 @@ int World::move_w(float delta, const TerrainGen& terrain,
 
 int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
     if (!slice_gen_) return 0;
+
+    // One rebuild at a time.
+    //
+    // Without this, holding the travel key submits a whole window of jobs
+    // every time the player crosses the threshold - about three times a
+    // second - while the previous window is still sitting in the pool.
+    // The old jobs are not cancellable, so they run to completion and are
+    // then discarded on arrival for having a stale request stamp. The
+    // pool ends up saturated with work whose results are thrown away, and
+    // the geometry falls further behind the longer the key is held: the
+    // faster you travel, the less the world updates.
+    //
+    // Declining instead leaves meshed_w_ where it is, so move_w simply
+    // tries again on the next frame and the rebuild rate self-limits to
+    // whatever the pool can actually sustain. The player keeps moving at
+    // full speed; the geometry lags by however far they travelled during
+    // one rebuild, which the HUD shows.
+    if (jobs_in_flight_.load() > 0) return 0;
+
     meshed_w_ = slice_w_;
 
     // Every chunk in the world is now wrong: moving along w changes the
