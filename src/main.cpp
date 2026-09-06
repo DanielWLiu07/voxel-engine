@@ -1332,7 +1332,34 @@ int main(int argc, char** argv) {
                                  held_travelled > 0.5f &&
                                  held_geometry > held_travelled * 0.5f;
 
-            const bool ok = held_ok && requested > 0 &&
+            // Building across the fourth dimension: an edit made on one
+            // slice must survive travelling away and coming back, and must
+            // NOT appear on the slice next door.
+            //
+            // Both halves matter. Without the first, nothing you build
+            // persists and w is a sightseeing axis. Without the second, a
+            // hole dug into a hillside at w=0 turns up in mid-air at w=5,
+            // where the terrain around it means something else entirely.
+            travel_to(w0);
+            int ex = 0, ey = 0, ez = 0;
+            bool placed = false;
+            for (int i = 0; i < 256 && !placed; ++i) {
+                ex = (i * 7) % 32;
+                ey = 70 + (i % 8);
+                ez = (i * 11) % 32;
+                placed = wrld.set_block(ex, ey, ez, world::BlockId::Glow);
+            }
+            settle();
+            const bool edit_here = wrld.block_at(ex, ey, ez) == world::BlockId::Glow;
+            travel_to(w0 + 3.0f);
+            const bool absent_away =
+                wrld.block_at(ex, ey, ez) != world::BlockId::Glow;
+            travel_to(w0);
+            const bool back_again =
+                wrld.block_at(ex, ey, ez) == world::BlockId::Glow;
+            const bool edit_ok = placed && edit_here && absent_away && back_again;
+
+            const bool ok = edit_ok && held_ok && requested > 0 &&
                             hash_w1 != hash_w0 &&      // w is a real axis
                             hash_back == hash_w0 &&    // and a reversible one
                             hash_rapid == hash_w0 &&   // even under rapid steps
@@ -1343,12 +1370,14 @@ int main(int argc, char** argv) {
             std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
                         "changed=%d returned=%d rapid_ok=%d "
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
+                        "edit_survives_w=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
                         hash_back == hash_w0 ? 1 : 0,
                         hash_rapid == hash_w0 ? 1 : 0,
                         rebuilds, held_travelled, held_geometry,
+                        edit_ok ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;

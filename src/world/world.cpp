@@ -432,11 +432,23 @@ int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
         finished_.swap(empty);
     }
     jobs_in_flight_.store(0);
-    // Edits do not survive travel along w: they belong to the w they were
-    // made at, and the stash is keyed by (x, z) alone. Dropping it is the
-    // honest option until the stash carries a w - otherwise an edit made
-    // at w=0 would reappear at w=5 in a place that means something else.
-    edited_stash_.clear();
+    // The stash is NOT cleared: it is keyed by (chunk, slice) now, so
+    // edits made at one w do not match the lookup at another. They stay
+    // put, and travelling back to the slice they belong to brings them
+    // back - which is what makes building across the fourth dimension
+    // work at all. Each slice keeps its own edits.
+    //
+    // Every edited chunk is written down here, under the slice it
+    // currently belongs to, BEFORE the rebuild overwrites it. Eviction by
+    // distance used to be the only thing that stashed, and travelling
+    // along w does not evict: it regenerates in place, so without this an
+    // edit would be overwritten and lost having never been recorded.
+    for (const auto& kv : chunks_) {
+        if (!kv.second->player_modified) continue;
+        edited_stash_[SliceCoord{kv.first, meshed_slice_}] =
+            encode_chunk_rle(kv.second->chunk, /*edited=*/true);
+    }
+    meshed_slice_ = edit_slice();
 
     std::vector<ChunkCoord> coords;
     coords.reserve(chunks_.size());
@@ -465,6 +477,21 @@ int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
     // drawing until its replacement arrives, so the world morphs instead
     // of blinking through emptiness.
     for (const ChunkCoord& c : coords) {
+        // A stashed edit for the DESTINATION slice beats fresh terrain,
+        // the same priority update_streaming applies. Without this the
+        // rebuild regenerates pristine terrain over an edit the player
+        // made on this very slice and travelled away from.
+        if (auto sit = edited_stash_.find(SliceCoord{c, meshed_slice_});
+            sit != edited_stash_.end()) {
+            Chunk restored;
+            if (decode_chunk_rle(sit->second, restored)) {
+                enqueue_decoded_chunk(c, std::move(restored), pool,
+                                      /*preserve_on_evict=*/true);
+                continue;
+            }
+            // A stash entry we wrote ourselves failing to decode is a bug,
+            // not corruption; fall through to terrain rather than loop.
+        }
         // terrain is unused on this path - slice_gen_ is set, so the
         // worker takes the 4D branch - but it is passed rather than
         // faked, because forming a reference from nullptr is undefined
@@ -490,7 +517,8 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             // generator would silently undo them. Unmodified chunks are
             // cheaper to regenerate than to keep.
             if (it->second->player_modified) {
-                edited_stash_[it->first] = encode_chunk_rle(it->second->chunk, /*edited=*/true);
+                edited_stash_[SliceCoord{it->first, edit_slice()}] =
+                    encode_chunk_rle(it->second->chunk, /*edited=*/true);
                 ++stats.stashed;
             }
             it = chunks_.erase(it);
@@ -512,7 +540,8 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             // A stashed edit takes priority over fresh terrain. Decode is
             // main-thread (microseconds at RLE sizes); meshing still goes
             // through the worker pool like any load.
-            if (auto sit = edited_stash_.find(c); sit != edited_stash_.end()) {
+            if (auto sit = edited_stash_.find(SliceCoord{c, edit_slice()});
+                sit != edited_stash_.end()) {
                 Chunk restored;
                 if (decode_chunk_rle(sit->second, restored)) {
                     enqueue_decoded_chunk(c, std::move(restored), pool,

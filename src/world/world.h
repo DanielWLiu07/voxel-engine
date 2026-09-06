@@ -15,6 +15,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -32,6 +33,19 @@ struct ChunkCoord {
     bool operator==(const ChunkCoord& o) const { return x == o.x && z == o.z; }
 };
 
+// A chunk, plus which slice of the fourth dimension it belongs to.
+//
+// Edits belong to the w they were made at. Without that, an edit made at
+// one slice reappears at every other one, in a place where the terrain
+// around it means something completely different - a hole dug into a
+// hillside at w=0 turning up in mid-air at w=5. In the 3D engine w is
+// always 0 and this behaves exactly as a bare ChunkCoord did.
+struct SliceCoord {
+    ChunkCoord c{};
+    std::int32_t w = 0;
+    bool operator==(const SliceCoord& o) const { return c == o.c && w == o.w; }
+};
+
 struct ChunkCoordHash {
     std::size_t operator()(const ChunkCoord& c) const noexcept {
         std::uint64_t ux = static_cast<std::uint32_t>(c.x);
@@ -39,6 +53,14 @@ struct ChunkCoordHash {
         std::uint64_t h = (ux * 0x9E3779B97F4A7C15ull) ^ (uz + 0xBF58476D1CE4E5B9ull);
         h ^= h >> 27; h *= 0x94D049BB133111EBull; h ^= h >> 31;
         return static_cast<std::size_t>(h);
+    }
+};
+
+struct SliceCoordHash {
+    std::size_t operator()(const SliceCoord& s) const noexcept {
+        const std::size_t h = ChunkCoordHash{}(s.c);
+        return h ^ (static_cast<std::size_t>(static_cast<std::uint32_t>(s.w))
+                    * 0x9E3779B97F4A7C15ull);
     }
 };
 
@@ -223,6 +245,11 @@ public:
     }
     bool  is_4d() const { return slice_gen_ != nullptr; }
     float slice_w() const { return slice_w_; }
+    // Which integer slice edits made right now belong to. Always 0 in the
+    // 3D engine, so the stash keys are exactly what they always were.
+    std::int32_t edit_slice() const {
+        return slice_gen_ ? static_cast<std::int32_t>(std::floor(slice_w_)) : 0;
+    }
     // The w the resident geometry was actually built at. Lags slice_w_ by
     // up to kSliceRemeshStep while the player is moving.
     float meshed_w() const { return meshed_w_; }
@@ -384,7 +411,7 @@ public:
     void for_each_stashed(
         const std::function<void(ChunkCoord,
                                  const std::vector<std::uint8_t>&)>& fn) const {
-        for (const auto& kv : edited_stash_) fn(kv.first, kv.second);
+        for (const auto& kv : edited_stash_) fn(kv.first.c, kv.second);
     }
 
     // Total bytes the resident chunks hold in GPU buffers: per-chunk vertex
@@ -512,7 +539,7 @@ private:
     // with the number of distinct preserved chunks: edited ones, plus
     // loaded ones only when the save's manifest seed is absent or does
     // not match the active terrain (then nothing on disk is regenerable).
-    std::unordered_map<ChunkCoord, std::vector<std::uint8_t>, ChunkCoordHash>
+    std::unordered_map<SliceCoord, std::vector<std::uint8_t>, SliceCoordHash>
         edited_stash_;
 
     mutable std::mutex                 finished_mutex_;
@@ -529,6 +556,10 @@ private:
     const TerrainGen4D* slice_gen_ = nullptr;
     float               slice_w_ = 0.0f;   // where the player is
     float               meshed_w_ = 0.0f;  // where the geometry is
+    // The integer slice the resident chunks belong to. Needed separately
+    // from edit_slice() because a rebuild has to stash the OLD slice's
+    // edits before adopting the new one.
+    std::int32_t        meshed_slice_ = 0;
     // Where the player was standing at the last streaming update, so a
     // rebuild can start with the chunks they are looking at.
     ChunkCoord          last_center_{0, 0};
