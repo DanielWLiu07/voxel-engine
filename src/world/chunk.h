@@ -17,6 +17,19 @@ constexpr int chunk_index(int x, int y, int z) {
     return (y * kChunkSizeZ * kChunkSizeX) + (z * kChunkSizeX) + x;
 }
 
+// A square footprint is not a style choice, it is load-bearing, and four
+// places read one of these constants where the other is meant:
+// chunk_mesh's axis_size() returns kChunkSizeX for the Z axis, the greedy
+// sweep's boundary planes stride by kChunkSizeX whichever face they hold,
+// and chunk_light's LightPlane and its seed loop do the same. All four are
+// correct while the two are equal and silently wrong the moment they are
+// not - the mesher would sweep the wrong extent and emit geometry for
+// blocks it never read. Cheaper to fail here than to find that later.
+static_assert(kChunkSizeX == kChunkSizeZ,
+              "chunk_mesh and chunk_light index X-facing and Z-facing "
+              "planes with the same stride; a non-square chunk needs both "
+              "fixed before this can be relaxed");
+
 constexpr bool in_chunk_bounds(int x, int y, int z) {
     return x >= 0 && x < kChunkSizeX
         && y >= 0 && y < kChunkSizeY

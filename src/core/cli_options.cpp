@@ -36,6 +36,74 @@ bool parse_count(const char* text, long lo, long hi, const char* flag,
     return true;
 }
 
+
+// A float flag's argument: a real number in [lo, hi], or a rejection.
+//
+// The same hole the count flags had, in a place where it hides better.
+// std::strtof answers 0 for text it cannot read, and for --time-of-day 0
+// is midnight - a legal hour - so `--time-of-day noon` pinned the sun to
+// the far side of the planet, wrote a black PNG, and returned success.
+bool parse_float(const char* text, float lo, float hi, const char* flag,
+                 float* out, int& exit_code) {
+    char* end = nullptr;
+    errno = 0;
+    const float v = std::strtof(text, &end);
+    if (end == text || *end != '\0' || errno == ERANGE ||
+        !(v >= lo && v <= hi)) {
+        std::fprintf(stderr, "%s expects a number between %g and %g "
+                     "(got \"%s\")\n", flag, lo, hi, text);
+        exit_code = EXIT_FAILURE;
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+// A seed: any 32-bit value, but it has to be a number. strtoul reports
+// failure as 0 and 0 is a perfectly good seed, so `--seed defualt` used to
+// generate an entirely different world without a word about it - the one
+// failure mode a reproducibility flag must not have.
+bool parse_seed(const char* text, std::uint32_t* out, int& exit_code) {
+    char* end = nullptr;
+    errno = 0;
+    const unsigned long v = std::strtoul(text, &end, 10);
+    if (end == text || *end != '\0' || errno == ERANGE ||
+        v > 0xFFFFFFFFul || text[0] == '-') {
+        std::fprintf(stderr, "--seed expects a whole number in "
+                     "[0, 4294967295] (got \"%s\")\n", text);
+        exit_code = EXIT_FAILURE;
+        return false;
+    }
+    *out = static_cast<std::uint32_t>(v);
+    return true;
+}
+
+// The value that follows a value-taking flag, or nullptr after reporting
+// the error. Every one of these used to be guarded by `i + 1 < argc` in
+// the flag's own condition, which meant a value flag in last position
+// matched nothing at all and fell through to the next test: `voxel_engine
+// --radius` streamed at the default radius, in silence, and every number
+// it printed was for a run nobody asked for.
+const char* value_for(std::string_view flag, int argc, char** argv, int& i,
+                      int& exit_code) {
+    if (i + 1 >= argc) {
+        std::fprintf(stderr, "%.*s expects a value\n",
+                     static_cast<int>(flag.size()), flag.data());
+        exit_code = EXIT_FAILURE;
+        return nullptr;
+    }
+    return argv[++i];
+}
+
+// The pose names the frame bench knows. main's pose table falls back to
+// "center" for anything it does not recognise, so `--pose caves` used to
+// bench the surface and label the row "center" - a plausible-looking
+// measurement of the wrong thing.
+bool known_pose(std::string_view name) {
+    return name == "center" || name == "ground" || name == "high" ||
+           name == "cave";
+}
+
 }  // namespace
 
 std::optional<CliOptions> parse_cli(int argc, char** argv,
@@ -96,109 +164,152 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             exit_code = EXIT_SUCCESS;
             return std::nullopt;
         }
-        if (arg == "--bench") {
-            o.run_mesher_bench = true;
-            return o;
+        if (arg == "--bench") { o.run_mesher_bench = true; continue; }
+        if (arg == "--pass-breakdown") { o.bench_pass_breakdown = true; continue; }
+        if (arg == "--orbit") { o.bench_orbit = true; continue; }
+        if (arg == "--bench-io") { o.bench_io = true; continue; }
+        if (arg == "--wireframe") { o.start_wireframe = true; continue; }
+        if (arg == "--validate") { o.validate_mode = true; continue; }
+        if (arg == "--verify-edit-persistence") {
+            o.verify_edit_persistence = true;
+            continue;
         }
-        if (arg == "--bench-frame" && i + 1 < argc) {
-            if (!parse_count(argv[i + 1], 1, 1000000, "--bench-frame",
-                             &o.bench_frames, exit_code)) {
+        if (arg == "--no-occlusion") { o.no_occlusion = true; continue; }
+        if (arg == "--naive-mesh") { o.naive_mesh = true; continue; }
+        if (arg == "--sky-overdraw") { o.sky_overdraw = true; continue; }
+        if (arg == "--demo-lights") { o.demo_lights = true; continue; }
+
+        if (arg == "--bench-frame") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 1000000, "--bench-frame",
+                                   &o.bench_frames, exit_code)) {
                 return std::nullopt;
             }
-            ++i;
+            continue;
         }
-        if (arg == "--pass-breakdown") o.bench_pass_breakdown = true;
-        if (arg == "--orbit") o.bench_orbit = true;
-        if (arg == "--seed" && i + 1 < argc) {
-            o.terrain_seed = static_cast<std::uint32_t>(
-                std::strtoul(argv[i + 1], nullptr, 10));
-            ++i;
-        }
-        if (arg == "--radius" && i + 1 < argc) {
-            // Parse as long and range-check before narrowing, so a value
-            // past int range is rejected rather than silently truncated
-            // into the valid band (atoi would wrap 2^32+12 to 12). The
-            // out-of-band sentinel 0 is caught by the bound check below.
-            const long r = std::strtol(argv[i + 1], nullptr, 10);
-            o.stream_radius = (r >= 1 && r <= 40) ? static_cast<int>(r) : 0;
-            ++i;
-        }
-        if (arg == "--bench-io") o.bench_io = true;
-        if (arg == "--pose" && i + 1 < argc) {
-            o.bench_pose = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--screenshot-after" && i + 1 < argc) {
-            if (!parse_count(argv[i + 1], 1, 100000, "--screenshot-after",
-                             &o.shot_after, exit_code)) {
+        if (arg == "--screenshot-after") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 100000, "--screenshot-after",
+                                   &o.shot_after, exit_code)) {
                 return std::nullopt;
             }
-            ++i;
+            continue;
         }
-        if (arg == "--shot-file" && i + 1 < argc) {
-            o.shot_file = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--load" && i + 1 < argc) {
-            o.load_path = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--save" && i + 1 < argc) {
-            o.save_path = argv[i + 1];
-            ++i;
-        }
-        if (arg == "--wireframe") o.start_wireframe = true;
-        if (arg == "--bench-edit" && i + 1 < argc) {
-            if (!parse_count(argv[i + 1], 1, 1000000, "--bench-edit",
-                             &o.bench_edit, exit_code)) {
+        if (arg == "--bench-edit") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 1000000, "--bench-edit",
+                                   &o.bench_edit, exit_code)) {
                 return std::nullopt;
             }
-            ++i;
+            continue;
         }
-        if (arg == "--validate") o.validate_mode = true;
-        if (arg == "--verify-edit-persistence") o.verify_edit_persistence = true;
-        if (arg == "--threads" && i + 1 < argc) {
-            // Same strtol-then-range-check pattern as --radius: reject junk
-            // and out-of-band values via the 0 sentinel checked below.
-            const long t = std::strtol(argv[i + 1], nullptr, 10);
-            o.thread_override = (t >= 1 && t <= 64) ? static_cast<int>(t) : -1;
-            ++i;
-        }
-        if (arg == "--capture-orbit" && i + 1 < argc) {
-            if (!parse_count(argv[i + 1], 1, 100000, "--capture-orbit",
-                             &o.orbit_frames, exit_code)) {
+        // The two capture counts are bounded well below the frame counts:
+        // a capture writes a PNG per frame, so 100k frames is already more
+        // disk than the machine has.
+        if (arg == "--capture-orbit") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 100000, "--capture-orbit",
+                                   &o.orbit_frames, exit_code)) {
                 return std::nullopt;
             }
-            ++i;
+            continue;
         }
-        if (arg == "--capture-cycle" && i + 1 < argc) {
-            if (!parse_count(argv[i + 1], 1, 100000, "--capture-cycle",
-                             &o.cycle_frames, exit_code)) {
+        if (arg == "--capture-cycle") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 100000, "--capture-cycle",
+                                   &o.cycle_frames, exit_code)) {
                 return std::nullopt;
             }
-            ++i;
+            continue;
         }
-        if (arg == "--no-occlusion") o.no_occlusion = true;
+        // Below 1 there is no world, and a huge value allocates an
+        // enormous chunk grid: 40 chunks each way is 81x81 = 6561 chunks,
+        // already well past a comfortable draw distance. parse_count is
+        // what makes the bound stick - strtol alone reads "12O" as 12,
+        // which is exactly the typo a radius sweep invites.
+        if (arg == "--radius") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 40, "--radius",
+                                   &o.stream_radius, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--threads") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 1, 64, "--threads",
+                                   &o.thread_override, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--seed") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_seed(v, &o.terrain_seed, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--time-of-day") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 1.0f, "--time-of-day",
+                                   &o.time_of_day, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--pose") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            if (!known_pose(v)) {
+                std::fprintf(stderr, "--pose expects center, ground, high "
+                             "or cave (got \"%s\")\n", v);
+                exit_code = EXIT_FAILURE;
+                return std::nullopt;
+            }
+            o.bench_pose = v;
+            continue;
+        }
+        if (arg == "--shot-file") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            o.shot_file = v;
+            continue;
+        }
+        if (arg == "--load") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            o.load_path = v;
+            continue;
+        }
+        if (arg == "--save") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            o.save_path = v;
+            continue;
+        }
         // Free-position pose for investigating spots found in screenshots:
-        if (arg == "--orbit-center" && i + 1 < argc) {
+        if (arg == "--orbit-center") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
             float x = 0, z = 0, look_y = 45.0f;
-            const int got = std::sscanf(argv[i + 1], "%f,%f,%f", &x, &z, &look_y);
-            if (got < 2) {
+            if (std::sscanf(v, "%f,%f,%f", &x, &z, &look_y) < 2) {
                 std::fprintf(stderr, "--orbit-center expects x,z[,look_y]\n");
                 exit_code = EXIT_FAILURE;
                 return std::nullopt;
             }
             o.orbit_center = {x, look_y, z};
-            ++i;
             continue;
         }
         // Draws one chunk and discards the rest. Unlike frustum and
         // occlusion culling this throws away geometry the camera can see,
         // deliberately, so it exists for captures only and is never
         // combined with --validate or a bench.
-        if (arg == "--only-chunk" && i + 1 < argc) {
+        if (arg == "--only-chunk") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
             int cx = 0, cz = 0;
-            if (std::sscanf(argv[i + 1], "%d,%d", &cx, &cz) != 2) {
+            if (std::sscanf(v, "%d,%d", &cx, &cz) != 2) {
                 std::fprintf(stderr, "--only-chunk expects chunk_x,chunk_z\n");
                 exit_code = EXIT_FAILURE;
                 return std::nullopt;
@@ -206,41 +317,34 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             o.have_only_chunk = true;
             o.only_chunk_x = cx;
             o.only_chunk_z = cz;
-            ++i;
-            continue;
-        }
-        if (arg == "--naive-mesh") { o.naive_mesh = true; continue; }
-        if (arg == "--sky-overdraw") { o.sky_overdraw = true; continue; }
-        if (arg == "--demo-lights") { o.demo_lights = true; continue; }
-        if (arg == "--time-of-day" && i + 1 < argc) {
-            const float t = std::strtof(argv[i + 1], nullptr);
-            if (!(t >= 0.0f && t <= 1.0f)) {
-                std::fprintf(stderr,
-                             "--time-of-day expects 0..1 "
-                             "(0.25 sunrise, 0.5 noon, 0.75 sunset)\n");
-                exit_code = EXIT_FAILURE;
-                return std::nullopt;
-            }
-            o.time_of_day = t;
-            ++i;
             continue;
         }
         // --pose-at x,y,z,yaw,pitch (overrides --pose).
-        if (arg == "--pose-at" && i + 1 < argc) {
-            float v[5]{};
-            if (std::sscanf(argv[i + 1], "%f,%f,%f,%f,%f",
-                            &v[0], &v[1], &v[2], &v[3], &v[4]) == 5) {
-                o.pose_at = {v[0], v[1], v[2]};
-                o.pose_at_yaw = v[3];
-                o.pose_at_pitch = v[4];
-                o.have_pose_at = true;
-            } else {
+        if (arg == "--pose-at") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            float pv[5]{};
+            if (std::sscanf(v, "%f,%f,%f,%f,%f",
+                            &pv[0], &pv[1], &pv[2], &pv[3], &pv[4]) != 5) {
                 std::fprintf(stderr, "--pose-at expects x,y,z,yaw,pitch\n");
                 exit_code = EXIT_FAILURE;
                 return std::nullopt;
             }
-            ++i;
+            o.pose_at = {pv[0], pv[1], pv[2]};
+            o.pose_at_yaw = pv[3];
+            o.pose_at_pitch = pv[4];
+            o.have_pose_at = true;
+            continue;
         }
+
+        // Anything left is a typo. It used to fall out of the chain and
+        // run the engine on defaults, so `--raduis 8` streamed at 12 and
+        // printed a table for a radius nobody asked for. Every branch
+        // above continues, so reaching here means nothing matched.
+        std::fprintf(stderr, "unrecognised argument \"%s\" (see --help)\n",
+                     argv[i]);
+        exit_code = EXIT_FAILURE;
+        return std::nullopt;
     }
 
     // The two capture modes are mutually exclusive and need a positive
@@ -254,37 +358,16 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         exit_code = EXIT_FAILURE;
                 return std::nullopt;
     }
-    if (o.orbit_frames < 0 || o.cycle_frames < 0) {
-        std::fprintf(stderr, "capture frame count must be positive\n");
-        exit_code = EXIT_FAILURE;
-                return std::nullopt;
-    }
-    // Bound the frame counts so an absurd value cannot make the sample
-    // reserve throw bad_alloc and abort. 10 million frames is already far
-    // past any real bench or capture (days of frames).
-    constexpr int kMaxFrames = 10'000'000;
-    if (o.bench_frames > kMaxFrames || o.orbit_frames > kMaxFrames ||
-        o.cycle_frames > kMaxFrames) {
-        std::fprintf(stderr, "frame count too large (max %d)\n", kMaxFrames);
-        exit_code = EXIT_FAILURE;
-                return std::nullopt;
-    }
+    // The count, range and sign checks that used to live here are gone
+    // because they had become unreachable: every numeric flag now goes
+    // through parse_count, which rejects at the point of parse and says
+    // which flag and which value. A second bound sitting behind a stricter
+    // one reads like a safety net and catches nothing, which is how a
+    // check quietly stops being true.
+    //
     // --orbit only means anything for the frame bench; label the run so its
     // BENCH_FRAME line is not mistaken for a static pose.
     if (o.bench_orbit && o.bench_frames > 0) o.bench_pose = "orbit";
-    // Bound the radius: below 1 there is no world, and a huge value would
-    // allocate an enormous chunk grid. 40 chunks each way is 81x81 = 6561
-    // chunks, already well past a comfortable draw distance.
-    if (o.stream_radius < 1 || o.stream_radius > 40) {
-        std::fprintf(stderr, "--radius must be between 1 and 40\n");
-        exit_code = EXIT_FAILURE;
-                return std::nullopt;
-    }
-    if (o.thread_override < 0) {
-        std::fprintf(stderr, "--threads must be between 1 and 64\n");
-        exit_code = EXIT_FAILURE;
-                return std::nullopt;
-    }
     return o;
 }
 
