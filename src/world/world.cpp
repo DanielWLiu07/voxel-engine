@@ -1001,6 +1001,26 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // only do that if the edit is stored separately from the chunk it
     // sits in. Appended rather than deduplicated: replay is in order, so
     // the last write to a voxel wins by construction.
+    // A job already in flight for this chunk would land on top of the
+    // edit and erase it.
+    //
+    // The stale-result guard cannot help: that job was issued BEFORE the
+    // edit, so its stamp still matches and the result is accepted - and
+    // it carries a copy of slice_edits_ taken at submit time, without the
+    // new edit. The chunk is then stamped at the current slice, so
+    // nothing considers it stale and it is never rebuilt.
+    //
+    // Player-facing, and precisely when it is most likely: placing a
+    // block while scrolling the wheel or holding a travel key is placing
+    // one while jobs are in flight. The block vanishes, then reappears
+    // whenever the next rebuild happens to replay the list.
+    //
+    // Dropping the request is enough. The result is discarded on arrival
+    // for having no outstanding request, the resident chunk keeps the
+    // edit set_block just applied and re-meshed, and if the chunk was
+    // stale the next stream_slice re-requests it - with the edit in the
+    // replay list this time.
+    requested_.erase(cc);
     slice_edits_[SliceCoord{cc, edit_slice()}].push_back(
         VoxelEdit{static_cast<std::uint32_t>(
                       (static_cast<std::size_t>(wy) * kChunkSizeZ + lz)

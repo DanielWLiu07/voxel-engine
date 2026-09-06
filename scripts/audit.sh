@@ -109,7 +109,7 @@ grep_step "edit persistence" \
 # "changed=1 returned=1", which is the translation half - so the entire
 # rotation feature could have been deleted without this step noticing.
 grep_step "4D slice step + tilt" \
-  "changed=1 returned=1.*tilt_changed=1 tilt_returned=1 notch=1 edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1 tilt_survives_travel=1 reversible_away=1 edit_rotates=1 settled=1 edit_ns_stable=1" \
+  "changed=1 returned=1.*tilt_changed=1 tilt_returned=1 notch=1 edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1 tilt_survives_travel=1 edit_survives_inflight=1 reversible_away=1 edit_rotates=1 settled=1 edit_ns_stable=1" \
   ./build/voxel_engine --verify-4d --radius 6
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "headers self-sufficient"   ./scripts/check_headers.py

@@ -214,12 +214,13 @@ structure keeps turning with the world instead of freezing its chunk,
 that an edit reaches disk from outside the stream window, and that every
 triangle is valid under the same GPU read-back `--validate` uses:
 
-    VERIFY4D w=0.00 chunks=169 step_ms=80.3 changed=1 returned=1 rapid_ok=1
+    VERIFY4D w=0.00 chunks=169 step_ms=80.3 changed=1 returned=1
       held_rebuilds=114 held_travelled=0.80 held_geometry=0.69
       edit_survives_w=1 tilt_changed=1 tilt_returned=1 notch=1
       edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1
-      tilt_survives_travel=1 reversible_away=1 edit_rotates=1 settled=1
-      edit_ns_stable=1 bad_tris=0/0/0/0 ok
+      tilt_survives_travel=1 edit_survives_inflight=1
+      reversible_away=1 edit_rotates=1 settled=1
+      edit_ns_stable=1 bad_tris=0/0/0 ok
 
 It runs in `audit.sh`, which gates it by naming the fields, and on Linux
 in CI under a virtual display - the triangle check reads meshes back off

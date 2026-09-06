@@ -1381,14 +1381,21 @@ int main(int argc, char** argv) {
             // the mesher alone; the two agreeing is what says the
             // streaming path is uploading what the mesher produces.
             // 11,528,256 bytes on the default seed and radius, and it
-            // reproduces exactly: twelve of thirteen runs measured during
-            // one session were byte-identical. The thirteenth printed
-            // 11.00 and was never reproduced, including by repeating the
-            // sequence it appeared in, so it is recorded here rather than
-            // explained. The figure the CI gate actually bounds is
-            // world_mesh_mb from --bench, which check_invariance proves
-            // byte-identical across runs; this one corroborates it from
-            // the running engine.
+            // reproduces exactly - better than twenty consecutive runs,
+            // including immediately after a full audit.
+            //
+            // It printed 11.00 twice during one session and never
+            // reproduced in isolation. Both times another process was
+            // building into the same build/ directory, so the likeliest
+            // explanation is that those runs used a binary that was being
+            // relinked underneath them rather than that the figure moves.
+            // Recorded rather than asserted, because the difference
+            // between "deterministic" and "deterministic except twice" is
+            // exactly the kind of thing this repo does not round off.
+            //
+            // The figure the CI gate actually bounds is world_mesh_mb from
+            // --bench, which check_invariance proves byte-identical across
+            // runs; this one corroborates it from the running engine.
             const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
                                   / (1024.0 * 1024.0);
             std::printf("\nVALIDATE chunks=%zu bad_triangles=%d "
@@ -1497,22 +1504,33 @@ int main(int argc, char** argv) {
             const std::uint64_t hash_back = world_hash();
             const int bad_back = wrld.debug_validate_gpu_meshes();
 
-            // Rapid steps without settling in between: the case a player
-            // creates by pressing the key twice quickly, where each
-            // step's jobs are still in the pool when the next fires.
+            // There is no rapid-stepping phase, and its absence is
+            // deliberate rather than an omission.
             //
-            // This does not fail if step_slice's generation bump and
-            // clears are removed, and that is worth stating rather than
-            // implying otherwise: the per-request stamp that
-            // drain_finished already checks is what discards stale
-            // results, and it predates the 4D work. The phase is here
-            // because rapid stepping is a real usage pattern worth
-            // covering, not because it isolates a guard.
-            for (int i = 0; i < 3; ++i) wrld.move_w(+1.0f, 0.0f, terrain, pool);
-            for (int i = 0; i < 3; ++i) wrld.move_w(-1.0f, 0.0f, terrain, pool);
-            travel_to(w0);
-            const std::uint64_t hash_rapid = world_hash();
-            const int bad_rapid = wrld.debug_validate_gpu_meshes();
+            // One used to sit here, asserting that several rebuilds in
+            // flight at once still leave the world byte-identical. Three
+            // measurements retired it:
+            //
+            //   - the scenario is unreachable through move_w. resample_slice
+            //     declines while any job is in flight, so 1 of 6 rapid
+            //     calls issued a rebuild and 5 were refused by the
+            //     throttle; there is only ever one rebuild in flight.
+            //   - the stale-result stamp it leaned on fired zero times
+            //     across a whole run. It IS reachable - oscillating the
+            //     stream window while under-draining hits it 195 times -
+            //     but every phase here settles first, so this mode never
+            //     gets near it.
+            //   - and even when reached, the stamp is not a content
+            //     invariant. With the guard removed, 287-302 stale
+            //     results were accepted and the settled world was still
+            //     byte-identical: drain_finished stamps each slot from
+            //     its own job's slice and stream_slice re-requests
+            //     anything that does not match, so it self-heals.
+            //
+            // So no world-hash check can fail when that guard is removed,
+            // and a phase asserting otherwise asserts something false.
+            // The stamp is an efficiency mechanism - do not apply work
+            // you would only redo - not a correctness one.
 
             // Captured before the held-key phase below, which deliberately
             // leaves the player somewhere else along w. Asserting it after
@@ -1575,13 +1593,31 @@ int main(int argc, char** argv) {
                                       std::chrono::seconds(30);
                 for (int guard = 0; guard < 4000; ++guard) {
                     settle();
-                    if (wrld.stream_slice(terrain, pool) == 0) { settle(); return; }
+                    if (wrld.stream_slice(terrain, pool) == 0) {
+                        settle();
+                        // The inner settle() has its own deadline and
+                        // returns quietly when it blows it - and a world
+                        // that is merely draining SLOWLY has every
+                        // outstanding chunk in requested_, which makes
+                        // stream_slice return 0. So the early return here
+                        // could report a settled world that never
+                        // drained. Checking the queues is what separates
+                        // "nothing left to ask for" from "nothing left to
+                        // do".
+                        if (wrld.pending_async() != 0 ||
+                            wrld.pending_remesh() != 0) {
+                            break;
+                        }
+                        return;
+                    }
                     if (std::chrono::steady_clock::now() > deadline) break;
                 }
                 settle_timed_out = true;
-                std::fprintf(stderr, "[verify-4d] the world stopped "
-                             "converging: %d of %d chunks stale\n",
-                             wrld.slice_lag().stale, wrld.slice_lag().resident);
+                std::fprintf(stderr, "[verify-4d] the world did not settle: "
+                             "%d of %d chunks stale, %d jobs in flight, "
+                             "%d re-meshes pending\n",
+                             wrld.slice_lag().stale, wrld.slice_lag().resident,
+                             wrld.pending_async(), wrld.pending_remesh());
             };
             // 0.25 rad, about 14 degrees. Far past the 0.003 a scroll notch
             // gives, so this is many notches of turning, and far short of
@@ -1846,6 +1882,50 @@ int main(int argc, char** argv) {
                 std::fabs(wrld.slice_theta() - theta0) < 1e-4f;
             settle_slice();
 
+            // An edit made WHILE a rebuild is in flight must survive.
+            //
+            // Every other edit check settles first, so none of them place
+            // a block at the one moment a player most often does: while
+            // scrolling the wheel or holding a travel key, when jobs are
+            // in flight for the very chunk being edited.
+            //
+            // The stale-result guard cannot catch this, and that is worth
+            // stating because it looks like the guard's job. The job was
+            // issued BEFORE the edit, so its stamp still matches and the
+            // result is accepted - carrying a copy of the replay list
+            // from submit time, without the new edit. Measured before the
+            // fix: idle placement survived, placement at 24 jobs in
+            // flight did not.
+            bool edit_survives_inflight = false;
+            {
+                travel_to(w0);
+                settle_slice();
+                // Make the whole window stale, then edit without draining
+                // - this is the in-flight state, not a simulation of it.
+                for (int i = 0; i < 8; ++i) wrld.rotate_slice(kNotch, 0.0f);
+                wrld.stream_slice(terrain, pool, 64);
+                const int inflight = wrld.pending_async();
+                int rx = 4, ry = 0, rz = 4;
+                bool placed_racing = false;
+                for (int i = 0; i < 64 && !placed_racing; ++i) {
+                    ry = 76 + i;
+                    placed_racing =
+                        wrld.set_block(rx, ry, rz, world::BlockId::Glow);
+                }
+                settle_slice();
+                const bool still =
+                    wrld.block_at(rx, ry, rz) == world::BlockId::Glow;
+                edit_survives_inflight = placed_racing && inflight > 0 && still;
+                if (!edit_survives_inflight) {
+                    std::fprintf(stderr, "[verify-4d] an edit placed with %d "
+                                 "jobs in flight was lost (placed=%d)\n",
+                                 inflight, placed_racing ? 1 : 0);
+                }
+                wrld.set_block(rx, ry, rz, world::BlockId::Air);
+                for (int i = 0; i < 8; ++i) wrld.rotate_slice(-kNotch, 0.0f);
+                settle_slice();
+            }
+
             // A tilt must survive travelling along w.
             //
             // Every hash check in this mode runs at theta = 0 and every
@@ -1979,15 +2059,27 @@ int main(int argc, char** argv) {
                                   terrain, pool);
             settle_slice();
 
-            // And the world must actually CONVERGE after a rotation.
+            // No resident chunk may be left permanently stale.
             //
-            // It did not. enqueue_decoded_chunk never set the slice on the
-            // job, so every stash restore and every boundary re-mesh
-            // landed stamped (w=0, theta=0). At any nonzero slice that
-            // chunk was instantly stale again, was re-issued, landed
-            // stamped 0 again - a rebuild loop with no end, invisible at
-            // theta=0 where the default is accidentally correct, which is
-            // the only state the audit ran in.
+            // The claim this used to make - that it catches
+            // enqueue_decoded_chunk failing to stamp the slice - is
+            // false, and was checked: deleting that stamping still passes
+            // the whole suite. Stale drains monotonically under that
+            // fault because a chunk already meshed against a neighbour is
+            // not re-dirtied, so the bad stamp lands once per pair and
+            // never bounces back.
+            //
+            // What it does pin is narrower and real: that stream_slice's
+            // SELECTION covers its own staleness predicate. slice_lag
+            // counts every resident chunk; held_geometry only looks
+            // within four chunks of the camera, and `settled` only
+            // asserts stream_slice returned nothing more to ask for. When
+            // selection and predicate diverge - a chunk stale but never
+            // re-requested, from starvation, a budget bug, an ordering
+            // bug, a skip at the window edge - this is the only field
+            // with global reach. Verified by starving the far ring:
+            // `converges` fired alone, with settled=1 and ground_fixed=1
+            // beside it.
             wrld.rotate_slice(kNotch * 3.0f, 0.0f);
             settle_slice();
             const auto after_rotate = wrld.slice_lag();
@@ -1999,6 +2091,7 @@ int main(int argc, char** argv) {
                                  edit_survives_scroll && converges &&
                                  pivot_ok && player_ground_fixed &&
                                  tilt_survives_travel &&
+                                 edit_survives_inflight &&
                                  reversible_away &&
                                  edit_rotates && namespace_stable &&
                                  hash_tilt != hash_w0 &&
@@ -2093,25 +2186,24 @@ int main(int argc, char** argv) {
             const bool ok = edit_ok && held_ok && tilt_ok && requested > 0 &&
                             hash_w1 != hash_w0 &&      // w is a real axis
                             hash_back == hash_w0 &&    // and a reversible one
-                            hash_rapid == hash_w0 &&   // even under rapid steps
                             position_ok &&
                             bad_w0 == 0 && bad_w1 == 0 &&
-                            bad_back == 0 && bad_rapid == 0;
+                            bad_back == 0;
 
             std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
-                        "changed=%d returned=%d rapid_ok=%d "
+                        "changed=%d returned=%d "
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
                         "pivot=%d ground_fixed=%d tilt_survives_travel=%d "
+                        "edit_survives_inflight=%d "
                         "reversible_away=%d "
                         "edit_rotates=%d settled=%d "
                         "edit_ns_stable=%d "
-                        "bad_tris=%d/%d/%d/%d %s\n",
+                        "bad_tris=%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
                         hash_back == hash_w0 ? 1 : 0,
-                        hash_rapid == hash_w0 ? 1 : 0,
                         rebuilds, held_travelled, held_geometry,
                         edit_ok ? 1 : 0,
                         hash_tilt != hash_w0 ? 1 : 0,
@@ -2123,11 +2215,12 @@ int main(int argc, char** argv) {
                         pivot_ok ? 1 : 0,
                         player_ground_fixed ? 1 : 0,
                         tilt_survives_travel ? 1 : 0,
+                        edit_survives_inflight ? 1 : 0,
                         reversible_away ? 1 : 0,
                         edit_rotates ? 1 : 0,
                         settle_timed_out ? 0 : 1,
                         namespace_stable ? 1 : 0,
-                        bad_w0, bad_w1, bad_back, bad_rapid,
+                        bad_w0, bad_w1, bad_back,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
             glfwSetWindowShouldClose(window, GLFW_TRUE);
