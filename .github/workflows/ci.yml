@@ -33,7 +33,9 @@ jobs:
             libglu1-mesa-dev \
             xorg-dev \
             libwayland-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev \
+            xvfb \
+            libgl1-mesa-dri
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -63,16 +65,24 @@ jobs:
         run: ./scripts/check_headers.py
 
       - name: 4D slice verification
+        # Linux only, under a virtual display.
+        #
         # CI never ran this, so the entire fourth-dimension feature could
         # have been deleted and only a local audit would have noticed.
         # Both motions: travelling along w and rotating the slice, each
         # checked to change the world, return it exactly when reversed,
-        # keep player edits, converge, and leave every triangle valid.
+        # keep player edits, converge, and leave every triangle valid -
+        # that last one reads meshes back off the GPU, so unlike --bench
+        # this needs a real context and cannot run on a bare runner.
         #
-        # Radius 4 rather than the audit's 6: the runner's software GL is
-        # far slower than a real GPU and this is a correctness check, not
-        # a performance one - the properties hold at any window size.
-        run: ./build/voxel_engine --verify-4d --radius 4
+        # The macOS runner has no way to give it one: NSGL fails to find a
+        # pixel format with no window server, and there is no equivalent
+        # of xvfb. Linux gets Xvfb plus Mesa's llvmpipe, which is slow but
+        # complete. Radius 4 rather than the audit's 6 for that reason -
+        # these are correctness properties and they hold at any window
+        # size.
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./build/voxel_engine --verify-4d --radius 4
 
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
