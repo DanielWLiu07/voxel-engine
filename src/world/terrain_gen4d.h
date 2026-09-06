@@ -98,6 +98,22 @@ public:
     struct Slice {
         float w = 0.0f;
         float theta = 0.0f;
+        // Where the slice's own z axis starts, relative to world z.
+        //
+        // Needed only because the cut turns about the PLAYER. w and theta
+        // describe a line in the (z, w) plane, and that line is
+        // parametrised from the foot of its perpendicular to the 4D
+        // origin - a point that MOVES when the line turns. Without a
+        // third number the player's own position slides along the
+        // parametrisation every time the wheel moves, which made rotation
+        // irreversible: a notch out and a notch back returned the offset
+        // to o*cos^2(delta) instead of to o, so scrolling back and forth
+        // walked the player along the fourth axis without them touching a
+        // travel key.
+        //
+        // Zero for every axis-aligned slice and for the whole 3D engine,
+        // so it costs nothing where it is not needed.
+        float z_shift = 0.0f;
     };
 
     // Surface height for a world column at (wx, wz) on the given slice.
@@ -131,9 +147,10 @@ public:
     // what every published 3D and untilted 4D figure was measured with.
     static void to_4d(float sz, Slice s, float* out_z4, float* out_w4) {
         const float w = s.w * kWScale;
+        const float d = sz + s.z_shift;
         const float c = std::cos(s.theta), sn = std::sin(s.theta);
-        *out_z4 = sz * c - w * sn;
-        *out_w4 = sz * sn + w * c;
+        *out_z4 = d * c - w * sn;
+        *out_w4 = d * sn + w * c;
     }
 
     void set_caves_enabled(bool e) { caves_enabled_ = e; }

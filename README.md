@@ -153,18 +153,19 @@ under a bounded per-frame budget.
 
 | motion | main thread | behind when motion stopped | settle |
 |---|---|---|---|
-| travel along w, walking | 0.62 ms/frame | 241 / 289 chunks | 68 ms |
-| travel along w, sprinting | 0.58 | 289 / 289 | 84 ms |
-| scroll, 1 notch/sec | 0.38 | **28 / 289** | 3 ms |
-| scroll, 15 notches/sec | 0.58 | 245 / 289 | 68 ms |
-| scroll, 60 notches/sec | 0.56 | 289 / 289 | 76 ms |
+| travel along w, walking | 0.66 ms/frame | 241 / 289 chunks | 67 ms |
+| travel along w, sprinting | 0.63 | 289 / 289 | 109 ms |
+| scroll, 1 notch/sec | 0.34 | **10 / 289** | 0 ms |
+| scroll, 15 notches/sec | 0.79 | 226 / 289 | 65 ms |
+| scroll, 60 notches/sec | 0.77 | 273 / 289 | 84 ms |
 
 Read the scroll rows against the travel rows. A slow turn of the wheel is
-the only motion here the stream fully absorbs - it uses 13 of its 24
-chunk budget and converges in 3 ms. A brisk deliberate turn costs what
-walking costs; a trackpad flick costs what sprinting costs. That
-relationship is the goal: turning the slice should be no more expensive
-than travelling through it at a comparable pace.
+the only motion here the stream fully absorbs - it uses 10 of its 24
+chunk budget and has nothing left to do when it stops. A brisk turn costs
+slightly less than walking; a sixty-notch flick costs less than
+sprinting. That is the goal met: turning the slice is never more
+expensive than travelling through it at a comparable pace, at any rate a
+hand can produce.
 
 It got there by making staleness a measured displacement in the noise
 field rather than `|dw| + |dtheta| * 32`, a form that had to invent a
@@ -175,9 +176,9 @@ thread pays 4% of a 60 Hz frame while it does.
 Worth checking against something derived independently. `./build/wcost 8`
 builds a cost model with no engine in it - generate every chunk, mesh
 every chunk - and predicts 429 ms single-threaded for a full 289-chunk
-rebuild, 48 ms spread over the 9-worker pool. The motions above that
-leave the whole window stale converge in 76-84 ms, so 1.6x to 1.8x that,
-which is the right shape: the model assumes perfect 9-way
+rebuild, 48 ms spread over the 9-worker pool. Sprinting leaves the whole
+window stale and converges in 109 ms, so 2.3x that, which is the right
+shape: the model assumes perfect 9-way
 parallelism and counts only generate and mesh, while the real path also
 uploads to the GPU on one thread, re-meshes chunk boundaries as
 neighbours land, and deliberately spends the work at 24 chunks a frame

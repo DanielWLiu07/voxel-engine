@@ -18,25 +18,38 @@ render loop uses. Apple M4, 9-worker pool, radius 8 (289 chunks).
 
 | motion | mean ms | p99 ms | issued/frame | behind when motion stopped | settle |
 |---|---|---|---|---|---|
-| travel w, walk (0.4 u/s) | 0.62 | 0.96 | 23.8 / 24 | 241 / 289 | 68 ms |
-| travel w, sprint (1.2 u/s) | 0.58 | 0.68 | 24.0 / 24 | 289 / 289 | 84 ms |
-| scroll 1 notch/s | 0.38 | 1.15 | **13.2 / 24** | **28 / 289** | 3 ms |
-| scroll 5 notch/s | 0.65 | 1.10 | 24.0 / 24 | 178 / 289 | 48 ms |
-| scroll 15 notch/s | 0.58 | 0.66 | 24.0 / 24 | 245 / 289 | 68 ms |
-| scroll 60 notch/s | 0.56 | 0.68 | 24.0 / 24 | 289 / 289 | 76 ms |
+| travel w, walk (0.4 u/s) | 0.66 | 1.34 | 23.8 / 24 | 241 / 289 | 67 ms |
+| travel w, sprint (1.2 u/s) | 0.63 | 1.10 | 24.0 / 24 | 289 / 289 | 109 ms |
+| scroll 1 notch/s | 0.34 | 1.18 | **10.0 / 24** | **10 / 289** | 0 ms |
+| scroll 5 notch/s | 0.68 | 1.34 | 23.8 / 24 | 112 / 289 | 37 ms |
+| scroll 15 notch/s | 0.79 | 1.60 | 24.0 / 24 | 226 / 289 | 65 ms |
+| scroll 60 notch/s | 0.77 | 1.97 | 24.0 / 24 | 273 / 289 | 84 ms |
 
 The wheel is swept rather than measured at one rate, because a single
 rate was actively misleading: the bench used 0.18 rad/s, which is sixty
 notches a second, reported the whole window permanently stale, and that
 said more about the rate chosen than about the engine.
 
+Each phase resets the slice first and waits for the world to converge, or
+it would measure the previous phase's leftovers. That reset streams 256
+chunks an iteration rather than the default 24, and the difference is not
+cosmetic: the convergence loop exits only when nothing is in flight AND
+nothing is stale in the same pass, and at 24 a freshly-reset 625-chunk
+world almost never satisfies both at once. It timed out, and the scroll
+rows read 4 ms a frame and two seconds to settle - the reset, not the
+wheel. The loop now says so out loud when it fails.
+
 Read down the scroll rows against the two travel rows. A slow scroll is
-the only motion here the stream fully absorbs - it issues 13.2 of its 24
-chunk budget and converges in 3 ms. A brisk deliberate turn at 15
-notches/s costs what walking costs (245 against 241 stale, 68 ms
-against 68). A trackpad flick costs what sprinting costs. That
-relationship is the design goal: turning the slice should be no more
-expensive than travelling through it at a comparable pace.
+the only motion here the stream fully absorbs: it issues 10 of its 24
+chunk budget, leaves 10 of 289 chunks behind, and has nothing left to do
+when the motion stops. A brisk deliberate turn at 15 notches/s costs
+slightly less than walking (226 against 241 stale, 65 ms against 67). A
+sixty-notch flick costs less than sprinting (273 against 289, 84 ms
+against 109).
+
+That is the design goal met: turning the slice is never more expensive
+than travelling through it at a comparable pace, at any rate a hand can
+produce.
 
 ## Reading it
 
@@ -92,10 +105,13 @@ every chunk, mesh every chunk, no engine involved - and predicts:
       chunk (today's mesher)   429.0 ms/step   48 ms on 9 workers
 
 429 ms single-threaded for a full 289-chunk rebuild, 48 ms spread across
-the pool. The rows above that leave the whole window stale - sprinting
-and a 60/s flick - converge in 84 and 76 ms, so 1.6x to 1.8x the model.
-That is the fair comparison; the faster rows converge sooner because they
-left less of the window stale, not because they beat the model.
+the pool. Sprinting leaves the whole window stale and converges in 109
+ms, so 2.3x the model. That is the fair comparison - the faster rows
+converge sooner because they left less of the window stale, not because
+they beat the model - and the gap is the cost of not stopping the world:
+the real path uploads on the one thread that owns the GL context,
+re-meshes chunk boundaries as neighbours land, and spends the work at 24
+chunks a frame by design.
 
 That is the right shape, and a settle FASTER than the model would have
 meant the model was wrong rather than the engine fast. The model assumes

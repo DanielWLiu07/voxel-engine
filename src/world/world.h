@@ -108,6 +108,10 @@ struct ChunkSlot {
     // because rotating the cut changes the world exactly as translating it
     // does, so a chunk is stale if either has moved.
     float      slice_theta = 0.0f;
+    // The slice-z origin this chunk was generated with. Part of the
+    // slice's identity like w and theta, so drift cannot be computed
+    // without it.
+    float      slice_z_shift = 0.0f;
     // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
@@ -273,10 +277,18 @@ public:
     // axis, because they only ever see the slice at the player's w. That
     // is what keeps this a change to generation and streaming rather than
     // to everything.
+    // Point the world at a 4D generator and put it on a named slice.
+    //
+    // A full reset, orientation included: this says "start here", and a
+    // caller that means it does not want the previous slice's tilt or
+    // z origin surviving. --bench-4d resets between phases and had to
+    // clear those two separately before this did it.
     void set_slice_source(const TerrainGen4D* gen, float w) {
         slice_gen_ = gen;
         slice_w_ = w;
         meshed_w_ = w;
+        slice_theta_ = 0.0f;
+        slice_z_shift_ = 0.0f;
     }
     bool  is_4d() const { return slice_gen_ != nullptr; }
     float slice_w() const { return slice_w_; }
@@ -330,7 +342,7 @@ public:
     // single threshold could have been right for both. Now equal
     // displacement means equal expected change whatever direction it is
     // in, which is exactly what a staleness test needs.
-    float slice_drift(ChunkCoord c, float from_w, float from_theta) const;
+    float slice_drift(ChunkCoord c, TerrainGen4D::Slice from) const;
 
     // Target interval between rebuilds while travelling along w, in
     // seconds. The threshold is derived from this and the player's speed
@@ -447,10 +459,30 @@ public:
     // from a control that is advertised as rotating their view of 4D.
     void rotate_slice(float delta, float player_z) {
         if (!slice_gen_) return;
+        // Turn the pair (offset, player-position-along-the-slice) as a
+        // vector. That is all rotating about the player is: the player's
+        // 4D position is fixed, so its coordinates in the slice's own
+        // frame rotate with the frame.
+        //
+        //     u  = player_z + z_shift      (the player's slice-z)
+        //     o' = o cos d - u sin d
+        //     u' = o sin d + u cos d
+        //
+        // and the new shift is whatever puts the player back at their own
+        // world z. Doing it as a rotation of a pair is what makes it
+        // exactly reversible - a rotation by -d undoes a rotation by d,
+        // for any offset and any player position. The earlier version
+        // updated the offset alone and lost the u term, so a notch out
+        // and back left o at o*cos^2(d): standing still and scrolling to
+        // and fro slid the player along w, 8.5% of their w after ten
+        // thousand notches, with the HUD's counter drifting to match.
         const float c = std::cos(delta), sn = std::sin(delta);
         const float o = slice_w_ * kWScale;
-        const float o2 = o * c - player_z * sn;
+        const float u = player_z + slice_z_shift_;
+        const float o2 = o * c - u * sn;
+        const float u2 = o * sn + u * c;
         slice_w_ = o2 / kWScale;
+        slice_z_shift_ = u2 - player_z;
         slice_theta_ += delta;
         // Kept in [-pi, pi]. A rotation is 2pi-periodic and the sampling
         // goes through sin and cos, so this is exactly the identity - the
@@ -475,7 +507,9 @@ public:
     }
     float slice_theta() const { return slice_theta_; }
 
-    TerrainGen4D::Slice slice() const { return {slice_w_, slice_theta_}; }
+    TerrainGen4D::Slice slice() const {
+        return {slice_w_, slice_theta_, slice_z_shift_};
+    }
 
     // Legacy one-shot: move and, if that crossed the threshold, rebuild
     // the whole window synchronously. Kept for --verify-4d, which wants a
@@ -646,6 +680,7 @@ private:
         // has since moved to.
         float           slice_w = 0.0f;
         float           slice_theta = 0.0f;
+        float           slice_z_shift = 0.0f;
         // True when the chunk must never be regenerated from terrain
         // (player edits, stash restores, or disk chunks the active seed
         // cannot reproduce); the built slot is marked player_modified so
@@ -735,6 +770,8 @@ private:
     const TerrainGen4D* slice_gen_ = nullptr;
     float               slice_w_ = 0.0f;      // where the player is
     float               slice_theta_ = 0.0f;  // how their cut is tilted
+    // Where the slice's z axis starts; moves only when the cut turns.
+    float               slice_z_shift_ = 0.0f;
     float               meshed_w_ = 0.0f;  // where the geometry is
     // The integer slice the resident chunks belong to. Needed separately
     // from edit_slice() because a rebuild has to stash the OLD slice's

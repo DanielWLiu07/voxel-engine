@@ -299,7 +299,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     // w while jobs are in flight, and a worker reading slice_w_ off the
     // member would then generate a chunk for a slice nobody asked for.
     const TerrainGen4D* slice_gen = slice_gen_;
-    const TerrainGen4D::Slice slice = {slice_w_, slice_theta_};
+    const TerrainGen4D::Slice slice = this->slice();
     NeighborLight nlight = neighbor_light_for(c);
     pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice,
                  planes = std::move(planes),
@@ -313,6 +313,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.request_stamp = stamp;
         fc.slice_w = slice.w;
         fc.slice_theta = slice.theta;
+        fc.slice_z_shift = slice.z_shift;
         // The one branch that makes the engine four-dimensional. Null in
         // the 3D engine, which is every existing path.
         if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
@@ -489,7 +490,7 @@ int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
             if (decode_chunk_rle(sit->second, restored)) {
                 enqueue_decoded_chunk(c, std::move(restored), pool,
                                       /*preserve_on_evict=*/true,
-                                      {slice_w_, slice_theta_});
+                                      slice());
                 continue;
             }
             // A stash entry we wrote ourselves failing to decode is a bug,
@@ -522,14 +523,14 @@ float World::near_meshed_w(int chunk_radius) const {
     return worst;
 }
 
-float World::slice_drift(ChunkCoord c, float from_w, float from_theta) const {
+float World::slice_drift(ChunkCoord c, TerrainGen4D::Slice from) const {
     // The chunk's centre column stands for the chunk. Its own corners
     // move by different amounts under a rotation - that is what a
     // rotation is - and the centre is the average of them.
     const float sz = static_cast<float>(c.z * kChunkSizeZ + kChunkSizeZ / 2);
     float z_now = 0.0f, w_now = 0.0f, z_then = 0.0f, w_then = 0.0f;
-    TerrainGen4D::to_4d(sz, {slice_w_, slice_theta_}, &z_now, &w_now);
-    TerrainGen4D::to_4d(sz, {from_w, from_theta}, &z_then, &w_then);
+    TerrainGen4D::to_4d(sz, slice(), &z_now, &w_now);
+    TerrainGen4D::to_4d(sz, from, &z_then, &w_then);
     const float dz = z_now - z_then, dw = w_now - w_then;
     return std::sqrt(dz * dz + dw * dw);
 }
@@ -538,8 +539,10 @@ World::SliceLag World::slice_lag() const {
     SliceLag out{0, 0};
     for (const auto& kv : chunks_) {
         ++out.resident;
-        const float drift = slice_drift(kv.first, kv.second->slice_w,
-                                        kv.second->slice_theta);
+        const float drift = slice_drift(kv.first,
+                                        {kv.second->slice_w,
+                                         kv.second->slice_theta,
+                                         kv.second->slice_z_shift});
         if (drift >= kSliceDriftMin) ++out.stale;
     }
     return out;
@@ -565,8 +568,10 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
         // How far this chunk's terrain has actually moved in the noise
         // field. See slice_drift: a distance in one unit, not a weighted
         // sum of a length and an angle.
-        const float drift = slice_drift(kv.first, kv.second->slice_w,
-                                        kv.second->slice_theta);
+        const float drift = slice_drift(kv.first,
+                                        {kv.second->slice_w,
+                                         kv.second->slice_theta,
+                                         kv.second->slice_z_shift});
         if (drift < kSliceDriftMin) continue;
         if (requested_.count(kv.first)) continue;   // already on its way
         const long dx = kv.first.x - last_center_.x;
@@ -597,7 +602,7 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
             if (decode_chunk_rle(sit->second, restored)) {
                 enqueue_decoded_chunk(st.c, std::move(restored), pool,
                                       /*preserve_on_evict=*/true,
-                                      {slice_w_, slice_theta_});
+                                      slice());
                 ++issued;
                 continue;
             }
@@ -633,7 +638,7 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
                 Chunk keep = it->second->chunk;
                 enqueue_decoded_chunk(st.c, std::move(keep), pool,
                                       /*preserve_on_evict=*/true,
-                                      {slice_w_, slice_theta_});
+                                      slice());
                 ++issued;
                 continue;
             }
@@ -701,7 +706,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 if (decode_chunk_rle(sit->second, restored)) {
                     enqueue_decoded_chunk(c, std::move(restored), pool,
                                           /*preserve_on_evict=*/true,
-                                          {slice_w_, slice_theta_});
+                                          slice());
                     ++stats.restored;
                     continue;
                 }
@@ -774,6 +779,7 @@ int World::drain_finished(int max_per_frame) {
         slot_it->second->meshed_with = landed_mask;
         slot_it->second->slice_w = fc.slice_w;
         slot_it->second->slice_theta = fc.slice_theta;
+        slot_it->second->slice_z_shift = fc.slice_z_shift;
         slot_it->second->light = fc.light;
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.
@@ -910,6 +916,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // re-meshed chunk claim slice (0, 0).
         fc.slice_w = stamp.w;
         fc.slice_theta = stamp.theta;
+        fc.slice_z_shift = stamp.z_shift;
         fc.chunk = std::move(chunk);
         fc.preserve_on_evict = preserve_on_evict;
         // terrain step is skipped on the load path; the chunk came off disk

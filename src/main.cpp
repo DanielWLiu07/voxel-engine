@@ -1569,6 +1569,29 @@ int main(int argc, char** argv) {
             wrld.set_block(sx, sy, sz, world::BlockId::Air);
             settle_slice();
 
+            // Rotation must be EXACTLY reversible away from the origin,
+            // which is the case the tilt phase above cannot see.
+            //
+            // That phase rotates with player_z = 0 at w = 0, where the
+            // offset o is 0 and every formula returns 0 to 0 whatever it
+            // does in between. It passed while a notch out and a notch
+            // back left o at o*cos^2(delta) - so at any w != 0, scrolling
+            // to and fro slid the player along the fourth axis without
+            // them touching a travel key: 8.5% of their w after ten
+            // thousand notches, HUD counter drifting to match. A check
+            // that only ever runs where the quantity it guards is zero is
+            // not a check.
+            const float rev_w0 = wrld.slice_w();
+            const float rev_shift0 = wrld.slice().z_shift;
+            constexpr float kRevPlayerZ = 640.0f;   // well away from 0
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, kRevPlayerZ);
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(-kNotch, kRevPlayerZ);
+            const bool reversible_away =
+                std::fabs(wrld.slice_w() - rev_w0) < 1e-4f &&
+                std::fabs(wrld.slice().z_shift - rev_shift0) < 1e-3f &&
+                std::fabs(wrld.slice_theta() - theta0) < 1e-4f;
+            settle_slice();
+
             // The wheel must do the same thing wherever the player is
             // standing, and that is a property of the PIVOT rather than
             // of the rotation.
@@ -1631,7 +1654,7 @@ int main(int argc, char** argv) {
             settle_slice();
 
             const bool tilt_ok = edit_survives_scroll && converges &&
-                                 pivot_ok &&
+                                 pivot_ok && reversible_away &&
                                  hash_tilt != hash_w0 &&
                                  hash_untilt == hash_w0 &&
                                  bad_tilt == 0 && bad_untilt == 0 &&
@@ -1734,7 +1757,7 @@ int main(int argc, char** argv) {
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
-                        "pivot=%d "
+                        "pivot=%d reversible_away=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
@@ -1749,6 +1772,7 @@ int main(int argc, char** argv) {
                         edit_survives_scroll ? 1 : 0,
                         converges ? 1 : 0,
                         pivot_ok ? 1 : 0,
+                        reversible_away ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
@@ -1820,17 +1844,53 @@ int main(int argc, char** argv) {
                         "settle ms");
 
             for (const Phase& ph : phases) {
-                // Start each phase from a converged world, so the first
-                // frames measure the motion and not the leftovers of the
-                // previous phase.
+                // Start each phase from the SAME slice, not just a
+                // converged one.
+                //
+                // The phases run in sequence and each one moves the
+                // world: translate and sprint leave w at 8 between them.
+                // A rotation about the player displaces distant terrain
+                // in proportion to the slice's offset, so the scroll rows
+                // were measuring their own motion plus however far the
+                // travel rows had already gone - the 60/s row read 255 ms
+                // to settle against 187 for sprinting, and most of that
+                // gap was inherited w rather than the wheel. Resetting
+                // makes the rows comparable, which is the only reason to
+                // put them in one table.
+                wrld.set_slice_source(&terrain4d, 0.0f);
+                const auto warm_t0 = std::chrono::steady_clock::now();
+                bool warmed = false;
                 const auto warm_deadline =
                     std::chrono::steady_clock::now() + std::chrono::seconds(20);
                 while (std::chrono::steady_clock::now() < warm_deadline) {
                     wrld.drain_finished(256);
                     wrld.flush_pending_remeshes(pool, 256);
                     if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
-                        && wrld.stream_slice(terrain, pool) == 0) break;
+                        && wrld.stream_slice(terrain, pool, 256) == 0) {
+                        warmed = true;
+                        break;
+                    }
                     std::this_thread::yield();
+                }
+                // Only when it fails, and it must not fail: a phase that
+                // starts from a half-built world measures the warm-up
+                // rather than the motion. This loop streams 256 chunks an
+                // iteration rather than the default 24 for exactly that
+                // reason - it breaks only when nothing is in flight AND
+                // nothing is stale in the same pass, and at 24 a
+                // freshly-reset 625-chunk world almost never satisfies
+                // both at once. It timed out, and the scroll rows read
+                // 4 ms a frame and two seconds to settle: the reset, not
+                // the wheel.
+                if (!warmed) {
+                    std::fprintf(stderr, "[warm] %s did not converge in %.0f "
+                                 "ms, %d chunks still stale - the row below "
+                                 "measures the warm-up, not the motion\n",
+                                 ph.name,
+                                 std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now() - warm_t0)
+                                     .count(),
+                                 wrld.slice_lag().stale);
                 }
                 std::vector<double> frame_ms;
                 frame_ms.reserve(kFrames);
