@@ -94,28 +94,34 @@ float grad_dot(std::uint32_t h, float dx, float dy, float dz, float dw) {
          + static_cast<float>(g[2]) * dz + static_cast<float>(g[3]) * dw;
 }
 
-// Measured, and measured harder than the first time. Each gradient has
-// three non-zero unit components, so a single corner dot can reach
-// sqrt(3) ~ 1.732, but interpolation never realises that - the sixteen
-// corners pull against each other.
+// Scale factor bringing the raw field into [-1, 1], with margin.
 //
-// `noise4d_range` (src/bench, built by default) sweeps 200,000,000
-// samples across 200 seeds including 0 and UINT32_MAX and reports a raw
-// peak of 1.25719, so the raw field needs scaling by at most
-// 1/1.25719 = 0.7954 to land inside [-1, 1].
+// Every figure here is one the committed `noise4d_range` prints. That
+// matters more than usual, because the previous version of this comment
+// quoted a raw peak of 1.25719 that no committed program produced - it
+// came from a scratch sweep with a different seed family - inside the
+// very fix that was correcting a figure fitted too tightly. The rule is
+// never to quote a number whose input is not in the repo, and it has now
+// been broken here twice.
 //
-// This is 0.75, not 0.7954, and the margin is the point. The first
-// version of this constant was 0.81, fitted to a raw peak of 1.2244 found
-// over 20M samples and 8 seeds - and an adversarial review swept 200M
-// across 200 seeds, found 1.2572, and produced a sample at 1.018. The
-// bound was never a bound; the test simply had not met a violating sample
-// yet, which is exactly the "coin flip on the next sample" this comment
-// used to warn about while being an instance of it.
+// `noise4d_range` sweeps 200,000,000 samples across 400 seeds drawn from
+// two families, plus 0 and UINT32_MAX, and prints:
 //
-// 0.75 puts the measured peak at 0.943, about 6% of headroom for extremes
-// no sweep has reached. Widening the sweep can only push the raw peak up,
-// so a constant fitted to the last sweep's maximum is guaranteed to be
-// wrong eventually; one with margin is not.
+//     NOISE4D_RANGE samples=200000000 peak=0.9190 mean=0.00001 stddev=0.2196
+//     normalized peak 0.9190 (must stay <= 1.0), implying a raw peak of 1.2254
+//
+// 0.75 is deliberately NOT 1/1.2254 = 0.816. Different sweeps find
+// different maxima - changing the seed family or the samples-per-seed
+// moves the observed peak - and widening any sweep can only push it up.
+// A constant fitted to the last sweep's maximum is therefore guaranteed
+// to be wrong eventually, which is exactly what happened: 0.81 was fitted
+// to a raw peak of 1.2244 from 20M samples over 8 seeds, and a wider
+// sweep then produced a normalized sample above 1.0. The bound was never
+// a bound; the test had simply not met a violating sample.
+//
+// 0.75 leaves the printed peak at 0.919, roughly 8% of headroom for
+// extremes no sweep has reached. The unit test asserts the [-1, 1] bound,
+// and it is now a bound rather than a coin flip on the next sample.
 constexpr float kNormalize = 0.75f;
 
 }  // namespace

@@ -24,8 +24,16 @@ int main() {
     // 200 seeds and 200M samples, not the 8 and 20M this started with.
     // The narrower sweep found a raw peak of 1.2244; this one finds
     // 1.2572, and the constant fitted to the first was not a bound.
-    constexpr int kPerSeed = 1'000'000;
-    constexpr int kSeedCount = 200;
+    // Two seed families, because they find different maxima and the
+    // committed tool has to report the worse one. A scratch sweep using
+    // si*K+1 found a raw peak of 1.2572 while this tool's si*K family
+    // found 1.2109, and a comment in noise4d.cpp quoted the 1.2572 -
+    // a figure the committed program did not print. That is the rule this
+    // repo has about never quoting a figure whose input is not in the
+    // repo, broken inside the fix for an instance of it. Both families
+    // are swept now.
+    constexpr int kPerSeed = 500'000;
+    constexpr int kSeedCount = 400;
 
     float peak = 0.0f;
     double sum = 0.0, sumsq = 0.0;
@@ -34,9 +42,11 @@ int main() {
     for (int si = 0; si < kSeedCount; ++si) {
         // Spread over the whole 32-bit space rather than clustered low,
         // and including the two edges a multiply-mixed seed handles worst.
-        const std::uint32_t seed = (si == 0) ? 0u
-                                 : (si == 1) ? 4294967295u
-                                 : static_cast<std::uint32_t>(si) * 2654435761u;
+        const std::uint32_t seed =
+            (si == 0) ? 0u
+          : (si == 1) ? 4294967295u
+          : (si % 2 == 0) ? static_cast<std::uint32_t>(si / 2) * 2654435761u
+                          : static_cast<std::uint32_t>(si / 2) * 2654435761u + 1u;
         const world::Noise4D noise(seed);
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> pos(-500.0f, 500.0f);

@@ -259,8 +259,15 @@ void test_surface_material_follows_altitude() {
     t.set_caves_enabled(false);
     int snow_below_line = 0, grass_above_line = 0, dry_shore = 0;
     int snow_seen = 0, grass_seen = 0, sand_seen = 0;
-    for (int cz = -4; cz <= 4; ++cz) {
-        for (int cx = -4; cx <= 4; ++cx) {
+    int desert_seen = 0, land_seen = 0;
+    // Radius 6, not 4. The temperature field runs at 0.006, so its
+    // features are ~166 units across and a radius-4 window can sit
+    // entirely inside one temperature regime - at an earlier threshold
+    // that window contained exactly zero desert columns, so the check
+    // below would have been asserting against a sample that could not
+    // contain the thing it looks for.
+    for (int cz = -6; cz <= 6; ++cz) {
+        for (int cx = -6; cx <= 6; ++cx) {
             world::Chunk c;
             t.fill_chunk(cx, cz, 0, c);
             for (int z = 0; z < world::kChunkSizeZ; ++z)
@@ -276,7 +283,11 @@ void test_surface_material_follows_altitude() {
                         ++grass_seen;
                         if (h >= world::kSnowBand) ++grass_above_line;
                     }
-                    if (top == world::BlockId::Sand) ++sand_seen;
+                    if (top == world::BlockId::Sand) {
+                        ++sand_seen;
+                        if (h > world::kSeaLevel + world::kSandBand) ++desert_seen;
+                    }
+                    if (h > world::kSeaLevel + world::kSandBand) ++land_seen;
                     if (h <= world::kSeaLevel + world::kSandBand &&
                         top != world::BlockId::Sand) {
                         ++dry_shore;
@@ -286,6 +297,16 @@ void test_surface_material_follows_altitude() {
     }
     EXPECT(snow_seen > 0 && grass_seen > 0 && sand_seen > 0,
            "the sweep saw all three surface materials");
+    // Sand alone proves nothing about deserts: every shoreline is sand,
+    // and about a fifth of the world is below sea level. Deleting the
+    // desert branch entirely passed all 29 checks in this file because
+    // `sand_seen > 0` was satisfied by beaches. A desert is sand well
+    // ABOVE the beach band, which shoreline sand can never be.
+    EXPECT(desert_seen > 0, "and saw sand above the beach band, i.e. desert");
+    // Bounded from above too, because a threshold that fires everywhere
+    // would turn the whole world to sand and still satisfy the check
+    // above. Deserts are a minority biome by design.
+    EXPECT(desert_seen < land_seen / 2, "but the world is not all desert");
     EXPECT(snow_below_line == 0, "no snow below the snow line");
     EXPECT(grass_above_line == 0, "no grass above the snow line");
     EXPECT(dry_shore == 0, "everything at the waterline is sand");

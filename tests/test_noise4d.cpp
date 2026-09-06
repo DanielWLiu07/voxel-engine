@@ -8,6 +8,12 @@
 // a field that still looks like noise. It just has grid artifacts, or a
 // dead axis, or seams the lighting will find later.
 //
+// Each of those has its own guard, and they are not interchangeable - the
+// lattice identity below covers the fade endpoints only, the table is
+// asserted structurally at compile time, and the hash is covered by the
+// seed tests. Assuming one test covered all three is how the lattice
+// check spent a while claiming more than it did.
+//
 // So the tests here are the properties that separate correct gradient
 // noise from something that merely looks random, with the exact identity
 // (zero at every integer lattice point) as the anchor.
@@ -36,11 +42,17 @@ int g_checks   = 0;
 // ----- the exact identity ---------------------------------------------------
 
 void test_noise_is_exactly_zero_at_lattice_points() {
-    // At an integer point the distance vector to all sixteen corners has a
-    // zero along every axis it shares with the sample, so every corner dot
-    // is zero and so is the interpolation. This is an identity, not an
-    // approximation, which makes it the one thing here that can be checked
-    // on the nose rather than within a tolerance.
+    // Exact, not a tolerance - the one thing in this file checkable on the
+    // nose. But narrower than it first appears, and the header explains
+    // why: fade(0) = 0 makes every lerp weight zero, so the interpolation
+    // selects corner 0 alone, whose distance vector is the zero vector.
+    //
+    // That means this tests the fade curve's endpoints and nothing else.
+    // It does NOT test the hash or the gradient table, which the first
+    // version of this comment claimed: zeroing a gradient row passes it,
+    // and so does a hash returning a constant. Both verified by
+    // injection. Those are covered by the static_assert on the table and
+    // by the seed tests respectively.
     const world::Noise4D noise(1337);
     bool all_zero = true;
     float worst = 0.0f;

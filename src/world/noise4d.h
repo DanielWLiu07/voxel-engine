@@ -41,15 +41,24 @@ private:
     std::uint32_t seed_;
 };
 
-// Gradient noise is exactly zero at every integer lattice point: the
-// distance vector to each of the 16 corners has a zero component along the
-// axis it shares with the sample, and at a lattice point every distance
-// vector is the zero vector, so every corner dot product is zero.
+// Gradient noise is exactly zero at every integer lattice point, and the
+// reason is narrower than it looks.
 //
-// That is an exact identity rather than an approximation, which makes it
-// the one property here a test can assert on the nose. A hash that
-// collides, a gradient table with a zero row, or a fade curve that does
-// not pin its endpoints all break it.
+// It is not that all sixteen corner dot products vanish. Only corner 0
+// has a zero distance vector; the other fifteen have non-zero dots. What
+// makes the result zero is that fade(0) = 0, so every lerp weight is 0
+// and the interpolation selects corner 0 alone - whose dot is zero
+// because its distance vector is.
+//
+// So this identity depends on the fade curve pinning its endpoints, and
+// on nothing else. It is independent of the hash and of the gradient
+// table, which an earlier version of this comment claimed it covered:
+// zeroing a gradient row passes it, and so does a hash that returns a
+// constant. Both were checked by injection. The gradient table is
+// guarded by a static_assert in the .cpp and the hash by the seed tests;
+// this is the fade's guarantee and only that.
+//
+// It is still worth having, because it is exact rather than a tolerance.
 inline constexpr float kLatticeZero = 0.0f;
 
 }  // namespace world
