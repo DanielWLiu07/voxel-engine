@@ -230,6 +230,21 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME noise4d COMMAND noise4d_tests)
 
+  # Four-dimensional terrain generation. Its own binary next to the noise
+  # tests: no GL, and the only reason fastnoise is on the line is that
+  # terrain_gen4d.cpp reads the altitude bands out of terrain_gen.h.
+  add_executable(terrain4d_tests
+    tests/test_terrain_gen4d.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+  )
+  target_include_directories(terrain4d_tests PRIVATE src)
+  target_link_libraries(terrain4d_tests PRIVATE fastnoise)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(terrain4d_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME terrain4d COMMAND terrain4d_tests)
+
   # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
   # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
   add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)
@@ -263,6 +278,26 @@ if(VOXEL_BUILD_BENCH)
   target_link_libraries(slice4d PRIVATE stb)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(slice4d PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
+  # What the fourth dimension costs: a step along w invalidates every mesh
+  # in the window, so this measures the full rebuild and how much of it an
+  # incremental scheme could skip. CPU only, single-threaded on purpose.
+  add_executable(wcost
+    src/bench/wcost.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_light.cpp
+    src/world/chunk_serialize.cpp
+  )
+  target_include_directories(wcost PRIVATE src)
+  # fastnoise is here only for its include dir: terrain_gen4d.cpp reads
+  # the altitude band constants out of terrain_gen.h, which includes
+  # FastNoiseLite. No 3D noise is sampled by this binary.
+  target_link_libraries(wcost PRIVATE glm::glm glad fastnoise)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(wcost PRIVATE -Wall -Wextra -Wpedantic -O2)
   endif()
 
   add_executable(queue_bench src/bench/queue_bench.cpp)
