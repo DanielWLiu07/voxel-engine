@@ -527,7 +527,10 @@ int main(int argc, char** argv) {
     }
 
     game::Player player;
-    player.set_position({0.0f, 80.0f, 0.0f});
+    // The 4D world runs lower than the 3D one - its heights span roughly
+    // y=12..56 against the 3D generator's 30..45-plus-lakes - so spawning
+    // at the 3D height would drop the player in well above the terrain.
+    player.set_position({0.0f, opt.four_d ? 64.0f : 80.0f, 0.0f});
     bool walk_mode = false;
     world::BlockId place_id = world::BlockId::Stone;
 

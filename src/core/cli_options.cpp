@@ -131,7 +131,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
                 "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
-                "  voxel_engine --4d                     four-dimensional world; , and . step along w\n"
+                "  voxel_engine                          4D world by default; , and . step along w\n"
+                "  voxel_engine --3d                     the 3D world instead\n"
+                "  voxel_engine --4d                     force 4D on (benches and captures default to 3D)\n"
                 "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
@@ -174,6 +176,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--wireframe") { o.start_wireframe = true; continue; }
         if (arg == "--validate") { o.validate_mode = true; continue; }
         if (arg == "--4d") { o.four_d = true; continue; }
+        if (arg == "--3d") { o.force_3d = true; continue; }
         if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
         if (arg == "--slice-w") {
             const char* v = value_for(arg, argc, argv, i, exit_code);
@@ -392,6 +395,29 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
     // --orbit only means anything for the frame bench; label the run so its
     // BENCH_FRAME line is not mistaken for a static pose.
     if (o.bench_orbit && o.bench_frames > 0) o.bench_pose = "orbit";
+
+    // The fourth dimension defaults on for play and off for measurement.
+    // Decided here rather than at the flag, because it depends on which
+    // other modes were asked for and those can appear in any order.
+    const bool measuring = o.run_mesher_bench || o.bench_frames > 0 ||
+                           o.validate_mode || o.verify_edit_persistence ||
+                           o.bench_edit > 0 || o.bench_io ||
+                           !o.save_path.empty() || !o.load_path.empty() ||
+                           o.shot_after > 0 || o.orbit_frames > 0 ||
+                           o.cycle_frames > 0;
+    if (o.force_3d) {
+        o.four_d = false;
+    } else if (!measuring) {
+        // Interactive play, nothing measured: four dimensions.
+        o.four_d = true;
+    }
+    // A capture or a bench can still ask for 4D explicitly, and --verify-4d
+    // already sets four_d itself, so neither is overridden here.
+    if (o.force_3d && o.verify_4d) {
+        std::fprintf(stderr, "--3d and --verify-4d are contradictory\n");
+        exit_code = EXIT_FAILURE;
+        return std::nullopt;
+    }
     return o;
 }
 

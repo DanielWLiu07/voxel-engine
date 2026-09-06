@@ -63,7 +63,24 @@ struct CliOptions {
     // culler are unchanged - they only ever see the slice - so this is a
     // change to generation and streaming alone. Off by default, and the
     // 3D engine is exactly what it was.
+    // The fourth dimension is ON by default for interactive play, and OFF
+    // for every headless measurement path. --3d forces it off, --4d
+    // forces it on.
+    //
+    // The split is deliberate rather than timid. A world is a pure
+    // function of (seed, w), so a 4D world at w=0 is not the same world
+    // the 3D generator makes - different amplitude, no lakes, no trees.
+    // Defaulting the benches and --validate to it would silently move
+    // every published figure in the README: gpu_mesh_mb, the greedy
+    // ratio the CI gate pins, and the byte-identical BENCH_SUMMARY the
+    // invariance check compares. Those numbers describe the 3D engine and
+    // have to keep doing so.
+    //
+    // So: what a player walks around in is four-dimensional. What the
+    // repo measures and gates is the same thing it always measured, and
+    // asking for a 4D bench is one flag away.
     bool four_d = false;
+    bool force_3d = false;
     // --verify-4d: step along w and back, checking the world changes and
     // then returns to exactly what it was. Implies --4d.
     bool verify_4d = false;
