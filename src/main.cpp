@@ -1622,31 +1622,100 @@ int main(int argc, char** argv) {
                             return y;
                     return 0;
                 };
-                const int ez = 80;              // well away from the pivot
-                const int edited_x = 5, control_x = edited_x + 32;
+                // A whole chunk footprint, not one column.
+                //
+                // The first version compared a single column's integer
+                // surface height and required it to differ. Whether any
+                // ONE column's height changes is luck: the same check
+                // passed at radius 4 and 8 and failed at 6, because at 6
+                // the column it happened to pick landed on the same
+                // integer either side of the rotation. Counting how much
+                // of the chunk moved is the measurement that was meant.
+                auto profile = [&](int ox, int oz, std::vector<int>& out) {
+                    out.clear();
+                    for (int z = 0; z < world::kChunkSizeZ; ++z)
+                        for (int x = 0; x < world::kChunkSizeX; ++x)
+                            out.push_back(surface_of(ox + x, oz + z));
+                };
+                auto differing = [](const std::vector<int>& a,
+                                    const std::vector<int>& b) {
+                    int n = 0;
+                    for (std::size_t i = 0; i < a.size(); ++i)
+                        if (a[i] != b[i]) ++n;
+                    return n;
+                };
+                // Half the window, so this is well away from the pivot
+                // at any radius and inside the window at any radius.
+                //
+                // It was a fixed z = 80, which is outside a radius-4
+                // window: set_block returned false, put stayed false, and
+                // the check failed on CI while passing locally at radius
+                // 6. A check whose subject may not exist is worse than no
+                // check - it reports a failure of its own arithmetic.
+                const int half = (opt.stream_radius * world::kChunkSizeZ) / 2;
+                // Chunk-ALIGNED footprints, or the measurement straddles
+                // two chunks and only one of them is the subject.
+                //
+                // The first version profiled a 16x16 block starting at
+                // the edited column, which spanned two chunks in x: with
+                // the freeze injected, five columns of every row still
+                // belonged to the unedited neighbour and moved, which was
+                // enough to clear the threshold and pass. The check
+                // reported the feature working while the defect it exists
+                // for was present.
+                const int ez = (half / world::kChunkSizeZ) * world::kChunkSizeZ;
+                const int edited_x = 0;
+                const int control_x = edited_x + 2 * world::kChunkSizeX;
                 int py = 0;
                 bool put = false;
+                // Placed in the middle of the edited chunk, so the
+                // profile above is squarely the chunk that owns it.
+                const int edit_col_x = edited_x + world::kChunkSizeX / 2;
+                const int edit_col_z = ez + world::kChunkSizeZ / 2;
                 for (int i = 0; i < 64 && !put; ++i) {
                     py = 80 + i;
-                    put = wrld.set_block(edited_x, py, ez, world::BlockId::Glow);
+                    put = wrld.set_block(edit_col_x, py, edit_col_z,
+                                         world::BlockId::Glow);
+                }
+                if (!put) {
+                    std::fprintf(stderr, "[verify-4d] edit_rotates could not "
+                                 "place its block at (%d,*,%d) - window is "
+                                 "radius %d\n", edit_col_x, edit_col_z,
+                                 opt.stream_radius);
                 }
                 settle_slice();
-                const int e0 = surface_of(edited_x + 2, ez + 2);
-                const int c0 = surface_of(control_x + 2, ez + 2);
+                std::vector<int> e0, c0, e1, c1;
+                profile(edited_x, ez, e0);
+                profile(control_x, ez, c0);
                 for (int i = 0; i < 60; ++i) wrld.rotate_slice(kNotch, 0.0f);
                 settle_slice();
-                const int e1 = surface_of(edited_x + 2, ez + 2);
-                const int c1 = surface_of(control_x + 2, ez + 2);
+                profile(edited_x, ez, e1);
+                profile(control_x, ez, c1);
+                const int moved_edited = differing(e0, e1);
+                const int moved_control = differing(c0, c1);
                 // The edit itself must also still be there: replaying it
                 // over regenerated terrain is the whole mechanism, and a
                 // version that let the chunk rotate by dropping the edit
                 // would pass a terrain-only check.
                 const bool still_there =
-                    wrld.block_at(edited_x, py, ez) == world::BlockId::Glow;
-                edit_rotates = put && still_there && e0 != e1 && c0 != c1;
+                    wrld.block_at(edit_col_x, py, edit_col_z)
+                        == world::BlockId::Glow;
+                // A quarter of the footprint is far above the noise floor
+                // and far below what a full rotation moves; the measured
+                // values are most of the 256 columns in both chunks.
+                constexpr int kMoved = 64;
+                edit_rotates = put && still_there &&
+                               moved_edited > kMoved && moved_control > kMoved;
+                if (!edit_rotates) {
+                    std::fprintf(stderr, "[verify-4d] edit_rotates: placed=%d "
+                                 "still_there=%d edited moved %d/256 "
+                                 "control moved %d/256\n",
+                                 put ? 1 : 0, still_there ? 1 : 0,
+                                 moved_edited, moved_control);
+                }
                 for (int i = 0; i < 60; ++i) wrld.rotate_slice(-kNotch, 0.0f);
                 settle_slice();
-                wrld.set_block(edited_x, py, ez, world::BlockId::Air);
+                wrld.set_block(edit_col_x, py, edit_col_z, world::BlockId::Air);
                 settle_slice();
             }
 
