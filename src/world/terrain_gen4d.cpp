@@ -26,10 +26,10 @@ TerrainGen4D::TerrainGen4D(std::uint32_t seed)
       temp_(seed + 5),
       cave_a_(seed + 6), cave_b_(seed + 7) {}
 
-int TerrainGen4D::height_at(int wx, int wz, int w) const {
+int TerrainGen4D::height_at(int wx, int wz, float w) const {
     const float x = static_cast<float>(wx);
     const float z = static_cast<float>(wz);
-    const float fw = static_cast<float>(w) * kWScale;
+    const float fw = w * kWScale;
 
     // Domain warp, then three octave stacks over a 3D slice of the 4D
     // field: world x, world z and w, with the noise's remaining axis
@@ -58,10 +58,10 @@ int TerrainGen4D::height_at(int wx, int wz, int w) const {
         1, kChunkSizeY - 1);
 }
 
-void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, int w, Chunk& out) const {
+void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) const {
     const int origin_x = chunk_x * kChunkSizeX;
     const int origin_z = chunk_z * kChunkSizeZ;
-    const float fw = static_cast<float>(w) * kWScale;
+    const float fw = w * kWScale;
 
     int  surface[kChunkSizeZ][kChunkSizeX];
     bool is_desert[kChunkSizeZ][kChunkSizeX];

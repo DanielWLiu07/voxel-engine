@@ -216,23 +216,60 @@ public:
     // axis, because they only ever see the slice at the player's w. That
     // is what keeps this a change to generation and streaming rather than
     // to everything.
-    void set_slice_source(const TerrainGen4D* gen, int w) {
+    void set_slice_source(const TerrainGen4D* gen, float w) {
         slice_gen_ = gen;
         slice_w_ = w;
+        meshed_w_ = w;
     }
-    bool is_4d() const { return slice_gen_ != nullptr; }
-    int  slice_w() const { return slice_w_; }
+    bool  is_4d() const { return slice_gen_ != nullptr; }
+    float slice_w() const { return slice_w_; }
+    // The w the resident geometry was actually built at. Lags slice_w_ by
+    // up to kSliceRemeshStep while the player is moving.
+    float meshed_w() const { return meshed_w_; }
 
-    // Moves to an adjacent slice and re-requests every resident chunk at
-    // the new w. Returns how many were re-requested.
+    // How far the player can travel along w before the world is rebuilt
+    // for the new position.
     //
-    // Chunks are NOT cleared first: the old slice stays on screen until
-    // its replacement lands, so a step along w morphs rather than
-    // blinking through an empty world. Every job is stamped with the
-    // current generation, so anything still in flight from the previous
-    // slice is discarded on arrival instead of drawing the wrong world.
-    int step_slice(int delta, const TerrainGen& terrain,
-                   core::ThreadPool& pool);
+    // Not zero, because a rebuild is not free: every chunk in the window
+    // changes when w moves (the cost model in docs/4d.md measured 100%),
+    // so re-meshing on every frame of movement is not affordable. Not
+    // large either, or the fourth axis goes back to being a menu of
+    // discrete worlds.
+    //
+    // 0.12 is about eight rebuilds per world-unit of travel. At a w speed
+    // of ~1.5 units/sec that is a rebuild every ~0.09 s, and each one is
+    // spread across the worker pool and drained a few chunks per frame,
+    // so the terrain ripples into its new shape instead of stalling.
+    static constexpr float kSliceRemeshStep = 0.12f;
+
+    // How fast the player travels along w, in world units per second.
+    //
+    // Bounded by what the worker pool can rebuild, not by feel. A rebuild
+    // re-requests every chunk in the window - 625 at radius 12 - and the
+    // pool sustains about 2,200 chunks/sec, so a rebuild costs ~0.28 s
+    // there. At a threshold of 0.12 that allows roughly 0.43 units/sec
+    // before the world stops keeping up with the player.
+    //
+    // 0.4 sits just inside that. One world unit of w changes about half
+    // the columns, so this crosses a visibly different world every two
+    // and a half seconds - a pace for exploring an axis rather than
+    // flicking through it. Sprint triples it and does outrun the pool at
+    // radius 12, which is the honest trade: hold shift and the terrain
+    // lags behind you.
+    static constexpr float kWalkSpeedW   = 0.4f;
+    static constexpr float kSprintSpeedW = 1.2f;
+
+    // Moves the player's w by `delta` and rebuilds the world if that has
+    // taken it far enough from the geometry's w to matter. Returns how
+    // many chunks were re-requested, which is 0 on most calls.
+    //
+    // Chunks are NOT cleared: the old geometry keeps drawing until its
+    // replacement lands, so travelling along w morphs the world rather
+    // than blinking it.
+    int move_w(float delta, const TerrainGen& terrain, core::ThreadPool& pool);
+
+    // Rebuilds at the current w regardless of how far it has drifted.
+    int resample_slice(const TerrainGen& terrain, core::ThreadPool& pool);
 
     BlockId block_at(int wx, int wy, int wz) const;
     bool    set_block(int wx, int wy, int wz, BlockId b);
@@ -460,7 +497,11 @@ private:
     // Null in the 3D engine, which is the default and the only state the
     // benches and --validate ever see.
     const TerrainGen4D* slice_gen_ = nullptr;
-    int                 slice_w_ = 0;
+    float               slice_w_ = 0.0f;   // where the player is
+    float               meshed_w_ = 0.0f;  // where the geometry is
+    // Where the player was standing at the last streaming update, so a
+    // rebuild can start with the chunks they are looking at.
+    ChunkCoord          last_center_{0, 0};
     double                             total_worker_ms_  = 0.0;
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;

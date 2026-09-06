@@ -13,6 +13,11 @@ void print_bindings() {
                 "LCtrl = down (fly), Shift = sprint\n");
     std::printf("[input] LClick = break, RClick = place\n");
     std::printf("[input] 1-8 = pick block (8 = Glow, a light source)\n");
+    // Held like the movement keys, not tapped like the table's toggles -
+    // w is an axis you travel along, so it belongs with WASD in spirit
+    // even though the table is where its bindings live.
+    std::printf("[input] , and . = travel along w, the fourth axis "
+                "(hold; Shift sprints)\n");
 
     // Four to a line, so the list stays scannable as bindings are added.
     // The separator is written before each entry rather than after, which

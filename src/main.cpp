@@ -596,21 +596,26 @@ int main(int argc, char** argv) {
             std::printf("[world] occlusion culling %s\n",
                         occlusion_cull_enabled ? "on" : "off");
         }
-        // Stepping along w. A step invalidates every chunk in the window,
-        // so this re-requests all of them; the previous slice keeps
-        // drawing until the replacements land, which makes it read as the
-        // world morphing rather than blinking.
+        // Travel along w, held rather than pressed.
+        //
+        // This is the difference between a fourth dimension and a menu of
+        // worlds. key_down, not key_pressed: holding the key slides the
+        // player through w continuously, the same way holding W slides
+        // them through z, and the terrain morphs while they hold it. A
+        // keypress that jumped to the next integer slice made w a
+        // selector - you teleported between discrete worlds rather than
+        // moving through one.
         if (wrld.is_4d()) {
-            int slice_delta = 0;
-            if (input.key_pressed(core::key_of(core::Bind::SliceForward))) ++slice_delta;
-            if (input.key_pressed(core::key_of(core::Bind::SliceBack)))    --slice_delta;
-            if (slice_delta != 0) {
-                const auto slice_t0 = std::chrono::steady_clock::now();
-                const int requested = wrld.step_slice(slice_delta, terrain, pool);
-                std::printf("[world] w=%d (%d chunks re-requested in %.1f ms)\n",
-                            wrld.slice_w(), requested,
-                            std::chrono::duration<double, std::milli>(
-                                std::chrono::steady_clock::now() - slice_t0).count());
+            float w_axis = 0.0f;
+            if (input.key_down(core::key_of(core::Bind::SliceForward))) w_axis += 1.0f;
+            if (input.key_down(core::key_of(core::Bind::SliceBack)))    w_axis -= 1.0f;
+            if (w_axis != 0.0f) {
+                // Sprint applies here too, so the fourth axis handles like
+                // the other three.
+                const float w_speed = input.key_down(GLFW_KEY_LEFT_SHIFT)
+                    ? world::World::kSprintSpeedW : world::World::kWalkSpeedW;
+                wrld.move_w(w_axis * w_speed * static_cast<float>(dt),
+                            terrain, pool);
             }
         }
         if (input.key_pressed(core::key_of(core::Bind::Vsync))) {
@@ -1144,19 +1149,19 @@ int main(int argc, char** argv) {
                 return h;
             };
 
-            const int w0 = wrld.slice_w();
+            const float w0 = wrld.slice_w();
             const std::uint64_t hash_w0 = world_hash();
             const int bad_w0 = wrld.debug_validate_gpu_meshes();
 
             const auto step_t0 = std::chrono::steady_clock::now();
-            const int requested = wrld.step_slice(+1, terrain, pool);
+            const int requested = wrld.move_w(+1.0f, terrain, pool);
             settle();
             const double step_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - step_t0).count();
             const std::uint64_t hash_w1 = world_hash();
             const int bad_w1 = wrld.debug_validate_gpu_meshes();
 
-            wrld.step_slice(-1, terrain, pool);
+            wrld.move_w(-1.0f, terrain, pool);
             settle();
             const std::uint64_t hash_back = world_hash();
             const int bad_back = wrld.debug_validate_gpu_meshes();
@@ -1172,8 +1177,8 @@ int main(int argc, char** argv) {
             // results, and it predates the 4D work. The phase is here
             // because rapid stepping is a real usage pattern worth
             // covering, not because it isolates a guard.
-            for (int i = 0; i < 3; ++i) wrld.step_slice(+1, terrain, pool);
-            for (int i = 0; i < 3; ++i) wrld.step_slice(-1, terrain, pool);
+            for (int i = 0; i < 3; ++i) wrld.move_w(+1.0f, terrain, pool);
+            for (int i = 0; i < 3; ++i) wrld.move_w(-1.0f, terrain, pool);
             settle();
             const std::uint64_t hash_rapid = world_hash();
             const int bad_rapid = wrld.debug_validate_gpu_meshes();
@@ -1182,11 +1187,11 @@ int main(int argc, char** argv) {
                             hash_w1 != hash_w0 &&      // w is a real axis
                             hash_back == hash_w0 &&    // and a reversible one
                             hash_rapid == hash_w0 &&   // even under rapid steps
-                            wrld.slice_w() == w0 &&
+                            std::fabs(wrld.slice_w() - w0) < 1e-4f &&
                             bad_w0 == 0 && bad_w1 == 0 &&
                             bad_back == 0 && bad_rapid == 0;
 
-            std::printf("\nVERIFY4D w=%d chunks=%d step_ms=%.1f "
+            std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
                         "changed=%d returned=%d rapid_ok=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
@@ -1337,6 +1342,9 @@ int main(int argc, char** argv) {
         pf.worker_count    = worker_count;
         pf.streamed_in     = streamed_in_total;
         pf.streamed_out    = streamed_out_total;
+        pf.four_d          = wrld.is_4d();
+        pf.slice_w         = wrld.slice_w();
+        pf.meshed_w        = wrld.meshed_w();
         pf.edit_count      = wrld.edit_count();
         pf.edit_last_ms    = wrld.edit_last_ms();
         pf.edit_avg_ms     = wrld.edit_avg_ms();

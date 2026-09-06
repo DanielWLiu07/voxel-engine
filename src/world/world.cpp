@@ -349,12 +349,22 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
     }
 }
 
-int World::step_slice(int delta, const TerrainGen& terrain,
-                      core::ThreadPool& pool) {
-    if (!slice_gen_ || delta == 0) return 0;
+int World::move_w(float delta, const TerrainGen& terrain,
+                  core::ThreadPool& pool) {
+    if (!slice_gen_ || delta == 0.0f) return 0;
     slice_w_ += delta;
+    // Travel along w is continuous; rebuilding is not. The world is
+    // rebuilt only once the player has moved far enough from the w the
+    // geometry was built at that the difference would be visible.
+    if (std::fabs(slice_w_ - meshed_w_) < kSliceRemeshStep) return 0;
+    return resample_slice(terrain, pool);
+}
 
-    // Every chunk in the world is now wrong: a step along w changes the
+int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
+    if (!slice_gen_) return 0;
+    meshed_w_ = slice_w_;
+
+    // Every chunk in the world is now wrong: moving along w changes the
     // contents of all of them, which the cost model in docs/4d.md measured
     // at 100% - there is nothing to skip. So this re-requests the lot.
     //
@@ -377,7 +387,7 @@ int World::step_slice(int delta, const TerrainGen& terrain,
         finished_.swap(empty);
     }
     jobs_in_flight_.store(0);
-    // Edits do not survive a slice change: they belong to the w they were
+    // Edits do not survive travel along w: they belong to the w they were
     // made at, and the stash is keyed by (x, z) alone. Dropping it is the
     // honest option until the stash carries a w - otherwise an edit made
     // at w=0 would reappear at w=5 in a place that means something else.
@@ -386,10 +396,24 @@ int World::step_slice(int delta, const TerrainGen& terrain,
     std::vector<ChunkCoord> coords;
     coords.reserve(chunks_.size());
     for (const auto& kv : chunks_) coords.push_back(kv.first);
-    // Sorted so the request order does not depend on the hash map's
-    // iteration order - the same reason history_seek sorts.
+    // Nearest to the player first, so the terrain they are actually
+    // looking at morphs immediately and the far edge of the window catches
+    // up over the following frames. Rebuilding in scan order instead made
+    // the world change from one corner, which reads as a glitch rather
+    // than as movement.
+    //
+    // Ties broken by (z, x) so the order stays deterministic and does not
+    // depend on the hash map's iteration - the same reason history_seek
+    // sorts.
+    const ChunkCoord centre = last_center_;
+    auto dist2 = [centre](const ChunkCoord& c) {
+        const long dx = c.x - centre.x, dz = c.z - centre.z;
+        return dx * dx + dz * dz;
+    };
     std::sort(coords.begin(), coords.end(),
-              [](const ChunkCoord& a, const ChunkCoord& b) {
+              [&](const ChunkCoord& a, const ChunkCoord& b) {
+                  const long da = dist2(a), db = dist2(b);
+                  if (da != db) return da < db;
                   return a.z != b.z ? a.z < b.z : a.x < b.x;
               });
     // Note: chunks_ is deliberately NOT cleared. The previous slice keeps
@@ -409,6 +433,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                                            const TerrainGen& terrain,
                                            core::ThreadPool& pool) {
     StreamStats stats;
+    last_center_ = center;
     auto in_window = [&](ChunkCoord c) {
         return std::abs(c.x - center.x) <= radius
             && std::abs(c.z - center.z) <= radius;

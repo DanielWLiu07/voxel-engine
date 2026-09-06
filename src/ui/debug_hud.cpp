@@ -67,6 +67,12 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         ImGui::Separator();
 
         ImGui::Text("chunks drawn : %d / %d", f.chunks_drawn, f.chunks_total);
+    if (f.four_d) {
+        // The lag between the two is the point, not a defect: the player
+        // travels along w continuously and the world is rebuilt in steps,
+        // so geometry trails position by up to one rebuild threshold.
+        ImGui::Text("w %.2f  (geometry at %.2f)", f.slice_w, f.meshed_w);
+    }
         if (f.chunks_total > 0) {
             float cull_ratio = static_cast<float>(f.chunks_total) /
                                std::max(1, f.chunks_drawn);

@@ -49,8 +49,8 @@ inline constexpr KeyBinding kBindings[static_cast<int>(Bind::Count)] = {
     {GLFW_KEY_C,             "C",     "copy a perf snapshot to the clipboard"},
     // The fourth dimension. Only bound when --4d is on; the keys do
     // nothing in the 3D engine, which is the default.
-    {GLFW_KEY_PERIOD,        ".",     "step +1 along w (4D)"},
-    {GLFW_KEY_COMMA,         ",",     "step -1 along w (4D)"},
+    {GLFW_KEY_PERIOD,        ".",     "hold: travel +w (4D)"},
+    {GLFW_KEY_COMMA,         ",",     "hold: travel -w (4D)"},
 };
 
 constexpr int key_of(Bind b) { return kBindings[static_cast<int>(b)].key; }

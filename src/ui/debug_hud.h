@@ -36,6 +36,10 @@ struct PerfFrame {
     std::size_t worker_count = 0;
     int   streamed_in = 0;
     int   streamed_out = 0;
+    // The fourth axis. Row hidden entirely in the 3D engine.
+    bool  four_d = false;
+    float slice_w = 0.0f;    // where the player is along w
+    float meshed_w = 0.0f;   // where the geometry is; lags while moving
 };
 
 class DebugHud {

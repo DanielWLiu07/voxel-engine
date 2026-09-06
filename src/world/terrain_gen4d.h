@@ -9,6 +9,13 @@ namespace world {
 
 // Terrain generation with a fourth spatial axis.
 //
+// w is a float, not an integer slice index, and that distinction is the
+// difference between a fourth dimension and a world selector. An integer
+// w makes the fourth axis a menu: you jump between discrete worlds. A
+// continuous w makes it an axis you travel along, where holding a key
+// slides the terrain the way walking slides it - which is the only
+// version that reads as four-dimensional rather than as a level swap.
+//
 // The 3D generator's structure carries over exactly - domain-warped fBm
 // for height, two intersecting iso-surfaces for caves, altitude bands for
 // surface material - with w threaded through every noise sample. What does
@@ -26,10 +33,10 @@ public:
     explicit TerrainGen4D(std::uint32_t seed = 1337);
 
     // Surface height for a world column at (wx, wz) on slice w.
-    int height_at(int wx, int wz, int w) const;
+    int height_at(int wx, int wz, float w) const;
 
     // Fills `out` with the chunk at (chunk_x, chunk_z) on slice w.
-    void fill_chunk(int chunk_x, int chunk_z, int w, Chunk& out) const;
+    void fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) const;
 
     void set_caves_enabled(bool e) { caves_enabled_ = e; }
     bool caves_enabled() const { return caves_enabled_; }
