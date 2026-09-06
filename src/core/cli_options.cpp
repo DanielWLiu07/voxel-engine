@@ -138,6 +138,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --4d                     force 4D on (benches and captures default to 3D)\n"
                 "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
                 "  voxel_engine --bench-4d               cost of travelling and of rotating the slice, exit\n"
+                "  voxel_engine --capture-tilt N         N frames sweeping the 4D slice rotation, exit\n"
                 "  voxel_engine --list-monitors          list the displays and their indices, exit\n"
                 "  voxel_engine --monitor N              open on display N (default: wherever GLFW puts it)\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
@@ -197,6 +198,15 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
         if (arg == "--bench-4d") { o.bench_4d = true; o.four_d = true; continue; }
         if (arg == "--list-monitors") { o.list_monitors = true; continue; }
+        if (arg == "--capture-tilt") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 2, 100000, "--capture-tilt",
+                                   &o.capture_tilt, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
         if (arg == "--monitor") {
             // parse_count, not atoi. atoi reads "banana" as 0 and "1O" as
             // 1, so the run went ahead on the wrong display with no
@@ -407,16 +417,26 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         return std::nullopt;
     }
 
-    // The two capture modes are mutually exclusive and need a positive
-    // frame count. Rejecting here keeps the render loop's guards simple
-    // and avoids the soft-lock a negative atoi would otherwise cause: the
+    // The capture modes are mutually exclusive and need a positive frame
+    // count. Rejecting here keeps the render loop's guards simple and
+    // avoids the soft-lock a negative atoi would otherwise cause: the
     // input-enable and capture-enable checks would disagree, freezing the
     // camera with no capture and no way out.
-    if (o.orbit_frames != 0 && o.cycle_frames != 0) {
-        std::fprintf(stderr,
-                     "--capture-orbit and --capture-cycle are exclusive\n");
+    {
+        const int modes = (o.orbit_frames != 0 ? 1 : 0) +
+                          (o.cycle_frames != 0 ? 1 : 0) +
+                          (o.capture_tilt != 0 ? 1 : 0);
+        if (modes > 1) {
+            std::fprintf(stderr, "--capture-orbit, --capture-cycle and "
+                                 "--capture-tilt are exclusive\n");
+            exit_code = EXIT_FAILURE;
+            return std::nullopt;
+        }
+    }
+    if (o.force_3d && o.capture_tilt != 0) {
+        std::fprintf(stderr, "--3d and --capture-tilt are contradictory\n");
         exit_code = EXIT_FAILURE;
-                return std::nullopt;
+        return std::nullopt;
     }
     // The count, range and sign checks that used to live here are gone
     // because they had become unreachable: every numeric flag now goes

@@ -288,10 +288,12 @@ int main(int argc, char** argv) {
     const int thread_override = opt.thread_override;
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
+    const int tilt_frames  = opt.capture_tilt;
     // The two capture questions, named once (core/capture_mode.h). Built
     // from the same values the locals above carry; shot_after is the one
     // that counts down, so `capture` is rebuilt where that matters.
     core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
+                              tilt_frames,
                               bench_frames};
     const bool no_occlusion = opt.no_occlusion;
     const std::optional<world::ChunkCoord> only_chunk =
@@ -421,10 +423,8 @@ int main(int argc, char** argv) {
     const world::TerrainGen4D terrain4d(terrain_seed);
     if (opt.four_d) {
         wrld.set_slice_source(&terrain4d, static_cast<float>(opt.slice_w));
-        // Pivot at 0: --slice-tilt is applied before the camera exists,
-        // and a capture's pose is set afterwards, so there is no player
-        // position to turn about yet.
-        if (opt.slice_tilt != 0.0f) wrld.rotate_slice(opt.slice_tilt, 0.0f);
+        // --slice-tilt is applied further down, once the camera has its
+        // pose, so it turns about the viewer exactly as the wheel does.
         std::printf("\n"
             "  ========================================================\n"
             "   FOUR-DIMENSIONAL WORLD   (--3d for the ordinary one)\n"
@@ -553,6 +553,23 @@ int main(int argc, char** argv) {
             cam.set_position({0.0f, 80.0f, 0.0f});
             cam.set_yaw_pitch(-90.0f, -15.0f);
         }
+    }
+
+    // --slice-tilt, applied here rather than where the 4D generator is
+    // attached, because it has to turn about the CAMERA.
+    //
+    // It used to pivot at the world origin, since the camera had no pose
+    // yet at that point. That made every tilted capture show more change
+    // than a player sees: rotating about the origin displaces terrain in
+    // proportion to its distance from z=0, so a camera parked 60 blocks
+    // out watched the ground under it move, where scrolling in game
+    // leaves it still and moves the distance. The stills were honest
+    // about the generator and wrong about the engine.
+    // In the tilt clip --slice-tilt names the sweep's AMPLITUDE rather
+    // than a fixed angle, so one flag covers both "hold this cut" and
+    // "swing through this much of one".
+    if (opt.slice_tilt != 0.0f && tilt_frames == 0) {
+        wrld.rotate_slice(opt.slice_tilt, cam.position().z);
     }
 
     core::Input input;
@@ -878,6 +895,32 @@ int main(int argc, char** argv) {
         // height, always looking at the scene center; the cycle parks at
         // the orbit's start pose and spends the frames on one full day of
         // time-of-day instead.
+        // The tilt clip holds the camera and turns the 4D cut instead -
+        // the one capture where the world moves and the viewer does not.
+        //
+        // A ping-pong through sin, not a ramp: the sweep has to return to
+        // where it started or the GIF's last frame will not meet its
+        // first, and a rotation has no period short enough to loop on.
+        if (tilt_frames > 0 && world_settled) {
+            // --pose-at wins if given; otherwise park at the orbit's
+            // start, which looks across the spawn triple point.
+            if (!have_pose_at) {
+                const OrbitPose op = orbit_pose_at(0, 1, orbit_center);
+                cam.set_position(op.pos);
+                cam.set_yaw_pitch(op.yaw, op.pitch);
+            }
+            // Bigger than the stills' 0.08 on purpose. The pivot is the
+            // viewer, so the ground under the camera barely moves however
+            // far the cut turns - the change lives in the middle distance,
+            // and a sweep has to be wide enough to carry it there.
+            const float kTiltAmplitude =
+                (opt.slice_tilt != 0.0f) ? std::fabs(opt.slice_tilt) : 0.15f;
+            const float phase = 6.28318530718f *
+                static_cast<float>(capture_frame) /
+                static_cast<float>(tilt_frames);
+            const float want = kTiltAmplitude * std::sin(phase);
+            wrld.rotate_slice(want - wrld.slice_theta(), cam.position().z);
+        }
         if ((orbit_frames > 0 || cycle_frames > 0) && world_settled) {
             // Cycle parks at the orbit start (frame 0) and spends its
             // frames on time-of-day; orbit sweeps the full circle.
@@ -1232,6 +1275,37 @@ int main(int argc, char** argv) {
             if (capture_settle < kCaptureSettleFrames) {
                 ++capture_settle;
             } else {
+                // The tilt clip changes the WHOLE window between frames,
+                // so it converges before the shot rather than riding the
+                // streaming budget the way a moving camera can. A GIF of
+                // a half-built world is worse than no GIF.
+                //
+                // Here, not next to the rotation at the top of the loop:
+                // there it ran on all 90 settle frames as well, and a
+                // convergence that fell back on its deadline burned
+                // twenty seconds ninety times before the first PNG was
+                // written. Six frames took over ten minutes.
+                if (tilt_frames > 0) {
+                    const auto deadline = std::chrono::steady_clock::now() +
+                                          std::chrono::seconds(10);
+                    bool converged = false;
+                    while (std::chrono::steady_clock::now() < deadline) {
+                        wrld.drain_finished(256);
+                        wrld.flush_pending_remeshes(pool, 256);
+                        if (wrld.pending_async() == 0 &&
+                            wrld.pending_remesh() == 0 &&
+                            wrld.stream_slice(terrain, pool, 256) == 0) {
+                            converged = true;
+                            break;
+                        }
+                        std::this_thread::yield();
+                    }
+                    if (!converged) {
+                        std::fprintf(stderr, "[capture] frame %d did not "
+                                     "converge; %d chunks stale\n",
+                                     capture_frame, wrld.slice_lag().stale);
+                    }
+                }
                 char frame_name[32];
                 std::snprintf(frame_name, sizeof(frame_name),
                               "frame_%04d.png", capture_frame);

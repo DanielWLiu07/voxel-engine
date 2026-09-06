@@ -126,9 +126,11 @@ int tilt_table(std::uint32_t seed) {
     };
     sample(0.0f, flat);
 
-    // 0.003 is one scroll notch; 0.03 and 0.08 are the two tilts the
-    // README's triptych is captured at; the rest bracket them.
-    const float tilts[] = {0.003f, 0.01f, 0.03f, 0.05f, 0.08f, 0.25f, 1.5708f};
+    // 0.003 is one scroll notch; 0.075 and 0.15 are the two tilts the
+    // README's triptych is captured at, and 0.15 is the tilt clip's sweep
+    // amplitude; the rest bracket them.
+    const float tilts[] = {0.003f, 0.01f, 0.03f, 0.05f, 0.075f, 0.15f,
+                           0.25f, 1.5708f};
     std::printf("tilt divergence from theta=0, seed %u, %dx%d columns\n\n",
                 seed, kSize, kSize);
     std::printf("  %8s  %10s  %8s  %10s\n",

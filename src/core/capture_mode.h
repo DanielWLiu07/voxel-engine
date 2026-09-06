@@ -22,6 +22,10 @@ struct CaptureMode {
     int shot_after   = 0;  // frames to settle before a single PNG
     int orbit_frames = 0;  // frames of a camera orbit, one PNG each
     int cycle_frames = 0;  // frames of a day/night cycle, one PNG each
+    // Frames of a slice-rotation sweep, one PNG each. Holds the camera
+    // and turns the 4D cut instead, which is the only capture where the
+    // WORLD moves and the viewer does not.
+    int tilt_frames  = 0;
     int bench_frames = 0;  // frames to time; writes no image
 
     // The camera is driven by a script rather than by the player, so live
@@ -33,7 +37,8 @@ struct CaptureMode {
     // --bench-frame is NOT here: the plain frame bench uses the player's
     // pose and the orbit bench drives the camera through its own path.
     bool scripted_camera() const {
-        return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0;
+        return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0 ||
+               tilt_frames > 0;
     }
 
     // The run exists to produce an image or a measurement, so interface
@@ -56,7 +61,9 @@ struct CaptureMode {
     // Orbit wins if both are somehow set, which matches the order the
     // camera path is chosen in.
     int image_sequence_frames() const {
-        return orbit_frames > 0 ? orbit_frames : cycle_frames;
+        if (orbit_frames > 0) return orbit_frames;
+        if (cycle_frames > 0) return cycle_frames;
+        return tilt_frames;
     }
 };
 

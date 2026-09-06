@@ -97,17 +97,27 @@ hyperplane slice - and the slice is something you can move.
 <table>
 <tr>
 <td><img src="docs/media/tilt_0.00.jpg" width="270"><br><sub><b>flat cut</b></sub></td>
-<td><img src="docs/media/tilt_0.03.jpg" width="270"><br><sub><b>tilted 1.7 deg</b>, 73% of columns moved</sub></td>
-<td><img src="docs/media/tilt_0.08.jpg" width="270"><br><sub><b>tilted 4.6 deg</b>, 85%</sub></td>
+<td><img src="docs/media/tilt_0.075.jpg" width="270"><br><sub><b>tilted 4.3 deg</b>, 85% of columns moved</sub></td>
+<td><img src="docs/media/tilt_0.15.jpg" width="270"><br><sub><b>tilted 8.6 deg</b>, 90%</sub></td>
 </tr>
 </table>
 
 One camera, one seed, one `w`. The only thing changing between those three
-frames is the **angle** of the cut through the 4D world, and it is a few
-degrees. The lake and the headland stay recognisable while the snow field
-advances, the forest belt retreats and the sand spit reshapes: a related
-place seen from a different angle through the fourth dimension, not a
-reseeded one.
+frames is the **angle** of the cut through the 4D world. The coastline
+stays recognisable while the snow ridge becomes forest, islands appear
+off the point and the shoreline reorganises: a related place seen from a
+different angle through the fourth dimension, not a reseeded one.
+
+![The slice turning, camera held still](docs/media/slice_tilt.gif)
+
+Three seconds of the wheel, camera locked. Notice where the change is:
+the water in the near left barely moves while the middle distance
+rearranges itself. That is not an artifact of the clip - the cut turns
+about the **viewer**, so the ground under your feet stays put and the
+world reorganises around you, which is what makes it read as turning
+rather than as teleporting.
+
+    CLIP_TIME_OF_DAY=0.62 scripts/capture_clip.sh tilt
 
 That distinction is the whole design, and it took a wrong turn to find.
 The first version only **translated** along w, so every slice was the
@@ -117,28 +127,32 @@ and travelling swaps one ordinary 3D world for another ordinary 3D world.
 Rotating the slice cuts the lattice at an angle instead, which is what
 puts 4D structure on screen in cross section.
 
-The two motions are not the same size, and the reason is geometric: a
-tilted hyperplane diverges from the original linearly with distance, so
-the far edge of the view moves far more than the near.
+How far each motion moves the terrain, over the same window:
 
     ./build/slice4d --tilt          # seed 1337, 512x512 columns
 
 | motion | columns changed | largest move |
 |---|---|---|
 | rotate 0.003 rad (one scroll notch, 0.17 deg) | 19.4% | 2 blocks |
-| rotate 0.03 rad (centre image) | 73.2% | 15 |
-| rotate 0.08 rad (right image) | 85.2% | 21 |
+| rotate 0.075 rad (centre image) | 84.6% | 21 |
+| rotate 0.15 rad (right image, and the clip's sweep) | 89.8% | 29 |
 | **translate** w by a full rebuild threshold | 36.3% | 2 |
 
-What separates the two is not the size of the change but its *shape*. A
-translation moves every point of the window by the same amount. A
-rotation's displacement is proportional to distance from the axis it
-turns about, so the far field moves several times more than the near -
-measured at 0.03 rad, the band 64-128 blocks out changes more than 1.5x
-as many columns as the band under the player, while a translation is flat
-across the same two bands. No choice of w reproduces that, which is why a
-tilted cut looks like a different angle on the same world rather than a
-different world.
+Those totals are the less interesting half, and an earlier version of
+this table leaned on them too hard: at one scroll notch a rotation moves
+columns by at most 2 blocks, which is exactly what a rebuild-threshold
+translation gives. Rotation is not distinguished from translation by how
+MUCH it changes.
+
+It is distinguished by the *shape* of the change. A translation moves
+every point of the window by the same amount. A rotation's displacement
+is proportional to distance from the axis it turns about, so the far
+field moves several times more than the near: at 0.03 rad the band
+64-128 blocks out changes more than 1.5x as many columns as the band
+under the player's feet, while a translation is flat across the same two
+bands. That is structural. No choice of `w` reproduces it, and it is why
+a tilted cut reads as a different angle on the same world rather than as
+a different world.
 
 ### What the motion costs
 
@@ -185,9 +199,10 @@ neighbours land, and deliberately spends the work at 24 chunks a frame
 instead of dumping it all at once. A settle FASTER than the model would
 have meant the model was wrong.
 
-The chunk counts above reproduce exactly run to run; the timings are given
-as ranges because they are timings. Details, including two columns this
-bench had to remove for reporting constants rather than measurements:
+The chunk counts above reproduce exactly run to run, being counts; the
+timings are one run of many and move by a few percent between them.
+Details, including two columns this bench had to remove for reporting
+constants rather than measurements:
 [docs/bench/4d_motion.md](docs/bench/4d_motion.md).
 
 Both motions are verified rather than asserted. `--verify-4d` steps along

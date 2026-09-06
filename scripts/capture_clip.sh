@@ -3,9 +3,12 @@
 #
 #   ./scripts/capture_clip.sh orbit [frames] [out.gif]
 #   ./scripts/capture_clip.sh cycle [frames] [out.gif]
+#   ./scripts/capture_clip.sh tilt  [frames] [out.gif]
 #
 # orbit flies one deterministic camera circle; cycle holds the camera and
-# runs one full day of time-of-day. Frames land in ./capture, then ffmpeg
+# runs one full day of time-of-day; tilt holds the camera and turns the 4D
+# slice instead - the only clip where the world moves and the viewer does
+# not. Frames land in ./capture, then ffmpeg
 # assembles a palette-optimized looping GIF sized for GitHub's README
 # renderer (it must stay under roughly 10 MB to display inline). Both
 # modes cover one full period with frozen extras, so the last frame meets
@@ -14,11 +17,15 @@
 set -euo pipefail
 
 MODE=${1:-orbit}
-FRAMES=${2:-360}
+# The tilt clip converges the whole window between frames rather than
+# riding a streaming budget, so each frame costs about a second. 90 is a
+# three-second loop at 30 fps and takes a couple of minutes to capture.
+if [ "${1:-orbit}" = "tilt" ]; then FRAMES=${2:-90}; else FRAMES=${2:-360}; fi
 case "$MODE" in
   orbit) OUT=${3:-docs/media/orbit.gif} ;;
   cycle) OUT=${3:-docs/media/daycycle.gif} ;;
-  *) echo "usage: $0 orbit|cycle [frames] [out.gif]" >&2; exit 1 ;;
+  tilt)  OUT=${3:-docs/media/slice_tilt.gif} ;;
+  *) echo "usage: $0 orbit|cycle|tilt [frames] [out.gif]" >&2; exit 1 ;;
 esac
 # CLIP_ORBIT_CENTER="x,z[,look_y]" recenters the orbit (the lake clip uses
 # 288,-400,30); unset keeps the spawn triple-point circle.
@@ -45,8 +52,22 @@ COLORS=${CLIP_GIF_COLORS:-96}
 rm -rf capture
 # ${ARR[@]+"${ARR[@]}"} rather than "${ARR[@]}": macOS ships bash 3.2, where
 # expanding an EMPTY array under `set -u` is an unbound-variable error.
+# The tilt clip needs a pose: the orbit start looks across the spawn
+# triple point, which is where the biome variety is, and a rotation is
+# only legible against terrain that has something in it.
+POSE_ARGS=()
+if [ "$MODE" = "tilt" ]; then
+  # An elevated mid-distance vantage, not a close one. The cut turns
+  # about the VIEWER, so the ground underfoot is nearly still whatever the
+  # wheel does and the change lives 100-190 blocks out - a pose looking
+  # down at its own feet shows almost nothing happening.
+  POSE_ARGS=(--pose-at "${CLIP_TILT_POSE:-20,105,20,-115,-26}"
+             --radius "${CLIP_TILT_RADIUS:-12}"
+             --slice-tilt "${CLIP_TILT_AMPLITUDE:-0.15}")
+fi
 ./build/voxel_engine "--capture-$MODE" "$FRAMES" \
-    ${CENTER_ARGS[@]+"${CENTER_ARGS[@]}"} ${TOD_ARGS[@]+"${TOD_ARGS[@]}"}
+    ${CENTER_ARGS[@]+"${CENTER_ARGS[@]}"} ${TOD_ARGS[@]+"${TOD_ARGS[@]}"} \
+    ${POSE_ARGS[@]+"${POSE_ARGS[@]}"}
 
 # Two-pass palette assembly: a shared palette across the whole clip avoids
 # per-frame palette flicker, and lanczos keeps block edges crisp at README

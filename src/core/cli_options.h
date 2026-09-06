@@ -109,6 +109,9 @@ struct CliOptions {
     // built-in one. --list-monitors prints the indices and exits.
     int  monitor = -1;
     bool list_monitors = false;
+    // --capture-tilt N: hold the camera and sweep the slice rotation
+    // through a ping-pong, one PNG per frame. Implies --4d.
+    int  capture_tilt = 0;
     int  slice_w = 0;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
