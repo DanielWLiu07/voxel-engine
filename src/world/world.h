@@ -229,8 +229,27 @@ public:
     // preserve_on_evict: true when the chunk cannot be regenerated from
     // the active terrain (player edits, or a save whose seed is unknown
     // or different); such chunks stash on eviction instead of vanishing.
+    // Mesh an already-decoded chunk off-thread: a stash restore, or a
+    // re-mesh of a chunk whose neighbour just landed.
+    //
+    // `stamp` is which slice the resulting chunk belongs to, and it is a
+    // required argument rather than a default because getting it wrong is
+    // invisible. It used to be omitted entirely, so every chunk down this
+    // path was stamped with FinishedChunk's default (w=0, theta=0). At
+    // any nonzero slice that chunk was instantly stale again, got
+    // re-issued, landed stamped 0 again, and the world never converged -
+    // one scroll notch put the whole window into a rebuild loop that
+    // never ended. It was invisible at w=0, theta=0, where the default
+    // happens to be correct, and that is the only state the audit ran in.
+    //
+    // A restore takes the CURRENT slice: the stash is keyed by slice, so
+    // a restored chunk belongs where it is being restored to. A re-mesh
+    // takes the slot's OWN slice, because re-meshing does not regenerate
+    // anything - claiming the current slice there would mark a stale
+    // chunk fresh and it would stop being rebuilt.
     void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool,
-                               bool preserve_on_evict);
+                               bool preserve_on_evict,
+                               TerrainGen4D::Slice stamp);
     void request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
                                core::ThreadPool& pool);
 

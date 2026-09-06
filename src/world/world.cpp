@@ -488,7 +488,8 @@ int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
             Chunk restored;
             if (decode_chunk_rle(sit->second, restored)) {
                 enqueue_decoded_chunk(c, std::move(restored), pool,
-                                      /*preserve_on_evict=*/true);
+                                      /*preserve_on_evict=*/true,
+                                      {slice_w_, slice_theta_});
                 continue;
             }
             // A stash entry we wrote ourselves failing to decode is a bug,
@@ -589,10 +590,49 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
             Chunk restored;
             if (decode_chunk_rle(sit->second, restored)) {
                 enqueue_decoded_chunk(st.c, std::move(restored), pool,
-                                      /*preserve_on_evict=*/true);
+                                      /*preserve_on_evict=*/true,
+                                      {slice_w_, slice_theta_});
                 ++issued;
                 continue;
             }
+        }
+
+        // An edited chunk must be written down before anything overwrites
+        // it, and this path used to overwrite it without looking.
+        //
+        // resample_slice stashes every player_modified chunk before
+        // rebuilding. This path did not, and it is the path the scroll
+        // wheel takes: one notch puts drift at 0.003 * 32 = 0.096, six
+        // times kSliceStepMin, for EVERY chunk in the window at once - so
+        // a single scroll destroyed every edit in the world, and scrolling
+        // back did not bring them back because nothing had recorded them.
+        //
+        // The stash key is the chunk's OWN slice, not the current one. An
+        // edit belongs where it was made: carrying it forward under the
+        // destination key would make a hole dug at w=0 reappear at w=5, in
+        // terrain that means something else.
+        auto it = chunks_.find(st.c);
+        if (it != chunks_.end() && it->second->player_modified) {
+            const std::int32_t home = slice_gen_
+                ? static_cast<std::int32_t>(std::floor(it->second->slice_w))
+                : 0;
+            edited_stash_[SliceCoord{st.c, home}] =
+                encode_chunk_rle(it->second->chunk, /*edited=*/true);
+            if (home == edit_slice()) {
+                // Still the slice the edit belongs to, so the edit still
+                // applies here: keep the chunk and re-stamp it to the
+                // current orientation rather than regenerating over it.
+                // Regenerating and letting the next pass restore from the
+                // stash would reach the same state, one flicker later.
+                Chunk keep = it->second->chunk;
+                enqueue_decoded_chunk(st.c, std::move(keep), pool,
+                                      /*preserve_on_evict=*/true,
+                                      {slice_w_, slice_theta_});
+                ++issued;
+                continue;
+            }
+            // Different slice: the edit stays behind with its own, and
+            // fresh terrain is correct here.
         }
         request_terrain_chunk(st.c, terrain, pool);
         ++issued;
@@ -654,7 +694,8 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 Chunk restored;
                 if (decode_chunk_rle(sit->second, restored)) {
                     enqueue_decoded_chunk(c, std::move(restored), pool,
-                                          /*preserve_on_evict=*/true);
+                                          /*preserve_on_evict=*/true,
+                                          {slice_w_, slice_theta_});
                     ++stats.restored;
                     continue;
                 }
@@ -820,8 +861,13 @@ int World::flush_pending_remeshes(core::ThreadPool& pool, int max_jobs) {
         // Copying rather than pointing is the whole reason this is safe to
         // run off-thread: the main thread stays free to edit or evict any
         // of these chunks while the job is in flight.
+        // The slot's OWN slice, not the current one. A boundary re-mesh
+        // regenerates nothing - it re-packs the geometry a chunk already
+        // holds - so claiming the current slice here would mark a stale
+        // chunk fresh and stream_slice would stop rebuilding it.
         enqueue_decoded_chunk(c, it->second->chunk, pool,
-                              it->second->player_modified);
+                              it->second->player_modified,
+                              {it->second->slice_w, it->second->slice_theta});
         ++issued;
     }
     return issued;
@@ -831,16 +877,17 @@ int World::pending_async() const { return jobs_in_flight_.load(); }
 
 void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
                                   core::ThreadPool& pool,
-                                  bool preserve_on_evict) {
-    const std::uint64_t stamp = ++request_seq_;
-    requested_[c] = stamp;
+                                  bool preserve_on_evict,
+                                  TerrainGen4D::Slice stamp) {
+    const std::uint64_t seq = ++request_seq_;
+    requested_[c] = seq;
     jobs_in_flight_.fetch_add(1);
     const std::uint64_t gen = generation_;
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, c, gen, stamp, preserve_on_evict, mask, kind,
+    pool.submit([this, c, gen, seq, stamp, preserve_on_evict, mask, kind,
                  planes = std::move(planes),
                  nlight = std::move(nlight),
                  chunk = std::move(chunk)]() mutable {
@@ -850,7 +897,13 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         FinishedChunk fc;
         fc.coord = c;
         fc.generation = gen;
-        fc.request_stamp = stamp;
+        fc.request_stamp = seq;
+        // Which slice this chunk belongs to. Omitting these was the whole
+        // defect: drain_finished stamps the slot from them, so leaving
+        // them at the FinishedChunk default made every restored or
+        // re-meshed chunk claim slice (0, 0).
+        fc.slice_w = stamp.w;
+        fc.slice_theta = stamp.theta;
         fc.chunk = std::move(chunk);
         fc.preserve_on_evict = preserve_on_evict;
         // terrain step is skipped on the load path; the chunk came off disk
