@@ -36,6 +36,14 @@ constexpr std::size_t kRecordBytes = 16;
 
 bool EditLog::record(std::uint32_t tick, int x, int y, int z,
                      BlockId prev, BlockId next) {
+    // Tick 0 is the world before anything was built, and seek() can never
+    // reach a record stored there: forward skips `tick <= from_tick` and a
+    // seek starts at 0 or later, backward breaks on `tick <= to_tick` and
+    // a seek ends at 0 or later. A tick-0 record would sit in the log
+    // looking like a stored edit and never replay in either direction.
+    // This class refuses what it cannot replay, and that is the one input
+    // that slipped through.
+    if (tick == 0) return false;
     if (!records_.empty() && tick < records_.back().tick) return false;
     if (y < 0 || y >= kChunkSizeY) return false;
     const auto p = static_cast<std::uint8_t>(prev);
@@ -154,6 +162,7 @@ bool EditLog::decode(std::span<const std::uint8_t> bytes, EditLog& out,
         // log that passes the CRC can still be a log this build cannot
         // replay - out-of-order ticks or an unknown block id would seek to
         // a world that never existed rather than fail.
+        if (r.tick == 0) return false;   // unseekable, as in record()
         if (r.tick < last_tick) return false;
         // No height check here, and that is deliberate rather than an
         // omission: y is a uint8_t and the world is exactly 256 blocks

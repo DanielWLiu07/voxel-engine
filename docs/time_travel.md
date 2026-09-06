@@ -230,7 +230,7 @@ It checks three things, and only the second genuinely needs GL:
 
 It is in `scripts/audit.sh` alongside the other end-to-end checks.
 
-## Five defects an adversarial review found
+## What an adversarial review found
 
 Both were in the wiring rather than the log, both were silent, and both
 are the reason `--verify-history` looks the way it does now.
@@ -320,6 +320,28 @@ whose comment described loading as replaying "saved edits through
 `set_block`. A knob nobody turns, documented against a path that does
 not exist, is worse than no knob.
 
+### 6-10. Smaller things from the same review
+
+`record()` accepted a tick-0 edit that `seek()` can never reach - forward
+skips `tick <= from_tick` and backward breaks on `tick <= to_tick`, and
+both bounds start at 0, so such a record would sit in the log looking
+like an edit and never replay. Refused now, in `record()` and in
+`decode()`.
+
+`history_seek` remeshed in `std::unordered_set` iteration order, and
+`remesh_slot` relights each chunk against its neighbours' current light,
+so a hash container's ordering was an input to a rendering result - in a
+repo whose CI gates on byte-identical output. Sorted now; it costs
+nothing at these sizes.
+
+`test_the_log_is_small` asserted "under 17 bytes a record" against a
+16-byte struct, which could only fail if the record layout changed, and
+the `static_assert` in `edit_log.h` already catches that. It passed for a
+weaker reason than its label claimed. It now asserts the claim actually
+worth making - 100,000 edits fit in under 2 MB, measured at 1.53 - plus
+that the encoding is exactly linear, which is what makes the projection
+sound.
+
 Every fix was verified by restoring the original defect and confirming
 the check fails: `dropped=1 branch_ok=0 FAILED`, `bad_tris_rewind=1338
 FAILED`, and `reload_ok=0 FAILED`, each exiting 1 and each breaking
@@ -343,3 +365,26 @@ the fix.
 
 **A scrub UI.** There is no `--replay` flag or timeline slider yet; the
 seek is an API and a verification flag.
+
+**Persistence is not wired into save/load.** `save_history` and
+`load_history` exist and are covered by unit tests, but nothing in the
+engine calls them except one `save_history` used to print a byte count.
+So a log does not survive quitting - the format, the CRC and the seed
+guard are all tested and none of them are load-bearing yet.
+
+**An in-flight worker job can revert a seek's writes.** `drain_finished`
+replaces a whole chunk slot, voxels included, from the worker's copy. A
+chunk that was queued for re-mesh when `history_seek` rewrote it reverts
+to its pre-seek voxels when that job lands. This is pre-existing rather
+than new - `set_block` has exactly the same exposure - but a seek touches
+neighbour chunks it never queued, so it is easier to reach. Not
+reproduced, and `--verify-history` cannot see it, because everything
+there happens inside one frame. Left alone deliberately: the fix belongs
+in the streaming path, where it would affect every edit rather than just
+history, and that is not a change to make inside a history PR.
+
+**`--bench-edit` now measures one `push_back` more than it used to.** It
+times `set_block` from the outside, and recording an edit happens inside
+that. Against a remesh of roughly a millisecond it is far below noise,
+but a published benchmark changed what it measures and that is worth
+saying rather than leaving for someone to find.

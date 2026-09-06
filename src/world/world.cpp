@@ -714,7 +714,20 @@ World::HistorySeekStats World::history_seek(std::uint32_t to_tick) {
         else if (lz == kChunkSizeZ - 1) touched.insert({cc.x, cc.z + 1});
     });
 
-    for (const ChunkCoord& cc : touched) {
+    // Sorted, not iterated straight out of the unordered_set.
+    //
+    // remesh_slot relights each chunk against its neighbours' CURRENT
+    // light planes, so the order chunks are rebuilt in decides what
+    // cross-chunk light gets baked. Driving that from a hash container's
+    // iteration order puts a nondeterministic input into a rendering
+    // result, in a repo whose CI gates on byte-identical output. The sort
+    // costs nothing at these sizes.
+    std::vector<ChunkCoord> ordered(touched.begin(), touched.end());
+    std::sort(ordered.begin(), ordered.end(),
+              [](const ChunkCoord& a, const ChunkCoord& b) {
+                  return a.z != b.z ? a.z < b.z : a.x < b.x;
+              });
+    for (const ChunkCoord& cc : ordered) {
         auto it = chunks_.find(cc);
         if (it == chunks_.end()) continue;
         remesh_slot(*it->second, cc);

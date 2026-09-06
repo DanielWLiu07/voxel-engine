@@ -37,6 +37,8 @@ int g_checks   = 0;
     }                                                                       \
 } while (0)
 
+void repair_crc(std::vector<std::uint8_t>& bytes);
+
 // A stand-in for the world: sparse, so it can hold edits at any world
 // coordinate without allocating a chunk grid. What matters for these tests
 // is only which block sits at which cell.
@@ -77,6 +79,33 @@ void test_a_log_refuses_what_it_cannot_replay() {
            "an edit above the world is refused");
     EXPECT(log.size() == 2, "only the valid records were kept");
     EXPECT(log.latest_tick() == 10, "latest_tick is the last accepted tick");
+}
+
+void test_tick_zero_is_refused_because_no_seek_can_reach_it() {
+    // Tick 0 is the world before anything was built. seek() skips
+    // `tick <= from_tick` going forward and breaks on `tick <= to_tick`
+    // going back, and both bounds start at 0, so a record stored at tick 0
+    // is unreachable in either direction - it would sit in the log looking
+    // like an edit and never replay. This class refuses what it cannot
+    // replay, and that was the one input that got through.
+    world::EditLog log;
+    EXPECT(!log.record(0, 0, 40, 0, world::BlockId::Air, world::BlockId::Stone),
+           "an edit at tick 0 is refused");
+    EXPECT(log.empty(), "and nothing is stored");
+    EXPECT(log.record(1, 0, 40, 0, world::BlockId::Air, world::BlockId::Stone),
+           "tick 1 is the first legal tick");
+
+    // And it cannot arrive off disk either. Built by hand with a repaired
+    // CRC, because record() will not make one.
+    world::EditLog two;
+    two.record(1, 0, 40, 0, world::BlockId::Air, world::BlockId::Stone);
+    two.record(2, 1, 40, 0, world::BlockId::Air, world::BlockId::Wood);
+    auto bytes = two.encode(1337);
+    bytes[world::kEditLogHeaderBytes + 0] = 0;  // first record's tick -> 0
+    repair_crc(bytes);
+    world::EditLog out;
+    EXPECT(!world::EditLog::decode(bytes, out, 1337),
+           "a tick-0 record off disk is refused despite a valid CRC");
 }
 
 // ----- seeking --------------------------------------------------------------
@@ -615,16 +644,35 @@ void test_a_crc_valid_log_can_still_be_unreplayable() {
 }
 
 void test_the_log_is_small() {
-    // History being cheap is what makes keeping all of it reasonable. At
-    // 16 bytes a record, an hour of heavy building is well under a
-    // megabyte, so there is never a reason to throw any of it away.
+    // History being cheap is what makes keeping all of it reasonable.
+    //
+    // The claim is a budget, not a per-record size. Asserting "under 17
+    // bytes a record" against a 16-byte struct could only fail if the
+    // record layout changed, which the static_assert in edit_log.h already
+    // catches - so it passed for a weaker reason than its label claimed.
+    // This asserts the thing actually worth knowing: a long building
+    // session fits in a fraction of a megabyte, so nothing ever needs to
+    // be discarded.
     const History h = random_history(9, 1000);
     const auto bytes = h.log.encode(1337);
+    EXPECT(h.log.size() > 500, "the sample history is big enough to mean something");
+
+    // 100k edits is a very long session - the engine's own --bench-edit
+    // tops out at 200 in a run. Projected from the measured rate rather
+    // than by building one, since the encoding is exactly linear.
     const double per_record =
         static_cast<double>(bytes.size()) / static_cast<double>(h.log.size());
-    EXPECT(per_record < 17.0, "a recorded edit costs about 16 bytes");
-    std::printf("  (%zu edits encode to %zu bytes, %.1f per edit)\n",
-                h.log.size(), bytes.size(), per_record);
+    const double megabytes_for_100k = per_record * 100000.0 / (1024.0 * 1024.0);
+    EXPECT(megabytes_for_100k < 2.0,
+           "100,000 edits of history fit in under 2 MB");
+    // And the encoding really is linear, so that projection is sound.
+    const auto half = h.log.encode(1337);
+    EXPECT(bytes.size() == world::kEditLogHeaderBytes + h.log.size() * 16,
+           "the encoding is exactly header + 16 bytes a record");
+    EXPECT(half.size() == bytes.size(), "and stable across encodes");
+    std::printf("  (%zu edits encode to %zu bytes, %.1f per edit; "
+                "100k edits would be %.2f MB)\n",
+                h.log.size(), bytes.size(), per_record, megabytes_for_100k);
 }
 
 }  // namespace
@@ -632,6 +680,7 @@ void test_the_log_is_small() {
 int main() {
     std::printf("edit_log_tests: running...\n\n");
     test_a_log_refuses_what_it_cannot_replay();
+    test_tick_zero_is_refused_because_no_seek_can_reach_it();
     test_replaying_forward_builds_the_world();
     test_seeking_partway_stops_where_it_should();
     test_rewinding_undoes_exactly_what_replaying_did();
