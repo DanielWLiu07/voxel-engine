@@ -129,6 +129,13 @@ constexpr ValueFlag kValueFlags[] = {
     {"--orbit-center",      "288,-400,30",     false},
     {"--only-chunk",        "0,0",             false},
     {"--pose-at",           "1,2,3,4,5",       false},
+    // The 4D flags. They were absent from this table, so none of them had
+    // the generic coverage every other value flag gets: a good value, a
+    // missing value in last position, a word where a number belongs, and
+    // trailing garbage after a number.
+    {"--slice-w",           "3",               true},
+    {"--slice-tilt",        "0.25",            true},
+    {"--monitor",           "0",               true},
 };
 
 void test_every_value_flag_accepts_its_own_good_value() {
@@ -299,6 +306,48 @@ void test_the_two_capture_modes_stay_exclusive() {
            "cycle alone is fine");
 }
 
+void test_the_slice_flags_imply_four_dimensions() {
+    // Asking for a slice is asking for the 4D engine. Without this a
+    // capture with --slice-tilt would render the 3D world and silently
+    // ignore the tilt, which looks like the tilt doing nothing.
+    for (const char* flag : {"--slice-w", "--slice-tilt"}) {
+        const auto r = parse({flag, "1"});
+        EXPECT(r.opts.has_value(), flag);
+        if (r.opts.has_value()) EXPECT(r.opts->four_d, flag);
+    }
+}
+
+void test_the_tilt_is_bounded_to_about_a_half_turn() {
+    // +/-3.2 radians, a little over pi. Past that a tilt is the same cut
+    // named by a bigger number, and an unbounded one destroys the float:
+    // the engine wraps theta into [-pi, pi] for the same reason.
+    EXPECT(parse({"--slice-tilt", "3.2"}).opts.has_value(),
+           "the bound itself is accepted");
+    EXPECT(parse({"--slice-tilt", "-3.2"}).opts.has_value(),
+           "and its negative");
+    EXPECT(rejected_naming(parse({"--slice-tilt", "3.3"}), "--slice-tilt"),
+           "just outside is rejected, by name");
+    EXPECT(rejected_naming(parse({"--slice-tilt", "-3.3"}), "--slice-tilt"),
+           "and just outside the other way");
+}
+
+void test_a_negative_slice_is_a_place_not_an_error() {
+    // w runs both ways from the origin, so --slice-w is the one count
+    // flag that must accept a minus sign.
+    const auto r = parse({"--slice-w", "-4"});
+    EXPECT(r.opts.has_value(), "a negative slice parses");
+    if (r.opts.has_value()) EXPECT(r.opts->slice_w == -4, "and keeps its sign");
+}
+
+void test_three_dimensions_and_a_four_dimensional_check_are_contradictory() {
+    // --3d with a mode that only means anything in 4D is a mistake worth
+    // stopping for rather than resolving silently in either direction.
+    for (const char* flag : {"--verify-4d", "--bench-4d"}) {
+        const auto r = parse({"--3d", flag});
+        EXPECT(!r.opts.has_value(), flag);
+    }
+}
+
 void test_help_stops_the_program_successfully() {
     for (const char* h : {"--help", "-h"}) {
         const auto r = parse({h});
@@ -343,6 +392,10 @@ int main() {
     test_only_the_poses_the_bench_knows_are_accepted();
     test_orbit_relabels_the_pose_only_when_there_is_a_bench_to_label();
     test_the_two_capture_modes_stay_exclusive();
+    test_the_slice_flags_imply_four_dimensions();
+    test_the_tilt_is_bounded_to_about_a_half_turn();
+    test_a_negative_slice_is_a_place_not_an_error();
+    test_three_dimensions_and_a_four_dimensional_check_are_contradictory();
     test_help_stops_the_program_successfully();
     test_help_lists_every_flag_these_tests_use();
 

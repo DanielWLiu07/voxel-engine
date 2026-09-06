@@ -760,7 +760,11 @@ int main(int argc, char** argv) {
             // so terrain presents a different cross-section and structures
             // appear to change shape. Travelling along w only ever swaps
             // one axis-aligned world for another.
-            const float scroll = input.scroll_dy();
+            // Not while the pointer is over the HUD. ImGui's GLFW
+            // backend chains the previously installed scroll callback
+            // rather than replacing it, so without this a wheel event
+            // over a panel scrolls the panel AND rotates the world.
+            const float scroll = hud.wants_mouse() ? 0.0f : input.scroll_dy();
             if (scroll != 0.0f) {
                 // 0.003 rad a notch, about a fifth of a degree.
                 //
@@ -1814,6 +1818,24 @@ int main(int argc, char** argv) {
             wrld.rotate_slice(-kNotch * 3.0f, 0.0f);
             settle_slice();
 
+            // ===PROBE=== convergence at nonzero z_shift
+            {
+                for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, 640.0f);
+                for (int pass = 0; pass < 6; ++pass) {
+                    settle_slice();
+                    const auto lg = wrld.slice_lag();
+                    std::printf("[probe] pass=%d z_shift=%.4f w=%.4f theta=%.4f "
+                                "stale=%d/%d\n", pass, wrld.slice().z_shift,
+                                wrld.slice_w(), wrld.slice_theta(),
+                                lg.stale, lg.resident);
+                }
+                for (int i = 0; i < 40; ++i) wrld.rotate_slice(-kNotch, 640.0f);
+                settle_slice();
+                const auto lg2 = wrld.slice_lag();
+                std::printf("[probe] restored z_shift=%.4f stale=%d/%d\n",
+                            wrld.slice().z_shift, lg2.stale, lg2.resident);
+            }
+            // ===END PROBE===
             const bool tilt_ok = edit_survives_scroll && converges &&
                                  pivot_ok && reversible_away &&
                                  edit_rotates && namespace_stable &&

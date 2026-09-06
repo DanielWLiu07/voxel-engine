@@ -57,6 +57,15 @@ public:
 
     void copy_perf_to_clipboard(const PerfFrame& f) const;
 
+    // True when the pointer is over a HUD panel, so the caller can leave
+    // the mouse to ImGui instead of also acting on it.
+    //
+    // ImGui's GLFW backend chains whatever scroll callback was installed
+    // before it rather than replacing it, so a wheel event over the HUD
+    // reaches both: the panel scrolls AND the world rotates. Anything
+    // that reads the wheel has to ask first.
+    bool wants_mouse() const;
+
 private:
     // Rolling frame-time history for the perf-panel graph: a fixed ring the
     // panel pushes each frame, so the plot shows the last few seconds of

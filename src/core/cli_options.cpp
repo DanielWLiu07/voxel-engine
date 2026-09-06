@@ -197,12 +197,16 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
         if (arg == "--bench-4d") { o.bench_4d = true; o.four_d = true; continue; }
         if (arg == "--list-monitors") { o.list_monitors = true; continue; }
-        if (arg == "--monitor" && i + 1 < argc) {
-            o.monitor = std::atoi(argv[++i]);
-            if (o.monitor < 0) {
-                std::fprintf(stderr, "--monitor takes a display index >= 0; "
-                                     "run --list-monitors to see them\n");
-                exit_code = EXIT_FAILURE;
+        if (arg == "--monitor") {
+            // parse_count, not atoi. atoi reads "banana" as 0 and "1O" as
+            // 1, so the run went ahead on the wrong display with no
+            // diagnostic - which is the whole class of bug the rest of
+            // this parser was written to avoid, reintroduced by a flag
+            // that did not go through it. 15 displays is past any real
+            // desk and keeps the message finite.
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 0, 15, "--monitor",
+                                   &o.monitor, exit_code)) {
                 return std::nullopt;
             }
             continue;

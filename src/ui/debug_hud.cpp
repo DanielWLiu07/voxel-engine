@@ -31,6 +31,12 @@ void DebugHud::shutdown() {
     initialized_ = false;
 }
 
+bool DebugHud::wants_mouse() const {
+    // Hidden HUD captures nothing: F2 should give the whole window back.
+    if (!initialized_ || !visible_) return false;
+    return ImGui::GetIO().WantCaptureMouse;
+}
+
 void DebugHud::begin_frame() {
     if (!initialized_) return;
     ImGui_ImplOpenGL3_NewFrame();
