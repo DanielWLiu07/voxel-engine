@@ -52,6 +52,16 @@ jobs:
         # to a table that promises the opposite.
         run: ./scripts/check_invariance.py 3 ./build/voxel_engine
 
+      - name: Header self-sufficiency check
+        # A header that leans on a transitive include builds fine on the
+        # standard library that happens to supply it and breaks on the
+        # next one. That is what happened: std::cos with no <cmath> built
+        # clean on macOS libc++ and failed this very job on libstdc++.
+        # Compiling headers standalone does NOT catch it - that still runs
+        # under the local standard library - so this checks the dependency
+        # textually instead, and works anywhere.
+        run: ./scripts/check_headers.py
+
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
         # is the part that quietly stops being true. This checks the slice

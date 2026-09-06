@@ -3,6 +3,7 @@
 #include "world/chunk.h"
 #include "world/noise4d.h"
 
+#include <cmath>    // to_4d is inline and calls std::cos/std::sin
 #include <cstdint>
 
 namespace world {
