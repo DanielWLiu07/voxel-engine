@@ -18,13 +18,25 @@ render loop uses. Apple M4, 9-worker pool, radius 8 (289 chunks).
 
 | motion | mean ms | p99 ms | issued/frame | behind when motion stopped | settle |
 |---|---|---|---|---|---|
-| translate (0.4 w/s, walk speed) | 0.63-0.74 | 0.78-1.10 | 23.8 / 24 | **241 / 289** | 68-79 ms |
-| rotate (0.18 rad/s, ~60 notches/s) | 0.67-0.73 | 1.11-1.60 | 24.0 / 24 | **289 / 289** | 87-117 ms |
+| travel w, walk (0.4 u/s) | 0.62 | 0.96 | 23.8 / 24 | 241 / 289 | 68 ms |
+| travel w, sprint (1.2 u/s) | 0.58 | 0.68 | 24.0 / 24 | 289 / 289 | 84 ms |
+| scroll 1 notch/s | 0.38 | 1.15 | **13.2 / 24** | **28 / 289** | 3 ms |
+| scroll 5 notch/s | 0.65 | 1.10 | 24.0 / 24 | 178 / 289 | 48 ms |
+| scroll 15 notch/s | 0.58 | 0.66 | 24.0 / 24 | 245 / 289 | 68 ms |
+| scroll 60 notch/s | 0.56 | 0.68 | 24.0 / 24 | 289 / 289 | 76 ms |
 
-Three runs each; timings are given as ranges because they are timings.
-The two count columns are not - `issued/frame` and `behind` reproduce
-exactly, run to run, because they are counts of chunks rather than
-measurements of a machine.
+The wheel is swept rather than measured at one rate, because a single
+rate was actively misleading: the bench used 0.18 rad/s, which is sixty
+notches a second, reported the whole window permanently stale, and that
+said more about the rate chosen than about the engine.
+
+Read down the scroll rows against the two travel rows. A slow scroll is
+the only motion here the stream fully absorbs - it issues 13.2 of its 24
+chunk budget and converges in 3 ms. A brisk deliberate turn at 15
+notches/s costs what walking costs (245 against 241 stale, 68 ms
+against 68). A trackpad flick costs what sprinting costs. That
+relationship is the design goal: turning the slice should be no more
+expensive than travelling through it at a comparable pace.
 
 ## Reading it
 
@@ -50,11 +62,25 @@ question a bounded stream has to answer is not "does it keep up" - it
 cannot, by construction - but "how far behind does it get, and how fast
 does it recover".
 
-**Rotation invalidates more than translation**, and the `behind` column is
-where that shows: 289 of 289 chunks against 241. That matches the
-generator-level measurement (`slice4d --tilt`): one scroll notch changes
-63.8% of terrain columns, where translating a whole rebuild threshold
-changes 36.3%.
+**Staleness is a measured displacement, not a weighted guess**, and that
+is why the scroll rows line up with the travel rows at all.
+
+A chunk is stale when its terrain has moved far enough in the noise
+field, and "far enough" is one number - a distance - for both motions.
+The earlier form was `|dw| + |dtheta| * 32`, which had to invent a
+constant to add an angle to a length, and 32 was picked to make the first
+scroll notch clear the threshold rather than to describe anything. It was
+wrong in both directions at once: a chunk sitting on the rotation axis
+barely moves under a tilt and was marked stale anyway, while a distant
+one moves far more than 32 implies.
+
+Two things had to be true before a displacement could replace it. The
+noise space had to be isotropic, or a given distance along w would mean
+six times more change than the same distance along z and no single
+threshold could serve both - that was a real defect, fixed separately.
+And the rotation had to turn about the player rather than the world
+origin, or the displacement of everything around a distant player would
+be dominated by how far they had walked.
 
 **Recovery is the number a player feels**, and it is under a tenth of a
 second. This is the claim the whole streaming design exists to support, so
@@ -66,7 +92,10 @@ every chunk, mesh every chunk, no engine involved - and predicts:
       chunk (today's mesher)   429.0 ms/step   48 ms on 9 workers
 
 429 ms single-threaded for a full 289-chunk rebuild, 48 ms spread across
-the pool. Measured convergence is 68-117 ms, so 1.4x to 2.4x the model.
+the pool. The rows above that leave the whole window stale - sprinting
+and a 60/s flick - converge in 84 and 76 ms, so 1.6x to 1.8x the model.
+That is the fair comparison; the faster rows converge sooner because they
+left less of the window stale, not because they beat the model.
 
 That is the right shape, and a settle FASTER than the model would have
 meant the model was wrong rather than the engine fast. The model assumes

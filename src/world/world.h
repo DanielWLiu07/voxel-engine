@@ -311,6 +311,27 @@ public:
     struct SliceLag { int stale; int resident; };
     SliceLag slice_lag() const;
 
+    // How far a chunk's terrain has moved in the noise field between the
+    // slice it was generated on and the current one - a distance, in the
+    // same units for both motions, rather than a weighted sum of two
+    // numbers that are not commensurable.
+    //
+    // This replaces `|dw| + |dtheta| * 32`. That form had to invent a
+    // constant to convert an angle into a length, and 32 was chosen to
+    // make the first scroll notch clear the threshold rather than to
+    // describe anything. It was wrong in two directions at once: too
+    // eager for chunks near the axis, which it marked stale for a
+    // displacement of nearly zero, and too timid for the far ones.
+    //
+    // A displacement is the honest quantity, and it only became a valid
+    // proxy for how much the terrain CHANGES once the noise space was
+    // made isotropic - before that, moving a given distance along w
+    // changed the world six times more than moving it along z, so no
+    // single threshold could have been right for both. Now equal
+    // displacement means equal expected change whatever direction it is
+    // in, which is exactly what a staleness test needs.
+    float slice_drift(ChunkCoord c, float from_w, float from_theta) const;
+
     // Target interval between rebuilds while travelling along w, in
     // seconds. The threshold is derived from this and the player's speed
     // rather than fixed, so the rebuild rate does not scale with speed.
@@ -336,6 +357,13 @@ public:
     // very large one from jumping the world somewhere unrecognisable in
     // a single update.
     static constexpr float kSliceStepMin = 0.015f;
+    // The same threshold expressed as a distance in the noise field,
+    // which is what slice_drift returns. kSliceStepMin is a w offset and
+    // one unit of w is kWScale units of noise, so this is the identical
+    // sensitivity to travel that the engine has always had - a pure
+    // translation of kSliceStepMin displaces a chunk by exactly this
+    // much - now stated in units a rotation can also be measured in.
+    static constexpr float kSliceDriftMin = kSliceStepMin * kWScale;
     static constexpr float kSliceStepMax = 0.60f;
 
     // How far the player can travel along w before the world is rebuilt
@@ -390,7 +418,41 @@ public:
     // at an angle, so structures present a different cross-section and
     // appear to change shape. Translation only ever swaps one axis-aligned
     // world for another.
-    void rotate_slice(float delta) { if (slice_gen_) slice_theta_ += delta; }
+    // Turn the slice about the PLAYER, not about the world origin.
+    //
+    // Rotating about the origin makes the wheel's effect depend on where
+    // you are standing, because a tilt displaces a point in proportion to
+    // its distance from the axis it turns about. Measured, one notch:
+    //
+    //     player z     columns changed
+    //            0       7.0%  max  1     <- spawn: almost nothing
+    //          512      62.7%  max  4     <- 100 seconds of walking
+    //         8192      95.8%  max 26
+    //
+    // and at z = 0 exactly the row is invariant: no tilt, at any angle,
+    // ever changes it. Standing where the engine spawns you and looking
+    // down +/-x, the wheel does nothing at all. That is not a tuning
+    // problem, it is the pivot being in the wrong place.
+    //
+    // Turning about the player instead is a change of which point on the
+    // slice stays fixed, so it is still the same family of hyperplanes.
+    // Keeping the player's own 4D position fixed while theta moves means
+    // the offset has to move with it:
+    //
+    //     o' = o cos(dtheta) - pz sin(dtheta)
+    //
+    // where o = kWScale * w is the slice's perpendicular offset and pz is
+    // the player's z. The terrain under the player's feet then stays put
+    // and the world turns around them, which is what a player expects
+    // from a control that is advertised as rotating their view of 4D.
+    void rotate_slice(float delta, float player_z) {
+        if (!slice_gen_) return;
+        const float c = std::cos(delta), sn = std::sin(delta);
+        const float o = slice_w_ * kWScale;
+        const float o2 = o * c - player_z * sn;
+        slice_w_ = o2 / kWScale;
+        slice_theta_ += delta;
+    }
     float slice_theta() const { return slice_theta_; }
 
     TerrainGen4D::Slice slice() const { return {slice_w_, slice_theta_}; }

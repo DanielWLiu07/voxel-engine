@@ -522,20 +522,25 @@ float World::near_meshed_w(int chunk_radius) const {
     return worst;
 }
 
+float World::slice_drift(ChunkCoord c, float from_w, float from_theta) const {
+    // The chunk's centre column stands for the chunk. Its own corners
+    // move by different amounts under a rotation - that is what a
+    // rotation is - and the centre is the average of them.
+    const float sz = static_cast<float>(c.z * kChunkSizeZ + kChunkSizeZ / 2);
+    float z_now = 0.0f, w_now = 0.0f, z_then = 0.0f, w_then = 0.0f;
+    TerrainGen4D::to_4d(sz, {slice_w_, slice_theta_}, &z_now, &w_now);
+    TerrainGen4D::to_4d(sz, {from_w, from_theta}, &z_then, &w_then);
+    const float dz = z_now - z_then, dw = w_now - w_then;
+    return std::sqrt(dz * dz + dw * dw);
+}
+
 World::SliceLag World::slice_lag() const {
     SliceLag out{0, 0};
     for (const auto& kv : chunks_) {
         ++out.resident;
-        // The same drift stream_slice uses, deliberately duplicated in
-        // shape rather than shared: this is a measurement of the policy,
-        // and a measurement that calls the policy's own helper would keep
-        // agreeing with it after the policy changed.
-        //
-        // The 32 is stream_slice's threshold-tripper, not a displacement
-        // estimate; see the comment there.
-        const float drift = std::fabs(slice_w_ - kv.second->slice_w) +
-                            std::fabs(slice_theta_ - kv.second->slice_theta) * 32.0f;
-        if (drift >= kSliceStepMin) ++out.stale;
+        const float drift = slice_drift(kv.first, kv.second->slice_w,
+                                        kv.second->slice_theta);
+        if (drift >= kSliceDriftMin) ++out.stale;
     }
     return out;
 }
@@ -557,28 +562,12 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
     struct Stale { ChunkCoord c; long dist2; float drift; };
     std::vector<Stale> stale;
     for (const auto& kv : chunks_) {
-        // Either axis of the slice moving makes a chunk stale. The
-        // rotation is weighted by 32, and that number is a
-        // threshold-tripper rather than a model of anything.
-        //
-        // The honest version of the weight is |z|: a tilt displaces a
-        // chunk in proportion to its distance from the axis, so 32 is
-        // about right two chunks out, under-weights by 6x at the edge of
-        // a radius-12 window, and by far more further out. Using |z|
-        // would be more faithful and would change almost nothing, because
-        // what this weight actually decides is whether the FIRST scroll
-        // notch registers at all: 0.003 rad unweighted is well under
-        // kSliceStepMin, so no chunk would ever be rebuilt and the wheel
-        // would appear dead until the angle grew large. At 32 it clears
-        // the threshold by 6x, and every chunk in the window is stale
-        // after one notch regardless of which weight is used.
-        //
-        // So it is doing one job and doing it: making the wheel respond
-        // immediately. It is not estimating displacement, and an earlier
-        // comment here implied it was.
-        const float drift = std::fabs(slice_w_ - kv.second->slice_w) +
-                            std::fabs(slice_theta_ - kv.second->slice_theta) * 32.0f;
-        if (drift < kSliceStepMin) continue;
+        // How far this chunk's terrain has actually moved in the noise
+        // field. See slice_drift: a distance in one unit, not a weighted
+        // sum of a length and an angle.
+        const float drift = slice_drift(kv.first, kv.second->slice_w,
+                                        kv.second->slice_theta);
+        if (drift < kSliceDriftMin) continue;
         if (requested_.count(kv.first)) continue;   // already on its way
         const long dx = kv.first.x - last_center_.x;
         const long dz = kv.first.z - last_center_.z;

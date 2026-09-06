@@ -153,21 +153,31 @@ under a bounded per-frame budget.
 
 | motion | main thread | behind when motion stopped | settle |
 |---|---|---|---|
-| travel along w, walk speed | 0.63-0.74 ms/frame | 241 / 289 chunks | 68-79 ms |
-| rotate, ~60 notches/sec | 0.67-0.73 ms/frame | **289 / 289** | 87-117 ms |
+| travel along w, walking | 0.62 ms/frame | 241 / 289 chunks | 68 ms |
+| travel along w, sprinting | 0.58 | 289 / 289 | 84 ms |
+| scroll, 1 notch/sec | 0.38 | **28 / 289** | 3 ms |
+| scroll, 15 notches/sec | 0.58 | 245 / 289 | 68 ms |
+| scroll, 60 notches/sec | 0.56 | 289 / 289 | 76 ms |
 
-Continuous rotation leaves the entire window stale - it invalidates faster
-than any bounded stream can replace, which is true of any continuous
-motion through w and is why the stream is bounded. The number that matters
-is what happens when the motion stops: the world converges in **under a
-tenth of a second**, and 4-5% of a 60 Hz frame is what the main thread
-pays while it does.
+Read the scroll rows against the travel rows. A slow turn of the wheel is
+the only motion here the stream fully absorbs - it uses 13 of its 24
+chunk budget and converges in 3 ms. A brisk deliberate turn costs what
+walking costs; a trackpad flick costs what sprinting costs. That
+relationship is the goal: turning the slice should be no more expensive
+than travelling through it at a comparable pace.
+
+It got there by making staleness a measured displacement in the noise
+field rather than `|dw| + |dtheta| * 32`, a form that had to invent a
+constant to add an angle to a length. Whatever the motion, the world
+converges in **under a fifth of a second** once it stops, and the main
+thread pays 4% of a 60 Hz frame while it does.
 
 Worth checking against something derived independently. `./build/wcost 8`
 builds a cost model with no engine in it - generate every chunk, mesh
 every chunk - and predicts 429 ms single-threaded for a full 289-chunk
-rebuild, 48 ms spread over the 9-worker pool. Convergence measures 1.4x
-to 2.4x that, which is the right shape: the model assumes perfect 9-way
+rebuild, 48 ms spread over the 9-worker pool. The motions above that
+leave the whole window stale converge in 76-84 ms, so 1.6x to 1.8x that,
+which is the right shape: the model assumes perfect 9-way
 parallelism and counts only generate and mesh, while the real path also
 uploads to the GPU on one thread, re-meshes chunk boundaries as
 neighbours land, and deliberately spends the work at 24 chunks a frame

@@ -421,7 +421,10 @@ int main(int argc, char** argv) {
     const world::TerrainGen4D terrain4d(terrain_seed);
     if (opt.four_d) {
         wrld.set_slice_source(&terrain4d, static_cast<float>(opt.slice_w));
-        if (opt.slice_tilt != 0.0f) wrld.rotate_slice(opt.slice_tilt);
+        // Pivot at 0: --slice-tilt is applied before the camera exists,
+        // and a capture's pose is set afterwards, so there is no player
+        // position to turn about yet.
+        if (opt.slice_tilt != 0.0f) wrld.rotate_slice(opt.slice_tilt, 0.0f);
         std::printf("\n"
             "  ========================================================\n"
             "   FOUR-DIMENSIONAL WORLD   (--3d for the ordinary one)\n"
@@ -746,7 +749,8 @@ int main(int argc, char** argv) {
                 static float auto_theta_dir = 1.0f;
                 if (wrld.slice_theta() >  1.5f) auto_theta_dir = -1.0f;
                 if (wrld.slice_theta() < -1.5f) auto_theta_dir =  1.0f;
-                wrld.rotate_slice(auto_theta_dir * 0.06f * static_cast<float>(dt));
+                wrld.rotate_slice(auto_theta_dir * 0.06f * static_cast<float>(dt),
+                                  cam.position().z);
             }
             // . and , kept as aliases so anything that documented them
             // still works, but E and Q are the bindings that matter.
@@ -788,7 +792,7 @@ int main(int argc, char** argv) {
                 constexpr float kMaxNotchesPerFrame = 8.0f;
                 const float notches =
                     std::clamp(scroll, -kMaxNotchesPerFrame, kMaxNotchesPerFrame);
-                wrld.rotate_slice(notches * 0.003f);
+                wrld.rotate_slice(notches * 0.003f, cam.position().z);
             }
 
             if (!opt.auto_w) {
@@ -1482,11 +1486,11 @@ int main(int argc, char** argv) {
             // the pi/2 where the slice's z axis becomes w outright.
             constexpr float kTilt = 0.25f;
             const float theta0 = wrld.slice_theta();
-            wrld.rotate_slice(+kTilt);
+            wrld.rotate_slice(+kTilt, 0.0f);
             settle_slice();
             const std::uint64_t hash_tilt = world_hash();
             const int bad_tilt = wrld.debug_validate_gpu_meshes();
-            wrld.rotate_slice(-kTilt);
+            wrld.rotate_slice(-kTilt, 0.0f);
             settle_slice();
             const std::uint64_t hash_untilt = world_hash();
             const int bad_untilt = wrld.debug_validate_gpu_meshes();
@@ -1504,10 +1508,10 @@ int main(int argc, char** argv) {
             // difference between a scroll wheel that works and one that
             // appears dead until you spin it far enough.
             constexpr float kNotch = 0.003f;   // main's scroll scale
-            wrld.rotate_slice(+kNotch);
+            wrld.rotate_slice(+kNotch, 0.0f);
             settle_slice();
             const bool notch_moves_world = world_hash() != hash_w0;
-            wrld.rotate_slice(-kNotch);
+            wrld.rotate_slice(-kNotch, 0.0f);
             settle_slice();
 
             // An edit must survive the SCROLL WHEEL, and this is a
@@ -1523,7 +1527,7 @@ int main(int argc, char** argv) {
             // notch is 0.003 * 32 = 0.096, six times kSliceStepMin, for
             // every chunk at once. Found by adversarial review, not by
             // this check, because this check did not exist.
-            wrld.rotate_slice(0.0f);
+            wrld.rotate_slice(0.0f, 0.0f);
             settle_slice();
             int sx = 0, sy = 0, sz = 0;
             bool scroll_placed = false;
@@ -1537,23 +1541,68 @@ int main(int argc, char** argv) {
             const bool scroll_edit_here =
                 wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
             // One notch, the smallest thing the wheel can do.
-            wrld.rotate_slice(kNotch);
+            wrld.rotate_slice(kNotch, 0.0f);
             settle_slice();
             const bool survives_notch =
                 wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
             // And a long scroll, which crosses no integer slice boundary
             // and so must not lose it either.
-            for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch);
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, 0.0f);
             settle_slice();
             const bool survives_scroll =
                 wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
-            wrld.rotate_slice(-kNotch * 41.0f);
+            wrld.rotate_slice(-kNotch * 41.0f, 0.0f);
             settle_slice();
             const bool edit_survives_scroll = scroll_placed && scroll_edit_here
                                               && survives_notch
                                               && survives_scroll;
             // Leave no edit behind for the phases that follow.
             wrld.set_block(sx, sy, sz, world::BlockId::Air);
+            settle_slice();
+
+            // The wheel must do the same thing wherever the player is
+            // standing, and that is a property of the PIVOT rather than
+            // of the rotation.
+            //
+            // Turning the slice about the world origin makes the effect
+            // scale with how far the player has walked, because a tilt
+            // displaces a point in proportion to its distance from the
+            // axis. Measured at one notch, before the pivot moved to the
+            // player: 7.0% of columns changed at spawn, 62.7% after a
+            // hundred seconds of walking, 95.8% far out - and the row at
+            // z=0 was exactly invariant at every angle, so at spawn,
+            // looking down the x axis, the wheel did nothing at all.
+            //
+            // Checked through staleness rather than through content,
+            // because staleness is what the engine acts on: one notch
+            // must leave the chunks NEAREST the player alone, and that
+            // has to stay true a long way from the origin. With the pivot
+            // at the origin every chunk around a distant player is far
+            // from the axis, so all of them go stale at once.
+            auto near_stale_after_a_notch = [&](int centre_chunk_z) {
+                const world::ChunkCoord centre{0, centre_chunk_z};
+                wrld.update_streaming(centre, 4, terrain, pool);
+                settle_slice();
+                const float pz = static_cast<float>(
+                    centre_chunk_z * world::kChunkSizeZ + world::kChunkSizeZ / 2);
+                wrld.rotate_slice(kNotch, pz);
+                const auto lag = wrld.slice_lag();
+                wrld.rotate_slice(-kNotch, pz);
+                settle_slice();
+                return lag;
+            };
+            const auto near_home = near_stale_after_a_notch(0);
+            const auto near_away = near_stale_after_a_notch(400);   // 6400 blocks
+            // Some chunks must be spared in both places - the wheel is a
+            // fine control, not a full rebuild - and the two must be
+            // comparable, which is the part that fails when the pivot is
+            // in the wrong place.
+            const bool pivot_ok =
+                near_home.stale < near_home.resident &&
+                near_away.stale < near_away.resident &&
+                near_away.stale <= near_home.stale * 2 + 2;
+            wrld.update_streaming(world::ChunkCoord{0, 0}, opt.stream_radius,
+                                  terrain, pool);
             settle_slice();
 
             // And the world must actually CONVERGE after a rotation.
@@ -1565,14 +1614,15 @@ int main(int argc, char** argv) {
             // stamped 0 again - a rebuild loop with no end, invisible at
             // theta=0 where the default is accidentally correct, which is
             // the only state the audit ran in.
-            wrld.rotate_slice(kNotch * 3.0f);
+            wrld.rotate_slice(kNotch * 3.0f, 0.0f);
             settle_slice();
             const auto after_rotate = wrld.slice_lag();
             const bool converges = after_rotate.stale == 0;
-            wrld.rotate_slice(-kNotch * 3.0f);
+            wrld.rotate_slice(-kNotch * 3.0f, 0.0f);
             settle_slice();
 
             const bool tilt_ok = edit_survives_scroll && converges &&
+                                 pivot_ok &&
                                  hash_tilt != hash_w0 &&
                                  hash_untilt == hash_w0 &&
                                  bad_tilt == 0 && bad_untilt == 0 &&
@@ -1675,6 +1725,7 @@ int main(int argc, char** argv) {
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
+                        "pivot=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
@@ -1688,6 +1739,7 @@ int main(int argc, char** argv) {
                         notch_moves_world ? 1 : 0,
                         edit_survives_scroll ? 1 : 0,
                         converges ? 1 : 0,
+                        pivot_ok ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
@@ -1716,9 +1768,26 @@ int main(int argc, char** argv) {
             // Rates a player can actually produce. 0.4 w/s is the walk
             // speed along w; 0.18 rad/s is a steady scroll, about 60
             // notches a second.
+            // Rates a player can actually produce, and a range of them
+            // for the wheel rather than one number.
+            //
+            // A single rotation rate was misleading. The bench used 0.18
+            // rad/s, which is sixty scroll notches a second - a rate no
+            // hand sustains - and reported the whole window permanently
+            // stale, which said more about the chosen rate than about the
+            // engine. The useful question is where the wheel stops
+            // outrunning the stream, and that needs a sweep.
+            //
+            // 0.003 rad is one notch, so the rates below are 1, 5, 15 and
+            // 60 notches a second. Fifteen is a brisk deliberate turn;
+            // sixty is a trackpad flick.
             const Phase phases[] = {
-                {"translate", world::World::kWalkSpeedW, 0.0f},
-                {"rotate",    0.0f,                      0.18f},
+                {"translate",  world::World::kWalkSpeedW,  0.0f},
+                {"sprint w",   world::World::kSprintSpeedW, 0.0f},
+                {"scroll 1/s",  0.0f, 0.003f},
+                {"scroll 5/s",  0.0f, 0.015f},
+                {"scroll 15/s", 0.0f, 0.045f},
+                {"scroll 60/s", 0.0f, 0.180f},
             };
             constexpr int   kFrames = 300;        // five seconds each
             constexpr float kDt = 1.0f / 60.0f;
@@ -1737,7 +1806,7 @@ int main(int argc, char** argv) {
             // throughput. What the budget leaves is reported instead:
             // whether the world keeps up at it, and how long it takes to
             // converge once the motion stops.
-            std::printf("  %-10s %10s %10s %12s %12s %12s\n", "motion",
+            std::printf("  %-11s %10s %10s %12s %12s %12s\n", "motion",
                         "mean ms", "p99 ms", "issued/frame", "behind",
                         "settle ms");
 
@@ -1766,7 +1835,7 @@ int main(int argc, char** argv) {
                     // Exactly the render loop's per-frame slice work.
                     if (ph.w_rate != 0.0f) wrld.advance_w(ph.w_rate * kDt);
                     if (ph.theta_rate != 0.0f)
-                        wrld.rotate_slice(ph.theta_rate * kDt);
+                        wrld.rotate_slice(ph.theta_rate * kDt, 0.0f);
                     chunks += wrld.stream_slice(terrain, pool);
                     wrld.drain_finished(wrld.pending_async() > 32 ? 48 : 16);
                     wrld.flush_pending_remeshes(pool, 4);
@@ -1863,7 +1932,7 @@ int main(int argc, char** argv) {
                     std::snprintf(settle, sizeof settle, "NEVER (%.0f)",
                                   settle_ms);
                 }
-                std::printf("  %-10s %10.2f %10.2f %6.1f / %-5d %12s %12s\n",
+                std::printf("  %-11s %10.2f %10.2f %6.1f / %-5d %12s %12s\n",
                             ph.name, mean, p99, issued_per_frame, kStreamBudget,
                             behind, settle);
                 (void)elapsed_s;
