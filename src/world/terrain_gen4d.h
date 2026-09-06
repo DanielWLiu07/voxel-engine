@@ -43,11 +43,10 @@ public:
 
 private:
     Noise4D continents_, hills_, detail_, warp_;
-    // No biome field and no trees yet: the 3D generator uses biome noise
-    // only to pick tree density and variant, and trees are a stamp pass
-    // that has nothing 4D about it. Left out rather than carried along
-    // unused, so nothing here is dead weight pretending to be a feature.
-    Noise4D temp_;
+    // biome_ drives tree density, and it is 4D like everything else - so
+    // forests thicken and thin as you travel along w rather than being
+    // painted on a static map.
+    Noise4D biome_, temp_;
     Noise4D cave_a_, cave_b_;
     bool caves_enabled_ = true;
 };

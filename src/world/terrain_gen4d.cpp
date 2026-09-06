@@ -1,6 +1,7 @@
 #include "world/terrain_gen4d.h"
 
 #include "world/terrain_gen.h"
+#include "world/tree_stamps.h"
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,7 @@ constexpr float kContinentFreq = 0.004f;
 constexpr float kHillsFreq     = 0.020f;
 constexpr float kDetailFreq    = 0.080f;
 constexpr float kWarpFreq      = 0.012f;
+constexpr float kBiomeFreq     = 0.008f;
 constexpr float kTempFreq      = 0.006f;
 constexpr float kCaveFreq      = 0.038f;
 
@@ -23,7 +25,7 @@ constexpr float kCaveFreq      = 0.038f;
 
 TerrainGen4D::TerrainGen4D(std::uint32_t seed)
     : continents_(seed), hills_(seed + 1), detail_(seed + 2), warp_(seed + 3),
-      temp_(seed + 5),
+      biome_(seed + 4), temp_(seed + 5),
       cave_a_(seed + 6), cave_b_(seed + 7) {}
 
 int TerrainGen4D::height_at(int wx, int wz, float w) const {
@@ -65,6 +67,7 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) con
 
     int  surface[kChunkSizeZ][kChunkSizeX];
     bool is_desert[kChunkSizeZ][kChunkSizeX];
+    float biome_val[kChunkSizeZ][kChunkSizeX];
 
     for (int z = 0; z < kChunkSizeZ; ++z) {
         for (int x = 0; x < kChunkSizeX; ++x) {
@@ -96,6 +99,9 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) con
             // only an approximation of the tail. Measuring the value with
             // the same tail mass gives 0.2114.
             is_desert[z][x] = (temp > 0.21f) && (height < kSnowBand);
+            biome_val[z][x] = biome_.sample(static_cast<float>(wx) * kBiomeFreq,
+                                            static_cast<float>(wz) * kBiomeFreq,
+                                            0.0f, fw * kBiomeFreq);
 
             for (int y = 0; y <= height; ++y) {
                 BlockId b;
@@ -156,6 +162,46 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, float w, Chunk& out) con
                         out.set(x, y, z, BlockId::Air);
                     }
                 }
+            }
+        }
+    }
+
+    // Trees, and the way they respond to w is the point.
+    //
+    // The per-column random draw is a 2D hash, so a given column always
+    // rolls the same number - but the DENSITY it is compared against comes
+    // from the 4D biome field. Travel along w and the density surface
+    // moves under a fixed set of draws, so forests thicken and thin in
+    // spatially coherent patches rather than flickering column by column.
+    // A tree that disappears takes its neighbours with it, which is what a
+    // forest edge moving through the fourth dimension should look like.
+    //
+    // The stamps themselves come from tree_stamps.h, shared with the 3D
+    // generator, so both worlds grow identical trees.
+    constexpr int kMargin = 2;
+    for (int z = kMargin; z < kChunkSizeZ - kMargin; ++z) {
+        for (int x = kMargin; x < kChunkSizeX - kMargin; ++x) {
+            const int h = surface[z][x];
+            if (is_desert[z][x]) continue;
+            if (h <= kSeaLevel + kSandBand) continue;
+            if (h >= kStoneBand) continue;
+            if (out.get(x, h, z) != BlockId::Grass) continue;
+            if (h + 8 >= kChunkSizeY) continue;
+
+            const int wx = origin_x + x;
+            const int wz = origin_z + z;
+            const float r = hash2d_f(wx, wz, 0x7B1E5A2D);
+            const float density = 0.012f + std::max(0.0f, biome_val[z][x]) * 0.025f;
+            if (r > density) continue;
+
+            const float pick = hash2d_f(wx + 17, wz + 41, 0x55AA00FF);
+            if (h > kStoneBand - 4 || biome_val[z][x] > 0.25f) {
+                if (pick < 0.6f) stamp_conifer(out, x, h + 1, z);
+                else             stamp_oak(out, x, h + 1, z);
+            } else {
+                if (pick < 0.15f)      stamp_conifer(out, x, h + 1, z);
+                else if (pick < 0.85f) stamp_oak(out, x, h + 1, z);
+                else                   stamp_bush(out, x, h + 1, z);
             }
         }
     }

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace {
 
@@ -174,9 +175,16 @@ void test_fill_chunk_puts_the_surface_where_height_at_says() {
                         const int h = t.height_at(cx * world::kChunkSizeX + x,
                                                   cz * world::kChunkSizeZ + z, w);
                         if (!world::is_solid(c.get(x, h, z))) ++wrong_surface;
-                        if (h + 1 < world::kChunkSizeY &&
-                            c.get(x, h + 1, z) != world::BlockId::Air) {
-                            ++wrong_above;
+                        // Air, or the bottom of a tree. Caves are off in
+                        // this sweep but trees are not, and a trunk
+                        // legitimately occupies h+1.
+                        if (h + 1 < world::kChunkSizeY) {
+                            const world::BlockId above = c.get(x, h + 1, z);
+                            if (above != world::BlockId::Air &&
+                                above != world::BlockId::Wood &&
+                                above != world::BlockId::Leaves) {
+                                ++wrong_above;
+                            }
                         }
                     }
             }
@@ -184,7 +192,7 @@ void test_fill_chunk_puts_the_surface_where_height_at_says() {
     }
     EXPECT(checked == 3 * 9 * 16 * 16, "the sweep covered nine chunks on three slices");
     EXPECT(wrong_surface == 0, "height_at names a solid block in every column");
-    EXPECT(wrong_above == 0, "and nothing sits above the surface");
+    EXPECT(wrong_above == 0, "nothing but foliage sits above the surface");
 }
 
 void test_a_column_is_solid_all_the_way_down_without_caves() {
@@ -396,6 +404,70 @@ void test_neighbouring_chunks_agree_across_the_seam() {
 //    the case that matters - both fields losing w, which would freeze the
 //    underground while the surface morphed.
 
+void test_trees_grow_and_respond_to_w() {
+    // The 4D world had no trees at all until the stamps were shared with
+    // the 3D generator, and a barren world is the most visible difference
+    // between the two. This pins that they exist, that they sit on the
+    // ground, and - the part that makes them four-dimensional - that
+    // travelling along w changes which columns carry them.
+    world::TerrainGen4D t(1337);
+    t.set_caves_enabled(false);
+    auto count_trees = [&](float w) {
+        int trees = 0, floating = 0;
+        for (int cz = -3; cz <= 3; ++cz)
+            for (int cx = -3; cx <= 3; ++cx) {
+                world::Chunk c;
+                t.fill_chunk(cx, cz, w, c);
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x) {
+                        const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                                  cz * world::kChunkSizeZ + z, w);
+                        // Find the trunk rather than assume it starts at
+                        // h+1. Looking only there was the first version,
+                        // and it could not see the fault it exists to
+                        // catch: a stamp planted at h+3 leaves h+1 empty,
+                        // so the tree is not counted as floating - it is
+                        // not counted at all. The same mistake was made in
+                        // the 3D tree test and fixed there.
+                        int base = -1;
+                        for (int y = h + 1; y < h + 12 && y < world::kChunkSizeY; ++y) {
+                            if (c.get(x, y, z) == world::BlockId::Wood) { base = y; break; }
+                        }
+                        if (base < 0) continue;
+                        ++trees;
+                        if (base != h + 1) ++floating;
+                    }
+            }
+        return std::pair<int, int>{trees, floating};
+    };
+
+    const auto [t0, floating0] = count_trees(0.0f);
+    const auto [t1, floating1] = count_trees(2.0f);
+    EXPECT(t0 > 20, "the world grows trees");
+    EXPECT(floating0 == 0 && floating1 == 0,
+           "every trunk starts one block above the surface");
+    // Density comes from the 4D biome field while the per-column draw is a
+    // fixed 2D hash, so the forest moves with w rather than being painted
+    // on a static map. Two slices apart the counts must differ.
+    EXPECT(t0 != t1, "the forest changes as you travel along w");
+    // Note on what that last check does NOT establish: it does not prove
+    // the BIOME field is 4D. The tree count changes between slices anyway,
+    // because the terrain under it does - different columns clear the
+    // height and grass gates. Freezing the biome's w argument was injected
+    // and this test still passed.
+    //
+    // Measured trees-per-eligible-column across five slices: 0.0147-0.0177
+    // with the 4D biome and 0.0143-0.0162 with it frozen. Overlapping, and
+    // not separable by any bound that would not also fail on ordinary
+    // retuning. The cause is that the biome only shifts density from 0.012
+    // to about 0.017, so the fixed per-column hash draw dominates - which
+    // is inherited from the 3D generator rather than new here.
+    //
+    // Left uncovered rather than fixed by inflating that coefficient,
+    // which would be tuning the world to suit a test.
+    EXPECT(t1 > 0, "and the distant slice still has trees");
+}
+
 }  // namespace
 
 int main() {
@@ -409,6 +481,7 @@ int main() {
     test_a_column_is_solid_all_the_way_down_without_caves();
     test_caves_only_ever_remove();
     test_caves_move_with_w();
+    test_trees_grow_and_respond_to_w();
     test_surface_material_follows_altitude();
     test_the_world_reaches_below_sea_level();
     test_fill_chunk_is_reproducible();

@@ -1,5 +1,7 @@
 #include "world/terrain_gen.h"
 
+#include "world/tree_stamps.h"
+
 #include <algorithm>
 #include <cstdint>
 
@@ -22,104 +24,10 @@ float sample_height_noise(const FastNoiseLite& continents,
     return c * 0.65f + h * 0.25f + d * 0.10f;
 }
 
-std::uint32_t hash2d(int x, int z, std::uint32_t seed) {
-    std::uint32_t h = static_cast<std::uint32_t>(x) * 0x9E3779B1u
-                    + static_cast<std::uint32_t>(z) * 0x85EBCA77u
-                    + seed * 0xC2B2AE3Du;
-    h ^= h >> 15;
-    h *= 0x85EBCA6Bu;
-    h ^= h >> 13;
-    h *= 0xC2B2AE35u;
-    h ^= h >> 16;
-    return h;
-}
-
-float hash2d_f(int x, int z, std::uint32_t seed) {
-    return (hash2d(x, z, seed) & 0x00FFFFFFu) / 16777216.0f;
-}
-
-// Small oak: 5-tall trunk under a 5-wide canopy layer with its four
-// corners knocked off, a 3x3 layer above it missing a random half of its
-// corners, and one leaf on top.
-void stamp_oak(Chunk& c, int lx, int base_y, int lz) {
-    constexpr int kTrunkH = 5;
-    const int top = base_y + kTrunkH;
-
-    for (int dy = 0; dy < kTrunkH; ++dy) {
-        int y = base_y + dy;
-        if (y >= 0 && y < kChunkSizeY) c.set(lx, y, lz, BlockId::Wood);
-    }
-
-    auto put_leaf = [&](int x, int y, int z) {
-        if (!in_chunk_bounds(x, y, z)) return;
-        if (is_solid(c.get(x, y, z))) return;
-        c.set(x, y, z, BlockId::Leaves);
-    };
-
-    for (int dz = -2; dz <= 2; ++dz) {
-        for (int dx = -2; dx <= 2; ++dx) {
-            if (std::abs(dx) == 2 && std::abs(dz) == 2) continue;
-            put_leaf(lx + dx, top - 1, lz + dz);
-        }
-    }
-    for (int dz = -1; dz <= 1; ++dz) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            if (std::abs(dx) == 1 && std::abs(dz) == 1
-                && ((hash2d(lx + dx, lz + dz, 0xA1B2C3) & 1) == 0)) continue;
-            put_leaf(lx + dx, top, lz + dz);
-        }
-    }
-    put_leaf(lx, top + 1, lz);
-}
-
-// Tall conifer: 7-tall trunk, pointy stepped canopy.
-void stamp_conifer(Chunk& c, int lx, int base_y, int lz) {
-    constexpr int kTrunkH = 7;
-    const int top = base_y + kTrunkH;
-
-    for (int dy = 0; dy < kTrunkH; ++dy) {
-        int y = base_y + dy;
-        if (y >= 0 && y < kChunkSizeY) c.set(lx, y, lz, BlockId::Wood);
-    }
-
-    auto put_leaf = [&](int x, int y, int z) {
-        if (!in_chunk_bounds(x, y, z)) return;
-        if (is_solid(c.get(x, y, z))) return;
-        c.set(x, y, z, BlockId::Leaves);
-    };
-
-    // Stepped triangular silhouette: wider near the base.
-    for (int layer = 0; layer < 4; ++layer) {
-        int y = base_y + 2 + layer * 2;
-        int r = 2 - layer / 2;
-        for (int dz = -r; dz <= r; ++dz) {
-            for (int dx = -r; dx <= r; ++dx) {
-                if (std::abs(dx) + std::abs(dz) > r + 1) continue;
-                put_leaf(lx + dx, y, lz + dz);
-            }
-        }
-    }
-    put_leaf(lx, top + 1, lz);
-}
-
-// Small bush: 1-tall stem, one 3x3 leaf layer, one leaf above its centre.
-void stamp_bush(Chunk& c, int lx, int base_y, int lz) {
-    if (in_chunk_bounds(lx, base_y, lz)) c.set(lx, base_y, lz, BlockId::Wood);
-
-    auto put_leaf = [&](int x, int y, int z) {
-        if (!in_chunk_bounds(x, y, z)) return;
-        if (is_solid(c.get(x, y, z))) return;
-        c.set(x, y, z, BlockId::Leaves);
-    };
-
-    for (int dz = -1; dz <= 1; ++dz) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            put_leaf(lx + dx, base_y + 1, lz + dz);
-            if (dx == 0 && dz == 0) put_leaf(lx + dx, base_y + 2, lz + dz);
-        }
-    }
-}
-
+// hash2d, hash2d_f and the three stamps now live in tree_stamps.h,
+// shared with the 4D generator. They were duplicated nowhere and were
+// about to be, which is how the cave iso width and the desert threshold
+// went wrong.
 }  // namespace
 
 TerrainGen::TerrainGen(std::uint32_t seed) {
