@@ -1892,24 +1892,6 @@ int main(int argc, char** argv) {
             wrld.rotate_slice(-kNotch * 3.0f, 0.0f);
             settle_slice();
 
-            // ===PROBE=== convergence at nonzero z_shift
-            {
-                for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, 640.0f);
-                for (int pass = 0; pass < 6; ++pass) {
-                    settle_slice();
-                    const auto lg = wrld.slice_lag();
-                    std::printf("[probe] pass=%d z_shift=%.4f w=%.4f theta=%.4f "
-                                "stale=%d/%d\n", pass, wrld.slice().z_shift,
-                                wrld.slice_w(), wrld.slice_theta(),
-                                lg.stale, lg.resident);
-                }
-                for (int i = 0; i < 40; ++i) wrld.rotate_slice(-kNotch, 640.0f);
-                settle_slice();
-                const auto lg2 = wrld.slice_lag();
-                std::printf("[probe] restored z_shift=%.4f stale=%d/%d\n",
-                            wrld.slice().z_shift, lg2.stale, lg2.resident);
-            }
-            // ===END PROBE===
             const bool tilt_ok = edit_survives_scroll && converges &&
                                  pivot_ok && reversible_away &&
                                  edit_rotates && namespace_stable &&
@@ -2298,6 +2280,7 @@ int main(int argc, char** argv) {
             bool ok = prev != world::BlockId::Air;
             world::World::StreamStats away{}, back{};
             bool evicted = false;
+            bool survived_in_session = false;
             if (ok) {
                 wrld.set_block(ex, ey, ez, world::BlockId::Air);
                 const world::ChunkCoord home{0, 0};
@@ -2343,13 +2326,93 @@ int main(int argc, char** argv) {
                 ok = evicted && (via_replay != via_stash) &&
                      wrld.has_chunk(home) &&
                      wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+                // Captured HERE, not read again at print time. The two
+                // legs below deliberately move the world - one reloads it
+                // from disk, the other wipes it - so a field read at the
+                // end reports whatever those left behind rather than what
+                // this leg measured. It printed survived=0 on a passing
+                // run for exactly that reason.
+                survived_in_session =
+                    wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+            }
+
+            // And it must reach DISK from out of view.
+            //
+            // The check above only proves the edit comes back within the
+            // session. When edits moved from a whole-chunk stash to a
+            // replay list, save_world kept writing the stash and nothing
+            // wrote the replay list, so an edit made outside the stream
+            // window was simply absent from the save file - dig a hole,
+            // walk past the radius, save, reload, and the hole is gone.
+            // In-session everything looked right, which is why this needs
+            // its own leg rather than an extra assertion on the one above.
+            bool survives_disk = false;
+            if (ok) {
+                const world::ChunkCoord home{0, 0};
+                const world::ChunkCoord far_off{home.x + 3 * stream_radius,
+                                                home.z};
+                // Evict it again, so the save has to find it somewhere
+                // other than the resident set.
+                wrld.update_streaming(far_off, stream_radius, terrain, pool);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                const std::string dir = "/tmp/voxel_edit_disk_check";
+                std::filesystem::remove_all(dir);
+                const auto saved = world::save_world(wrld, dir, terrain_seed);
+                wrld.clear_all();
+                const auto loaded = world::load_world(wrld, dir, pool,
+                                                      terrain_seed);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                survives_disk = saved.ok && loaded.ok &&
+                                wrld.has_chunk(home) &&
+                                wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+                std::filesystem::remove_all(dir);
+                if (!survives_disk) {
+                    std::fprintf(stderr, "[edit-persist] save/load lost the "
+                                 "edit: saved=%d loaded=%d resident=%d\n",
+                                 saved.ok ? 1 : 0, loaded.ok ? 1 : 0,
+                                 wrld.has_chunk(home) ? 1 : 0);
+                }
+                ok = survives_disk;
+            }
+
+            // And a wipe must actually wipe.
+            //
+            // clear_all() clears the resident chunks and the whole-chunk
+            // stash, but the replay list was added later and was not
+            // added here - so request_terrain_chunk replayed the
+            // DISCARDED world's edits over the new one's terrain. F6 and
+            // --bench-io both reach it.
+            //
+            // This needs its own leg because the save/load check above
+            // cannot see it: there the edit is supposed to come back, so
+            // a leak and a correct load look identical. Here nothing is
+            // loaded, so the only right answer is the terrain the
+            // generator makes.
+            bool wipe_is_clean = false;
+            if (ok) {
+                const world::ChunkCoord home{0, 0};
+                wrld.clear_all();
+                wrld.update_streaming(home, stream_radius, terrain, pool);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                wipe_is_clean = wrld.has_chunk(home) &&
+                                wrld.block_at(ex, ey, ez) == prev;
+                if (!wipe_is_clean) {
+                    std::fprintf(stderr, "[edit-persist] a cleared world kept "
+                                 "the old one's edit: expected %d, got %d\n",
+                                 static_cast<int>(prev),
+                                 static_cast<int>(wrld.block_at(ex, ey, ez)));
+                }
+                ok = wipe_is_clean;
             }
             std::printf("\nEDIT_PERSIST block=(%d,%d,%d) prev_id=%d evicted=%d "
-                        "stashed=%d restored=%d replayed=%d survived=%d %s\n",
+                        "stashed=%d restored=%d replayed=%d survived=%d "
+                        "survives_disk=%d wipe_clean=%d %s\n",
                         ex, ey, ez, static_cast<int>(prev),
                         evicted ? 1 : 0, away.stashed, back.restored,
                         back.replayed,
-                        wrld.block_at(ex, ey, ez) == world::BlockId::Air ? 1 : 0,
+                        survived_in_session ? 1 : 0,
+                        survives_disk ? 1 : 0,
+                        wipe_is_clean ? 1 : 0,
                         ok ? "ok" : "FAILED");
             if (!ok) {
                 return EXIT_FAILURE;

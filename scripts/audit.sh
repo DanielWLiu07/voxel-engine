@@ -83,17 +83,28 @@ if [ "${AUDIT_SKIP_MESHER_AB:-0}" != "1" ]; then
         | sed -n 's/.*gpu_mesh_mb=\([0-9.]*\).*/\1/p')
   N=$(./build/voxel_engine --naive-mesh --validate 2>/dev/null \
         | sed -n 's/.*gpu_mesh_mb=\([0-9.]*\).*/\1/p')
+  # failures, not fail. This step set a variable named `fail` that
+  # nothing in the script ever reads, so the only check here that does
+  # not go through the step/grep_step harness was also the only one that
+  # could not fail the audit: it printed FAIL, and the run ended "AUDIT:
+  # all checks passed" with exit 0. Verified by running a copy against a
+  # stub engine reporting the same footprint for both meshers.
   if [ -z "$G" ] || [ -z "$N" ]; then
-    echo "FAIL (could not read gpu_mesh_mb)"; fail=1
+    echo "FAIL (could not read gpu_mesh_mb)"; failures=$((failures + 1))
   else
     awk -v g="$G" -v n="$N" 'BEGIN {
       r = (g > 0) ? n / g : 0
       if (r >= 2.5) printf "PASS  greedy %.2f MB vs naive %.2f MB (%.2fx)\n", g, n, r
       else        { printf "FAIL  greedy %.2f MB vs naive %.2f MB (%.2fx, want >= 2.5x)\n", g, n, r; exit 1 }
-    }' || fail=1
+    }' || failures=$((failures + 1))
   fi
 fi
-grep_step "edit persistence"    "survived=1 ok"         ./build/voxel_engine --verify-edit-persistence
+# Names all three legs. The pattern was "survived=1 ok", which is the
+# in-session leg alone - the two that followed it, reaching disk and
+# surviving a wipe, could have been deleted without this noticing.
+grep_step "edit persistence" \
+  "survived=1 survives_disk=1 wipe_clean=1 ok" \
+  ./build/voxel_engine --verify-edit-persistence
 # One run, one pattern naming BOTH motions. The pattern used to be just
 # "changed=1 returned=1", which is the translation half - so the entire
 # rotation feature could have been deleted without this step noticing.

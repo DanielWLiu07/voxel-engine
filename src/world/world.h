@@ -690,6 +690,11 @@ public:
         const std::function<void(ChunkCoord,
                                  const std::vector<std::uint8_t>&)>& fn) const {
         for (const auto& kv : edited_stash_) fn(kv.first.c, kv.second);
+        // Edited chunks the window evicted. Both maps are keyed by slice,
+        // and a coord in both saves whichever comes first - they cannot
+        // disagree, because a chunk is either generator-reproducible or
+        // it is not.
+        for (const auto& kv : evicted_snapshots_) fn(kv.first.c, kv.second);
     }
 
     // Total bytes the resident chunks hold in GPU buffers: per-chunk vertex
@@ -854,6 +859,24 @@ private:
     // Counts chunk jobs that carried replayed edits, so update_streaming
     // can report how many came back that way.
     int                 stream_replayed_ = 0;
+    // Whole-chunk snapshots of edited chunks the stream window evicted,
+    // kept ONLY so a save can write them.
+    //
+    // Separate from edited_stash_ on purpose. The restore paths consult
+    // edited_stash_ and hand a chunk back verbatim, which is right for a
+    // chunk the generator cannot reproduce and wrong for one it can - a
+    // reproducible chunk handed back whole stops being generated, and
+    // then stops turning when the 4D slice does. These entries are never
+    // restored from; the chunk comes back through the generator with its
+    // edits replayed. They exist because save_world writes bytes, and an
+    // evicted chunk has none until somebody makes them.
+    //
+    // Without this, an edit made out of view was lost by any save: dig a
+    // hole, walk past the stream radius, save, reload, and the hole is
+    // gone. In-session it looked fine, because the replay list restored
+    // it on re-entry.
+    std::unordered_map<SliceCoord, std::vector<std::uint8_t>, SliceCoordHash>
+                        evicted_snapshots_;
     float               meshed_w_ = 0.0f;  // where the geometry is
     // The integer slice the resident chunks belong to. Needed separately
     // from edit_slice() because a rebuild has to stash the OLD slice's

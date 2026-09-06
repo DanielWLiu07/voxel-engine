@@ -677,6 +677,13 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                 edited_stash_[SliceCoord{it->first, edit_slice()}] =
                     encode_chunk_rle(it->second->chunk, /*edited=*/true);
                 ++stats.stashed;
+            } else if (it->second->player_modified) {
+                // Not for restoring - the generator plus slice_edits_ does
+                // that, and does it better because the chunk keeps
+                // changing with the slice. This is so a save has bytes to
+                // write for a chunk that is no longer resident.
+                evicted_snapshots_[SliceCoord{it->first, edit_slice()}] =
+                    encode_chunk_rle(it->second->chunk, /*edited=*/true);
             }
             it = chunks_.erase(it);
             ++stats.evicted;
@@ -939,9 +946,19 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
 void World::clear_all() {
     chunks_.clear();
     requested_.clear();
-    // A full reload replaces world state wholesale; stale stashed edits
-    // from the previous state must not leak into it.
+    // A full reload replaces world state wholesale; stale edits from the
+    // previous state must not leak into it.
+    //
+    // All THREE stores, and the third was missed when edits moved into a
+    // replay list: request_terrain_chunk replays slice_edits_ over
+    // freshly generated terrain, so edits from the discarded world came
+    // back in the new one. Reachable from F6 and from --bench-io, and it
+    // composed with the save bug above into something worse than either -
+    // a load looked like it had preserved an edit the save file did not
+    // contain.
     edited_stash_.clear();
+    evicted_snapshots_.clear();
+    slice_edits_.clear();
     ++generation_;  // in-flight jobs are now stale; drain_finished drops them
     std::lock_guard<std::mutex> lock(finished_mutex_);
     // Results already queued but not yet drained are dropped here, so their
