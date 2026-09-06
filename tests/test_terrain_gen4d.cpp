@@ -546,6 +546,61 @@ void test_rotating_the_slice_changes_the_cross_section() {
            "a tilt is a place, not a mutation");
 }
 
+void test_scrolling_is_a_sweep_not_a_sequence_of_jumps() {
+    // The claim the whole wheel rests on: turning it SWEEPS the
+    // cross-section rather than stepping between unrelated worlds.
+    //
+    // Measuring each notch against the START cannot tell those apart -
+    // both give a number that grows. The distinguishing measurement is
+    // each notch against the PREVIOUS one: a sweep moves the terrain a
+    // little at a time and by a consistent amount, while a sequence of
+    // jumps moves a lot every time.
+    //
+    // Ten consecutive notches, 192-block window, seed 1337:
+    //
+    //     notch   vs previous      vs start
+    //       1     7.1% max 1       7.1% max 1
+    //       5     7.3% max 1      32.5% max 3
+    //      10     7.7% max 1      50.6% max 5
+    //
+    // Small constant steps, steadily accumulating. Half the world has
+    // moved after a short turn of the wheel, one block at a time.
+    const world::TerrainGen4D t(1337);
+    auto step = [&](float a, float b) {
+        int diff = 0, n = 0, worst = 0;
+        for (int z = -96; z < 96; z += 2)
+            for (int x = -96; x < 96; x += 2) {
+                const int ha = t.height_at(x, z, {0.0f, a});
+                const int hb = t.height_at(x, z, {0.0f, b});
+                if (ha != hb) ++diff;
+                worst = std::max(worst, std::abs(ha - hb));
+                ++n;
+            }
+        return std::pair<double, int>{100.0 * diff / n, worst};
+    };
+
+    constexpr float kNotch = 0.003f;      // main's scroll scale
+    double most = 0.0, least = 100.0;
+    for (int i = 1; i <= 10; ++i) {
+        const auto d = step((i - 1) * kNotch, i * kNotch);
+        // No notch may lurch. One block is the whole budget: a notch that
+        // moved a column by five would read as the terrain snapping.
+        EXPECT(d.second <= 2, "a single notch never lurches");
+        most = std::max(most, d.first);
+        least = std::min(least, d.first);
+    }
+    // And every notch does about the same amount of work, so the sweep
+    // has no dead zones and no sudden bursts. Measured spread is
+    // 6.8-7.9%; a factor of two is loose enough not to be brittle and
+    // tight enough to catch a rotation that stalls or accelerates.
+    EXPECT(most < least * 2.0, "every notch moves the world by about the same");
+
+    // Cumulatively it still goes somewhere: small steps, not no steps.
+    const auto ten = step(0.0f, 10.0f * kNotch);
+    EXPECT(ten.first > 40.0, "ten notches move half the window");
+    EXPECT(ten.second > 2, "and by more than any single notch did");
+}
+
 void test_a_tilted_slice_is_still_the_same_kind_of_world() {
     // Rotating the cut must change WHICH world you see, not what kind of
     // world it is. A slice at 45 degrees should be as walkable, as smooth
@@ -605,6 +660,7 @@ int main() {
     std::printf("terrain4d_tests: running...\n\n");
     test_w_actually_changes_the_world();
     test_rotating_the_slice_changes_the_cross_section();
+    test_scrolling_is_a_sweep_not_a_sequence_of_jumps();
     test_a_tilted_slice_is_still_the_same_kind_of_world();
     test_adjacent_slices_are_related_not_unrelated();
     test_a_slice_is_a_deterministic_pure_function();

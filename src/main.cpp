@@ -731,9 +731,18 @@ int main(int argc, char** argv) {
                 if (wrld.slice_w() < -12.0f) auto_dir =  1.0f;
                 w_axis = auto_dir;
                 // Rotate as well as translate, because rotation is the
-                // half that looks four-dimensional. A slow sweep back and
-                // forth through a quarter turn shows the cross-sections
-                // changing without anyone touching the wheel.
+                // half that looks four-dimensional: a sweep back and
+                // forth through most of a quarter turn shows the
+                // cross-sections changing without anyone touching the
+                // wheel.
+                //
+                // Not a SLOW sweep, whatever an earlier comment here
+                // said. 0.06 rad/s is twenty scroll notches a second and
+                // moves roughly four fifths of the visible columns in
+                // that second. It is a demonstration rate, chosen so the
+                // change is unmistakable to someone watching a recording,
+                // and it is well above anything a player produces by
+                // hand.
                 static float auto_theta_dir = 1.0f;
                 if (wrld.slice_theta() >  1.5f) auto_theta_dir = -1.0f;
                 if (wrld.slice_theta() < -1.5f) auto_theta_dir =  1.0f;
