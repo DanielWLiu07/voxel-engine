@@ -206,17 +206,30 @@ constants rather than measurements:
 [docs/bench/4d_motion.md](docs/bench/4d_motion.md).
 
 Both motions are verified rather than asserted. `--verify-4d` steps along
-w, rotates the slice, and checks that each one changes the world, returns
-it **exactly** when reversed, leaves every triangle valid under the same
-GPU read-back `--validate` uses, and that a single scroll notch reaches
-the world at all:
+w, rotates the slice, builds in it, and checks nineteen properties: that
+each motion changes the world and returns it **exactly** when reversed,
+that a single scroll notch reaches the world, that the ground under the
+player does not move when the world turns about them, that a built
+structure keeps turning with the world instead of freezing its chunk,
+that an edit reaches disk from outside the stream window, and that every
+triangle is valid under the same GPU read-back `--validate` uses:
 
-    VERIFY4D w=0.00 chunks=169 step_ms=45.7 changed=1 returned=1 rapid_ok=1
-      held_rebuilds=118 held_travelled=0.80 held_geometry=0.78
+    VERIFY4D w=0.00 chunks=169 step_ms=80.3 changed=1 returned=1 rapid_ok=1
+      held_rebuilds=114 held_travelled=0.80 held_geometry=0.69
       edit_survives_w=1 tilt_changed=1 tilt_returned=1 notch=1
-      bad_tris=0/0/0/0 ok
+      edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1
+      tilt_survives_travel=1 reversible_away=1 edit_rotates=1 settled=1
+      edit_ns_stable=1 bad_tris=0/0/0/0 ok
 
-It runs in `audit.sh` alongside everything else. The 3D engine is
+It runs in `audit.sh`, which gates it by naming the fields, and on Linux
+in CI under a virtual display - the triangle check reads meshes back off
+the GPU, so unlike `--bench` it needs a real context.
+
+Most of those fields exist because something they now cover was broken,
+and several were added after the check that was supposed to catch it
+passed against the live defect. One lesson, learned four times: **a check
+that only ever runs where the quantity it guards is zero is not a
+check.** The 3D engine is
 untouched and remains the default: every performance number in this README
 is measured on it.
 
