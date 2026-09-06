@@ -94,25 +94,29 @@ float grad_dot(std::uint32_t h, float dx, float dy, float dz, float dw) {
          + static_cast<float>(g[2]) * dz + static_cast<float>(g[3]) * dw;
 }
 
-// Measured, not guessed. Each gradient has three non-zero unit components,
-// so a single corner dot can reach sqrt(3) ~ 1.732, but interpolation
-// never realises that - the sixteen corners pull against each other.
+// Measured, and measured harder than the first time. Each gradient has
+// three non-zero unit components, so a single corner dot can reach
+// sqrt(3) ~ 1.732, but interpolation never realises that - the sixteen
+// corners pull against each other.
 //
-// `noise4d_range` (src/bench, built by default) sweeps 20,000,000 samples
-// across eight seeds including 0 and UINT32_MAX and reports:
+// `noise4d_range` (src/bench, built by default) sweeps 200,000,000
+// samples across 200 seeds including 0 and UINT32_MAX and reports a raw
+// peak of 1.25719, so the raw field needs scaling by at most
+// 1/1.25719 = 0.7954 to land inside [-1, 1].
 //
-//     peak|v|=1.2244  mean=-0.00009  stddev=0.2927
+// This is 0.75, not 0.7954, and the margin is the point. The first
+// version of this constant was 0.81, fitted to a raw peak of 1.2244 found
+// over 20M samples and 8 seeds - and an adversarial review swept 200M
+// across 200 seeds, found 1.2572, and produced a sample at 1.018. The
+// bound was never a bound; the test simply had not met a violating sample
+// yet, which is exactly the "coin flip on the next sample" this comment
+// used to warn about while being an instance of it.
 //
-// so the raw field needs scaling by 1/1.2244 = 0.8167 to land in [-1, 1].
-// This is 0.81 rather than 0.8167, which puts the measured peak at 0.9918
-// and leaves about 1% of headroom for extremes 20M samples did not hit.
-// Scaling to exactly the observed peak would make the bound a coin flip on
-// the next sample rather than a bound.
-//
-// The unit test asserts the range holds. A gradient table with a zero row
-// or a fade curve change would push past it, and that fails a test instead
-// of silently flattening the terrain at its extremes.
-constexpr float kNormalize = 0.81f;
+// 0.75 puts the measured peak at 0.943, about 6% of headroom for extremes
+// no sweep has reached. Widening the sweep can only push the raw peak up,
+// so a constant fitted to the last sweep's maximum is guaranteed to be
+// wrong eventually; one with margin is not.
+constexpr float kNormalize = 0.75f;
 
 }  // namespace
 

@@ -13,7 +13,8 @@
 //
 // Writes docs/media/slice4d/w_XX.png plus a SLICE4D line of measurements.
 
-#include "world/noise4d.h"
+#include "world/terrain_gen.h"  // altitude band constants
+#include "world/terrain_gen4d.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -31,14 +32,20 @@ namespace {
 
 constexpr int kSize    = 512;   // pixels per slice, one pixel per world column
 constexpr int kSlices  = 24;    // how many w values to render
-float g_w_step = 0.35f;         // world units of w between slices
+// One world unit per slice by default.
+//
+// It used to be 0.35, which made the slice INDEX not the w value: the
+// committed w_01.png was w=0.35 and w_08.png was w=2.80, while the
+// captions said "one step" and "eight steps" and the documented command
+// did not reproduce either image. A default that makes `w_NN` mean w=NN
+// removes the whole class of mismatch.
+float g_w_step = 1.0f;
 
-// The 3D generator's own constants, so a slice is directly comparable to
-// the terrain the engine already makes.
-constexpr int kSeaLevel  = 24;
-constexpr int kSandBand  = 2;
-constexpr int kStoneBand = 36;
-constexpr int kSnowBand  = 40;
+// Bands come from the generator's own header, not retyped here.
+using world::kSeaLevel;
+using world::kSandBand;
+using world::kStoneBand;
+using world::kSnowBand;
 
 struct Rgb { std::uint8_t r, g, b; };
 
@@ -80,62 +87,17 @@ Rgb shade(int height, float relief) {
     return {mul(70), mul(135), mul(60)};
 }
 
-// How much noise-space a unit of player movement along w covers.
+// No local copy of the terrain maths here any more.
 //
-// This constant is the first real design finding of the 4D work, and it
-// came out of running this harness rather than out of theory. With w
-// treated like x and z (scale 1), stepping a block sideways in the fourth
-// dimension changed 4.6% of columns by at most one block: the world was
-// effectively frozen along w. The reason is not a bug. The continent field
-// runs at frequency 0.004, so one noise cell is 250 units wide, and a
-// player who can walk 250 units along x cannot walk 250 units along w -
-// there is nothing there to walk through.
+// This file used to carry its own kWScale, its own height formula and its
+// own amplitude, and they drifted from src/world/terrain_gen4d.* the
+// moment that amplitude was refitted. The w-scale table in docs/4d.md was
+// then measured against constants the shipped generator no longer used -
+// every row stale by 2-4x, and the conclusion it supported false. A
+// harness that measures a copy of the thing measures nothing.
 //
-// So w gets its own scale. Measured with this tool over 24 slices:
-//
-//     scale   columns changed per step   max column jump
-//       1              4.6%                    1
-//       5             51.2%                    4
-//      25             77.3%                    9
-//      60             85.0%                   11
-//
-// 6 puts a single step in w at roughly half the columns moving by a block
-// or two, which reads as "the world shifted" rather than as either a
-// freeze or a reseed. The max jump staying in single digits across all of
-// these is the important part: the field is continuous along w at every
-// scale, so this is a choice about feel, not about correctness.
-constexpr float kWScale = 6.0f;
-
-// Same shape as TerrainGen::height_at: domain-warped fBm, three octave
-// stacks at the 3D generator's frequencies and weights, with w threaded
-// through every sample. This is the 4D analogue of the existing height
-// function rather than a new design.
-int height_at_4d(const world::Noise4D& warp, const world::Noise4D& continents,
-                 const world::Noise4D& hills, const world::Noise4D& detail,
-                 float x, float z, float w_in) {
-    const float w = w_in * kWScale;
-    const float ox = warp.sample(x * 0.012f, z * 0.012f, 0.0f, w * 0.012f) * 60.0f;
-    const float oz = warp.sample((x + 113.0f) * 0.012f, (z + 271.0f) * 0.012f,
-                                 0.0f, w * 0.012f) * 60.0f;
-    const float c = continents.fbm(x + ox, z + oz, 0.0f, w, 4, 0.004f);
-    const float h = hills.fbm(x, z, 0.0f, w, 4, 0.020f);
-    const float d = detail.fbm(x, z, 0.0f, w, 2, 0.080f);
-    const float n = c * 0.65f + h * 0.25f + d * 0.10f;
-    // The 3D generator's `kSeaLevel + n * 28 + 14` does not transfer,
-    // because this fbm normalizes by the amplitude sum and FastNoiseLite's
-    // does not - the composite here measures p1..p99 of -0.17..0.21 rather
-    // than filling [-1, 1]. Dropped into the old formula, every column
-    // landed between y=31 and y=46: no water anywhere, and the whole world
-    // inside the grass/stone/snow bands. The first render was a blob map
-    // for exactly that reason.
-    //
-    // Fitted to the measured distribution instead: 115 spreads p1..p99
-    // across roughly y=12..56, and the +8 offset puts about a fifth of the
-    // world under sea level, so coasts exist.
-    return std::clamp(
-        static_cast<int>(static_cast<float>(kSeaLevel) + n * 115.0f + 8.0f),
-        1, 255);
-}
+// It calls world::TerrainGen4D now, so what it reports is by construction
+// what the engine would generate.
 
 }  // namespace
 
@@ -147,10 +109,7 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories(out_dir, ec);
 
-    // Separate seeds per field, matching the +1/+2/+3 offsets TerrainGen
-    // uses, so the fields are independent rather than correlated copies.
-    const world::Noise4D continents(seed), hills(seed + 1),
-                         detail(seed + 2), warp(seed + 3);
+    const world::TerrainGen4D terrain(seed);
 
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kSize) * kSize * 3);
     std::vector<int> prev_height;
@@ -159,7 +118,7 @@ int main(int argc, char** argv) {
     int slices_compared = 0;
 
     for (int s = 0; s < kSlices; ++s) {
-        const float w = static_cast<float>(s) * g_w_step;
+        const int w = static_cast<int>(static_cast<float>(s) * g_w_step);
         std::vector<int> height(static_cast<std::size_t>(kSize) * kSize);
 
         // Heights first, colours second: the hillshade needs each column's
@@ -173,7 +132,8 @@ int main(int argc, char** argv) {
                 const float x = static_cast<float>(px) - kSize * 0.5f;
                 const float z = static_cast<float>(py) - kSize * 0.5f;
                 height[static_cast<std::size_t>(py) * kSize + px] =
-                    height_at_4d(warp, continents, hills, detail, x, z, w);
+                    terrain.height_at(static_cast<int>(x), static_cast<int>(z),
+                                      static_cast<int>(w));
             }
         }
         for (int py = 0; py < kSize; ++py) {

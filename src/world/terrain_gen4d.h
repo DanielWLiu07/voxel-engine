@@ -47,27 +47,57 @@ private:
 
 // How much noise-space one unit of movement along w covers.
 //
-// Not 1, and the reason is measured rather than assumed. With w treated
-// like x and z, a step along it changed 4.6% of columns by at most one
-// block: the world was frozen along the fourth axis. That is not a bug -
-// the continent field's noise cell is 250 units wide, and a player who can
-// walk 250 units along x cannot walk 250 units along w, because there is
-// nothing there to walk through.
+// One. The fourth axis is scaled exactly like x and z, and getting back
+// to that took a mistake and an adversarial review to undo.
 //
-// src/bench/slice4d.cpp swept this. At scale 1, 5, 25 and 60 the share of
-// columns that change per step is 4.6%, 51.2%, 77.3% and 85.0%, while the
-// largest single-column jump stays in single digits throughout - so the
-// field is continuous along w at every scale and this is a choice about
-// feel, not about correctness.
-inline constexpr float kWScale = 6.0f;
+// This constant was 6, justified by a measurement showing that at scale 1
+// a step along w changed 4.6% of columns by at most one block - "the
+// world was frozen along the fourth axis". That measurement was real, and
+// it was taken against a height amplitude of 28. The amplitude was then
+// refitted to 126 (see kHeightAmplitude) and this table was never
+// re-measured, so both the header and docs/4d.md carried numbers
+// describing constants the generator no longer used.
+//
+// Re-measured against the shipped generator, one world unit per slice:
+//
+//     scale   columns changed per step   max column jump
+//       1              51.2%                     4
+//       3              80.0%                    10
+//       6              88.1%                    18
+//      12              92.1%                    26
+//      25              94.4%                    35
+//      60              96.3%                    46
+//
+// Scale 1 was never frozen once the amplitude was right. It moves half
+// the columns by up to four blocks against a ~45-block height range,
+// which is exactly the "recognisably the same place, visibly shifted"
+// behaviour the scaling was introduced to produce. The scaling was
+// compensating for the amplitude, not for anything about the fourth
+// dimension - the amplitude is 4.5x larger now, and 4.5 * 1 block is the
+// 4-block jump scale 1 produces.
+//
+// The old comment also claimed the max jump "stays in single digits at
+// every scale, so the field is continuous along w regardless". That was
+// false in its own table (scale 60 read 11) and is far more false here.
+// Continuity along w is real, and it is established by
+// test_adjacent_slices_are_related_not_unrelated rather than by a jump
+// count that grows with the scale.
+inline constexpr float kWScale = 1.0f;
 
 // Height amplitude and offset, fitted to this noise rather than inherited.
 // The 3D generator's `kSeaLevel + n * 28 + 14` put every column between
 // y=31 and y=46 here - no water anywhere, the whole world inside the
-// grass/stone/snow bands - because the composite measures p1..p99 of
-// -0.17..0.21 instead of filling [-1, 1]. 115 spreads that across roughly
-// y=12..56, and +8 leaves about a fifth of the world under sea level.
-inline constexpr float kHeightAmplitude = 115.0f;
+// grass/stone/snow bands - because the composite does not fill [-1, 1].
+//
+// Refitted when noise4d's normalizer dropped from 0.81 to 0.75: the
+// composite's p1..p99 span went 0.38 -> 0.3503, so 115 became 126 to keep
+// the same world. That is the coupling worth noticing - the amplitude is
+// a function of the noise's scale, so any change to kNormalize has to be
+// followed here or the world quietly gets flatter.
+//
+// 126 spreads p1..p99 across roughly y=12..56, and +8 leaves about a
+// fifth of the world under sea level.
+inline constexpr float kHeightAmplitude = 126.0f;
 inline constexpr float kHeightOffset    = 8.0f;
 
 }  // namespace world

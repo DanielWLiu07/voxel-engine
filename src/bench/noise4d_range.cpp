@@ -21,15 +21,22 @@
 #include <random>
 
 int main() {
-    constexpr int kPerSeed = 2'500'000;
-    constexpr std::uint32_t kSeeds[] = {1337u, 7u, 99u, 2024u,
-                                        55555u, 1u, 0u, 4294967295u};
+    // 200 seeds and 200M samples, not the 8 and 20M this started with.
+    // The narrower sweep found a raw peak of 1.2244; this one finds
+    // 1.2572, and the constant fitted to the first was not a bound.
+    constexpr int kPerSeed = 1'000'000;
+    constexpr int kSeedCount = 200;
 
     float peak = 0.0f;
     double sum = 0.0, sumsq = 0.0;
     long n = 0;
 
-    for (std::uint32_t seed : kSeeds) {
+    for (int si = 0; si < kSeedCount; ++si) {
+        // Spread over the whole 32-bit space rather than clustered low,
+        // and including the two edges a multiply-mixed seed handles worst.
+        const std::uint32_t seed = (si == 0) ? 0u
+                                 : (si == 1) ? 4294967295u
+                                 : static_cast<std::uint32_t>(si) * 2654435761u;
         const world::Noise4D noise(seed);
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> pos(-500.0f, 500.0f);
@@ -41,7 +48,9 @@ int main() {
             sumsq += static_cast<double>(v) * v;
             ++n;
         }
-        std::printf("  seed %-10u peak|v|=%.4f\n", seed, seed_peak);
+        if (seed_peak >= peak) {
+            std::printf("  new max at seed %-10u peak|v|=%.5f\n", seed, seed_peak);
+        }
         peak = std::max(peak, seed_peak);
     }
 
@@ -55,7 +64,7 @@ int main() {
     // normalized figure and the raw one is recovered by dividing. Printing
     // both, because the constant in noise4d.cpp is derived from the raw
     // peak and the bound the unit test enforces is the normalized one.
-    constexpr double kNormalizeInUse = 0.81;
+    constexpr double kNormalizeInUse = 0.75;
     std::printf("normalized peak %.4f (must stay <= 1.0), "
                 "implying a raw peak of %.4f\n",
                 peak, peak / kNormalizeInUse);

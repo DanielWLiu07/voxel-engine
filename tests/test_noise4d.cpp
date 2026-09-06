@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <random>
+#include <set>
 
 namespace {
 
@@ -390,28 +391,38 @@ void test_the_field_keeps_its_detail_out_to_a_million_units() {
     // does not error when that happens - it goes flat, which is the
     // quietest possible failure for a world that advertises no bounds.
     //
-    // Measured over 2000 samples half a unit apart:
+    // Counted with a set, because the first version of this counted
+    // `v != prev` - consecutive differences, not distinct values. A field
+    // alternating between two values forever would have scored a perfect
+    // 2000/2000 under that metric, and it understated the real loss: at
+    // 1e7 it reported 998/2000 where the true figure is 595/2000, so the
+    // doc said "half the detail gone" when 70% was gone.
     //
-    //     |coord| 1e2..1e6   2000/2000 distinct
-    //     |coord| 1e7         998/2000 distinct  (half the detail gone)
-    //     |coord| 1e8           1/2000 distinct  (flat)
+    //     |coord|   distinct of 2000
+    //       1e2          1973
+    //       1e4          1984
+    //       1e6          1945
+    //       1e7           595   <- collapsing
+    //       1e8             1   <- flat
     //
-    // So this pins the usable range rather than asserting there is none.
-    // 1e6 world units is 62,500 chunks from the origin, which no player
-    // reaches; the point is that the limit is known and written down
-    // instead of being discovered as "the terrain went flat out there".
+    // Never exactly 2000 even close to the origin: float spacing means a
+    // few of 2000 samples collide anywhere. The bound is 95%, which sits
+    // an order of magnitude clear of the 30% at 1e7.
     const world::Noise4D noise(1337);
     for (double magnitude : {1e2, 1e4, 1e6}) {
-        int distinct = 0;
-        float prev = 1e9f;
-        for (int i = 0; i < 500; ++i) {
+        std::set<float> seen;
+        constexpr int kN = 2000;
+        for (int i = 0; i < kN; ++i) {
             const float x = static_cast<float>(magnitude)
                           + static_cast<float>(i) * 0.5f;
-            const float v = noise.sample(x, x * 0.3f, x * 0.7f, x * 0.11f);
-            if (v != prev) ++distinct;
-            prev = v;
+            seen.insert(noise.sample(x, x * 0.3f, x * 0.7f, x * 0.11f));
         }
-        EXPECT(distinct == 500, "the field is still fully resolved here");
+        EXPECT(seen.size() > static_cast<std::size_t>(kN) * 95 / 100,
+               "the field is still fully resolved here");
+        if (seen.size() <= static_cast<std::size_t>(kN) * 95 / 100) {
+            std::printf("    (at %.0e only %zu of %d samples are distinct)\n",
+                        magnitude, seen.size(), kN);
+        }
     }
 }
 

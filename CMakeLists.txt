@@ -273,9 +273,10 @@ if(VOXEL_BUILD_BENCH)
   # Renders 3D slices of a 4D heightfield as PNGs. The cheap answer to
   # whether a fourth spatial axis morphs the world coherently or just
   # reseeds it, asked before committing the engine to 4D storage.
-  add_executable(slice4d src/bench/slice4d.cpp src/world/noise4d.cpp)
+  add_executable(slice4d src/bench/slice4d.cpp src/world/noise4d.cpp
+                         src/world/terrain_gen4d.cpp)
   target_include_directories(slice4d PRIVATE src)
-  target_link_libraries(slice4d PRIVATE stb)
+  target_link_libraries(slice4d PRIVATE stb fastnoise)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(slice4d PRIVATE -Wall -Wextra -Wpedantic -O2)
   endif()
