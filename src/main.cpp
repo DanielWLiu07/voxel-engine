@@ -284,6 +284,7 @@ int main(int argc, char** argv) {
     const int bench_edit = opt.bench_edit;
     const bool validate_mode = opt.validate_mode;
     const bool verify_edit_persistence = opt.verify_edit_persistence;
+    const bool verify_4d = opt.verify_4d;
     const int thread_override = opt.thread_override;
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
@@ -311,6 +312,7 @@ int main(int argc, char** argv) {
     // setup helper.
     const bool headless = bench_frames > 0 || bench_io || bench_edit > 0 ||
                           validate_mode || verify_edit_persistence ||
+                          verify_4d ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
@@ -410,6 +412,16 @@ int main(int argc, char** argv) {
                     "discarded on purpose)\n",
                     only_chunk->x, only_chunk->z);
     }
+    // The 4D world, when asked for. Declared here so it outlives every
+    // worker job that reads it, exactly as `terrain` does - the pool
+    // below is destroyed before both.
+    const world::TerrainGen4D terrain4d(terrain_seed);
+    if (opt.four_d) {
+        wrld.set_slice_source(&terrain4d, opt.slice_w);
+        std::printf("[world] 4D terrain, starting on slice w=%d "
+                    "(, and . step along w)\n", opt.slice_w);
+    }
+
     core::ThreadPool pool(worker_count);
 
     const int total_chunks = (2 * stream_radius + 1) * (2 * stream_radius + 1);
@@ -580,6 +592,23 @@ int main(int argc, char** argv) {
             occlusion_cull_enabled = !occlusion_cull_enabled;
             std::printf("[world] occlusion culling %s\n",
                         occlusion_cull_enabled ? "on" : "off");
+        }
+        // Stepping along w. A step invalidates every chunk in the window,
+        // so this re-requests all of them; the previous slice keeps
+        // drawing until the replacements land, which makes it read as the
+        // world morphing rather than blinking.
+        if (wrld.is_4d()) {
+            int slice_delta = 0;
+            if (input.key_pressed(core::key_of(core::Bind::SliceForward))) ++slice_delta;
+            if (input.key_pressed(core::key_of(core::Bind::SliceBack)))    --slice_delta;
+            if (slice_delta != 0) {
+                const auto slice_t0 = std::chrono::steady_clock::now();
+                const int requested = wrld.step_slice(slice_delta, terrain, pool);
+                std::printf("[world] w=%d (%d chunks re-requested in %.1f ms)\n",
+                            wrld.slice_w(), requested,
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - slice_t0).count());
+            }
         }
         if (input.key_pressed(core::key_of(core::Bind::Vsync))) {
             vsync_enabled = !vsync_enabled;
@@ -1064,6 +1093,106 @@ int main(int argc, char** argv) {
             if (bad > 0) {
                 return EXIT_FAILURE;
             }
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // Headless --verify-4d: prove the fourth axis is real and
+        // reversible.
+        //
+        // Three claims, in order. A step along w must CHANGE the world -
+        // otherwise the axis exists in the storage and does nothing.
+        // Stepping back must return the world to exactly what it was,
+        // which is the determinism the whole design rests on: slices are
+        // a pure function of (seed, w), so w=0 reached by stepping is
+        // w=0 reached by starting there. And the meshes have to be right
+        // at each stop, checked by the same GPU read-back --validate
+        // uses, because a slice change re-meshes every chunk in the
+        // window and that is the most likely thing to go wrong.
+        if (verify_4d && world_settled) {
+            auto settle = [&]() {
+                // Drain until every re-requested chunk has landed and the
+                // boundary re-meshes owed to it are flushed.
+                for (int guard = 0; guard < 100000; ++guard) {
+                    wrld.drain_finished(256);
+                    wrld.flush_pending_remeshes(pool, 256);
+                    if (wrld.pending_async() == 0 &&
+                        wrld.pending_remesh() == 0) break;
+                }
+            };
+            auto world_hash = [&wrld]() {
+                std::uint64_t h = 1469598103934665603ull;
+                std::vector<world::ChunkCoord> coords;
+                wrld.for_each_chunk([&](world::ChunkCoord c, const world::Chunk&) {
+                    coords.push_back(c);
+                });
+                std::sort(coords.begin(), coords.end(),
+                          [](const world::ChunkCoord& a, const world::ChunkCoord& b) {
+                              return a.z != b.z ? a.z < b.z : a.x < b.x;
+                          });
+                for (const auto& c : coords)
+                    for (int y = 0; y < world::kChunkSizeY; ++y)
+                        for (int z = 0; z < world::kChunkSizeZ; ++z)
+                            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                                const auto b = static_cast<std::uint8_t>(
+                                    wrld.block_at(c.x * world::kChunkSizeX + x, y,
+                                                  c.z * world::kChunkSizeZ + z));
+                                h = (h ^ b) * 1099511628211ull;
+                            }
+                return h;
+            };
+
+            const int w0 = wrld.slice_w();
+            const std::uint64_t hash_w0 = world_hash();
+            const int bad_w0 = wrld.debug_validate_gpu_meshes();
+
+            const auto step_t0 = std::chrono::steady_clock::now();
+            const int requested = wrld.step_slice(+1, terrain, pool);
+            settle();
+            const double step_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - step_t0).count();
+            const std::uint64_t hash_w1 = world_hash();
+            const int bad_w1 = wrld.debug_validate_gpu_meshes();
+
+            wrld.step_slice(-1, terrain, pool);
+            settle();
+            const std::uint64_t hash_back = world_hash();
+            const int bad_back = wrld.debug_validate_gpu_meshes();
+
+            // Rapid steps without settling in between: the case a player
+            // creates by pressing the key twice quickly, where each
+            // step's jobs are still in the pool when the next fires.
+            //
+            // This does not fail if step_slice's generation bump and
+            // clears are removed, and that is worth stating rather than
+            // implying otherwise: the per-request stamp that
+            // drain_finished already checks is what discards stale
+            // results, and it predates the 4D work. The phase is here
+            // because rapid stepping is a real usage pattern worth
+            // covering, not because it isolates a guard.
+            for (int i = 0; i < 3; ++i) wrld.step_slice(+1, terrain, pool);
+            for (int i = 0; i < 3; ++i) wrld.step_slice(-1, terrain, pool);
+            settle();
+            const std::uint64_t hash_rapid = world_hash();
+            const int bad_rapid = wrld.debug_validate_gpu_meshes();
+
+            const bool ok = requested > 0 &&
+                            hash_w1 != hash_w0 &&      // w is a real axis
+                            hash_back == hash_w0 &&    // and a reversible one
+                            hash_rapid == hash_w0 &&   // even under rapid steps
+                            wrld.slice_w() == w0 &&
+                            bad_w0 == 0 && bad_w1 == 0 &&
+                            bad_back == 0 && bad_rapid == 0;
+
+            std::printf("\nVERIFY4D w=%d chunks=%d step_ms=%.1f "
+                        "changed=%d returned=%d rapid_ok=%d "
+                        "bad_tris=%d/%d/%d/%d %s\n",
+                        w0, requested, step_ms,
+                        hash_w1 != hash_w0 ? 1 : 0,
+                        hash_back == hash_w0 ? 1 : 0,
+                        hash_rapid == hash_w0 ? 1 : 0,
+                        bad_w0, bad_w1, bad_back, bad_rapid,
+                        ok ? "ok" : "FAILED");
+            if (!ok) return EXIT_FAILURE;
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 

@@ -131,6 +131,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
                 "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
+                "  voxel_engine --4d                     four-dimensional world; , and . step along w\n"
+                "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
+                "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -170,6 +173,27 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--bench-io") { o.bench_io = true; continue; }
         if (arg == "--wireframe") { o.start_wireframe = true; continue; }
         if (arg == "--validate") { o.validate_mode = true; continue; }
+        if (arg == "--4d") { o.four_d = true; continue; }
+        if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
+        if (arg == "--slice-w") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            // Signed, unlike every other count flag, because w runs both
+            // ways from the origin - so this cannot use parse_count.
+            char* end = nullptr;
+            errno = 0;
+            const long sv = std::strtol(v, &end, 10);
+            if (end == v || *end != '\0' || errno == ERANGE ||
+                sv < -1000 || sv > 1000) {
+                std::fprintf(stderr, "--slice-w expects a whole number "
+                             "between -1000 and 1000 (got \"%s\")\n", v);
+                exit_code = EXIT_FAILURE;
+                return std::nullopt;
+            }
+            o.slice_w = static_cast<int>(sv);
+            o.four_d = true;   // asking for a slice implies the 4D world
+            continue;
+        }
         if (arg == "--verify-edit-persistence") {
             o.verify_edit_persistence = true;
             continue;

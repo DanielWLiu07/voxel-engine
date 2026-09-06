@@ -295,8 +295,13 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
+    // Captured by value, like `gen` and `kind`: the player can step along
+    // w while jobs are in flight, and a worker reading slice_w_ off the
+    // member would then generate a chunk for a slice nobody asked for.
+    const TerrainGen4D* slice_gen = slice_gen_;
+    const int slice_w = slice_w_;
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, &terrain, c, gen, stamp, mask, kind,
+    pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice_w,
                  planes = std::move(planes),
                  nlight = std::move(nlight)]() {
         ZoneScopedN("chunk_worker_job");
@@ -306,7 +311,10 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.coord = c;
         fc.generation = gen;
         fc.request_stamp = stamp;
-        terrain.fill_chunk(c.x, c.z, fc.chunk);
+        // The one branch that makes the engine four-dimensional. Null in
+        // the 3D engine, which is every existing path.
+        if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice_w, fc.chunk);
+        else           terrain.fill_chunk(c.x, c.z, fc.chunk);
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
             t_after_terrain - t0).count();
@@ -339,6 +347,62 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
             request_terrain_chunk({cx, cz}, terrain, pool);
         }
     }
+}
+
+int World::step_slice(int delta, const TerrainGen& terrain,
+                      core::ThreadPool& pool) {
+    if (!slice_gen_ || delta == 0) return 0;
+    slice_w_ += delta;
+
+    // Every chunk in the world is now wrong: a step along w changes the
+    // contents of all of them, which the cost model in docs/4d.md measured
+    // at 100% - there is nothing to skip. So this re-requests the lot.
+    //
+    // Stale results from the previous slice are already handled, and by
+    // machinery that was here before this: request_terrain_chunk stamps
+    // every request with ++request_seq_, and drain_finished discards any
+    // result whose stamp is not the newest for its coord. Re-requesting a
+    // chunk therefore invalidates the in-flight job for it automatically.
+    //
+    // The generation bump and the two clears below are defence in depth,
+    // not the protection - verified by removing both and watching
+    // --verify-4d still pass, including its rapid-step phase. They are
+    // kept because they cost nothing and make the intent local, but this
+    // comment should not claim they are what makes a slice step safe.
+    ++generation_;
+    requested_.clear();
+    {
+        std::lock_guard<std::mutex> lock(finished_mutex_);
+        std::queue<FinishedChunk> empty;
+        finished_.swap(empty);
+    }
+    jobs_in_flight_.store(0);
+    // Edits do not survive a slice change: they belong to the w they were
+    // made at, and the stash is keyed by (x, z) alone. Dropping it is the
+    // honest option until the stash carries a w - otherwise an edit made
+    // at w=0 would reappear at w=5 in a place that means something else.
+    edited_stash_.clear();
+
+    std::vector<ChunkCoord> coords;
+    coords.reserve(chunks_.size());
+    for (const auto& kv : chunks_) coords.push_back(kv.first);
+    // Sorted so the request order does not depend on the hash map's
+    // iteration order - the same reason history_seek sorts.
+    std::sort(coords.begin(), coords.end(),
+              [](const ChunkCoord& a, const ChunkCoord& b) {
+                  return a.z != b.z ? a.z < b.z : a.x < b.x;
+              });
+    // Note: chunks_ is deliberately NOT cleared. The previous slice keeps
+    // drawing until its replacement arrives, so the world morphs instead
+    // of blinking through emptiness.
+    for (const ChunkCoord& c : coords) {
+        // terrain is unused on this path - slice_gen_ is set, so the
+        // worker takes the 4D branch - but it is passed rather than
+        // faked, because forming a reference from nullptr is undefined
+        // even where nothing reads it.
+        request_terrain_chunk(c, terrain, pool);
+    }
+    return static_cast<int>(coords.size());
 }
 
 World::StreamStats World::update_streaming(ChunkCoord center, int radius,

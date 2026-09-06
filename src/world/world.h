@@ -9,6 +9,7 @@
 #include "world/chunk_mesh.h"
 #include "world/section_visibility.h"
 #include "world/terrain_gen.h"
+#include "world/terrain_gen4d.h"
 
 #include <glm/glm.hpp>
 
@@ -203,6 +204,35 @@ public:
     // Iterates every loaded chunk slot in unspecified order. Read-only.
     void for_each_chunk(
         const std::function<void(ChunkCoord, const Chunk&)>& fn) const;
+
+    // ----- the fourth dimension ----------------------------------------
+    //
+    // Opt-in and entirely additive: with no slice source set, every path
+    // below behaves exactly as it did before and the engine is the 3D
+    // engine. Setting one swaps which generator the worker jobs call.
+    //
+    // A 4D world reaches a 3D renderer by slicing - the mesher, the
+    // culler, the lighting and the renderer never learn there is a fourth
+    // axis, because they only ever see the slice at the player's w. That
+    // is what keeps this a change to generation and streaming rather than
+    // to everything.
+    void set_slice_source(const TerrainGen4D* gen, int w) {
+        slice_gen_ = gen;
+        slice_w_ = w;
+    }
+    bool is_4d() const { return slice_gen_ != nullptr; }
+    int  slice_w() const { return slice_w_; }
+
+    // Moves to an adjacent slice and re-requests every resident chunk at
+    // the new w. Returns how many were re-requested.
+    //
+    // Chunks are NOT cleared first: the old slice stays on screen until
+    // its replacement lands, so a step along w morphs rather than
+    // blinking through an empty world. Every job is stamped with the
+    // current generation, so anything still in flight from the previous
+    // slice is discarded on arrival instead of drawing the wrong world.
+    int step_slice(int delta, const TerrainGen& terrain,
+                   core::ThreadPool& pool);
 
     BlockId block_at(int wx, int wy, int wz) const;
     bool    set_block(int wx, int wy, int wz, BlockId b);
@@ -426,6 +456,11 @@ private:
     // cannot pick up regenerated terrain from a job the wipe outran. Only
     // touched on the main thread (submit, drain, wipe), so not atomic.
     std::uint64_t                      generation_ = 0;
+
+    // Null in the 3D engine, which is the default and the only state the
+    // benches and --validate ever see.
+    const TerrainGen4D* slice_gen_ = nullptr;
+    int                 slice_w_ = 0;
     double                             total_worker_ms_  = 0.0;
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;

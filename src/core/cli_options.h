@@ -58,6 +58,16 @@ struct CliOptions {
     int bench_edit = 0;
     bool validate_mode = false;
     bool verify_edit_persistence = false;
+    // --4d: generate the world from the four-dimensional terrain
+    // generator, with the player on slice w. The renderer, mesher and
+    // culler are unchanged - they only ever see the slice - so this is a
+    // change to generation and streaming alone. Off by default, and the
+    // 3D engine is exactly what it was.
+    bool four_d = false;
+    // --verify-4d: step along w and back, checking the world changes and
+    // then returns to exactly what it was. Implies --4d.
+    bool verify_4d = false;
+    int  slice_w = 0;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;

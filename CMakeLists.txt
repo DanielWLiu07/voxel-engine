@@ -124,6 +124,8 @@ add_executable(voxel_engine
   src/world/chunk_serialize.cpp
   src/world/section_visibility.cpp
   src/world/terrain_gen.cpp
+  src/world/terrain_gen4d.cpp
+  src/world/noise4d.cpp
   src/world/world.cpp
   src/world/world_io.cpp
 )
@@ -178,6 +180,8 @@ if(VOXEL_BUILD_TESTS)
     src/world/world_io.cpp
     src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
     src/render/lighting.cpp
     src/gfx/frustum.cpp
     src/gfx/mesh.cpp
