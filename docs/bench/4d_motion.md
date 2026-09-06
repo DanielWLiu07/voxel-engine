@@ -18,8 +18,8 @@ render loop uses. Apple M4, 9-worker pool, radius 8 (289 chunks).
 
 | motion | mean ms | p99 ms | issued/frame | behind when motion stopped | settle |
 |---|---|---|---|---|---|
-| translate (0.4 w/s, walk speed) | 0.65-0.84 | 1.01-2.19 | 23.8 / 24 | **241 / 289** | 9-54 ms |
-| rotate (0.18 rad/s, ~60 notches/s) | 0.68-0.78 | 0.91-1.70 | 24.0 / 24 | **289 / 289** | 22-34 ms |
+| translate (0.4 w/s, walk speed) | 0.63-0.74 | 0.78-1.10 | 23.8 / 24 | **241 / 289** | 68-79 ms |
+| rotate (0.18 rad/s, ~60 notches/s) | 0.67-0.73 | 1.11-1.60 | 24.0 / 24 | **289 / 289** | 87-117 ms |
 
 Three runs each; timings are given as ranges because they are timings.
 The two count columns are not - `issued/frame` and `behind` reproduce
@@ -56,22 +56,52 @@ generator-level measurement (`slice4d --tilt`): one scroll notch changes
 63.8% of terrain columns, where translating a whole rebuild threshold
 changes 36.3%.
 
-**Recovery is the number a player feels**, and it is tens of
-milliseconds. This is the claim the whole streaming design exists to
-support, so it is worth checking against something that was derived
-independently. `./build/wcost 8` builds a cost model from first
-principles - generate every chunk, mesh every chunk, no engine involved -
-and predicts:
+**Recovery is the number a player feels**, and it is under a tenth of a
+second. This is the claim the whole streaming design exists to support, so
+it is worth checking against something derived independently.
+`./build/wcost 8` builds a cost model from first principles - generate
+every chunk, mesh every chunk, no engine involved - and predicts:
 
     WCOST radius=8 chunks=289 full_step_ms=429.0
       chunk (today's mesher)   429.0 ms/step   48 ms on 9 workers
 
 429 ms single-threaded for a full 289-chunk rebuild, 48 ms spread across
-the pool. The measured settle after continuous rotation is 22-34 ms, at
-or under that prediction, which is the check that matters: converging a
-fully-stale window through the streaming path costs no more than a full
-re-mesh would, and the streaming path spreads it over frames instead of
-stopping the world for one.
+the pool. Measured convergence is 68-117 ms, so 1.4x to 2.4x the model.
+
+That is the right shape, and a settle FASTER than the model would have
+meant the model was wrong rather than the engine fast. The model assumes
+perfect 9-way parallelism and counts only generation and meshing. The real
+path also uploads meshes to the GPU on the one thread that owns the
+context, re-meshes chunk boundaries as neighbours land, and spends the
+work at 24 chunks a frame by design instead of dumping all 289 into the
+pool at once. Two of those three are the cost of not stopping the world,
+which is the whole point.
+
+### The settle figure was wrong twice before it was right
+
+Both mistakes produced plausible small numbers, which is what makes them
+worth recording.
+
+The first version reported 22-34 ms and the loop had never converged at
+all. `enqueue_decoded_chunk` did not stamp the slice on the job it
+submitted, so every restored and re-meshed chunk landed claiming slice
+(w=0, theta=0), was instantly stale again at any other slice, and was
+re-issued forever. The bench reported the time it took to give up. It now
+prints `NEVER (n)` rather than a bare number when the loop exits on its
+deadline, because a settle that times out must not be able to look like a
+fast settle.
+
+The second was the loop bound itself: `for (guard = 0; guard < 4000)` is a
+spin count, not a timeout. With nothing finished to drain the body takes a
+couple of microseconds, so 4000 iterations elapsed in 8 ms while the nine
+workers had barely started, and the loop exited with 194 of 289 chunks
+still stale. It measured how long it takes to spin 4000 times - a number
+that is stable, reproducible, and meaningless. Bounded by a deadline now.
+
+The same distinction appears twice in `main.cpp` and only one of them is a
+bug: an iteration guard is fine when the body cannot no-op. `--verify-4d`
+calls a deadline-bounded drain first, so each of its iterations is a
+completed drain cycle rather than a spin.
 
 ## What this does not measure
 

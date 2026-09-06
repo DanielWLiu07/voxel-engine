@@ -148,27 +148,30 @@ under a bounded per-frame budget.
 
 | motion | main thread | behind when motion stopped | settle |
 |---|---|---|---|
-| travel along w, walk speed | 0.65-0.84 ms/frame | 241 / 289 chunks | 9-54 ms |
-| rotate, ~60 notches/sec | 0.68-0.78 ms/frame | **289 / 289** | 22-34 ms |
+| travel along w, walk speed | 0.63-0.74 ms/frame | 241 / 289 chunks | 68-79 ms |
+| rotate, ~60 notches/sec | 0.67-0.73 ms/frame | **289 / 289** | 87-117 ms |
 
 Continuous rotation leaves the entire window stale - it invalidates faster
 than any bounded stream can replace, which is true of any continuous
 motion through w and is why the stream is bounded. The number that matters
-is what happens when the motion stops: the world converges in **tens of
-milliseconds**, and 4-5% of a 60 Hz frame is what the main thread pays
-while it does.
+is what happens when the motion stops: the world converges in **under a
+tenth of a second**, and 4-5% of a 60 Hz frame is what the main thread
+pays while it does.
 
-That figure is worth checking against something derived independently.
-`./build/wcost 8` builds a cost model with no engine in it - generate
-every chunk, mesh every chunk - and predicts 429 ms single-threaded for a
-full 289-chunk rebuild, 48 ms spread over the 9-worker pool. The measured
-settle lands at or under that, so converging a fully stale window through
-the streaming path costs no more than a full re-mesh, and spreads it over
-frames instead of stopping the world for one.
+Worth checking against something derived independently. `./build/wcost 8`
+builds a cost model with no engine in it - generate every chunk, mesh
+every chunk - and predicts 429 ms single-threaded for a full 289-chunk
+rebuild, 48 ms spread over the 9-worker pool. Convergence measures 1.4x
+to 2.4x that, which is the right shape: the model assumes perfect 9-way
+parallelism and counts only generate and mesh, while the real path also
+uploads to the GPU on one thread, re-meshes chunk boundaries as
+neighbours land, and deliberately spends the work at 24 chunks a frame
+instead of dumping it all at once. A settle FASTER than the model would
+have meant the model was wrong.
 
 The chunk counts above reproduce exactly run to run; the timings are given
-as ranges because they are timings. Details, including the throughput
-column this bench deliberately does not have:
+as ranges because they are timings. Details, including two columns this
+bench had to remove for reporting constants rather than measurements:
 [docs/bench/4d_motion.md](docs/bench/4d_motion.md).
 
 Both motions are verified rather than asserted. `--verify-4d` steps along

@@ -1442,6 +1442,14 @@ int main(int argc, char** argv) {
             // Rotation has no analogue of meshed_w to converge on, so the
             // convergence test is the world's own: keep streaming until a
             // settled world stops asking for chunks.
+            //
+            // An iteration guard is correct HERE, unlike in --bench-4d,
+            // and the difference is whether the body can no-op. Each pass
+            // calls settle() first, which is deadline-bounded and does not
+            // return until the pool has drained, so an iteration is a
+            // completed drain cycle rather than a spin. A guard around a
+            // body that can return in two microseconds is a spin count
+            // wearing a timeout's clothes.
             auto settle_slice = [&]() {
                 for (int guard = 0; guard < 4000; ++guard) {
                     settle();
@@ -1482,7 +1490,70 @@ int main(int argc, char** argv) {
             wrld.rotate_slice(-kNotch);
             settle_slice();
 
-            const bool tilt_ok = hash_tilt != hash_w0 &&
+            // An edit must survive the SCROLL WHEEL, and this is a
+            // separate check from edit_survives_w rather than a variation
+            // on it, because it exercises a different code path.
+            //
+            // edit_survives_w drives travel_to -> move_w ->
+            // resample_slice, which stashes every edited chunk before
+            // rebuilding. The wheel drives stream_slice, which did not.
+            // So the engine had a check that said edits survive travel
+            // through the fourth dimension, passing, while one scroll
+            // notch deleted every edit in the world - drift after one
+            // notch is 0.003 * 32 = 0.096, six times kSliceStepMin, for
+            // every chunk at once. Found by adversarial review, not by
+            // this check, because this check did not exist.
+            wrld.rotate_slice(0.0f);
+            settle_slice();
+            int sx = 0, sy = 0, sz = 0;
+            bool scroll_placed = false;
+            for (int i = 0; i < 256 && !scroll_placed; ++i) {
+                sx = (i * 5) % 32;
+                sy = 78 + (i % 6);
+                sz = (i * 13) % 32;
+                scroll_placed = wrld.set_block(sx, sy, sz, world::BlockId::Glow);
+            }
+            settle_slice();
+            const bool scroll_edit_here =
+                wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
+            // One notch, the smallest thing the wheel can do.
+            wrld.rotate_slice(kNotch);
+            settle_slice();
+            const bool survives_notch =
+                wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
+            // And a long scroll, which crosses no integer slice boundary
+            // and so must not lose it either.
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch);
+            settle_slice();
+            const bool survives_scroll =
+                wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
+            wrld.rotate_slice(-kNotch * 41.0f);
+            settle_slice();
+            const bool edit_survives_scroll = scroll_placed && scroll_edit_here
+                                              && survives_notch
+                                              && survives_scroll;
+            // Leave no edit behind for the phases that follow.
+            wrld.set_block(sx, sy, sz, world::BlockId::Air);
+            settle_slice();
+
+            // And the world must actually CONVERGE after a rotation.
+            //
+            // It did not. enqueue_decoded_chunk never set the slice on the
+            // job, so every stash restore and every boundary re-mesh
+            // landed stamped (w=0, theta=0). At any nonzero slice that
+            // chunk was instantly stale again, was re-issued, landed
+            // stamped 0 again - a rebuild loop with no end, invisible at
+            // theta=0 where the default is accidentally correct, which is
+            // the only state the audit ran in.
+            wrld.rotate_slice(kNotch * 3.0f);
+            settle_slice();
+            const auto after_rotate = wrld.slice_lag();
+            const bool converges = after_rotate.stale == 0;
+            wrld.rotate_slice(-kNotch * 3.0f);
+            settle_slice();
+
+            const bool tilt_ok = edit_survives_scroll && converges &&
+                                 hash_tilt != hash_w0 &&
                                  hash_untilt == hash_w0 &&
                                  bad_tilt == 0 && bad_untilt == 0 &&
                                  notch_moves_world &&
@@ -1583,7 +1654,7 @@ int main(int argc, char** argv) {
                         "changed=%d returned=%d rapid_ok=%d "
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
-                        "notch=%d "
+                        "notch=%d edit_survives_scroll=%d converges=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
@@ -1595,6 +1666,8 @@ int main(int argc, char** argv) {
                         (hash_untilt == hash_w0 && bad_tilt == 0
                          && bad_untilt == 0) ? 1 : 0,
                         notch_moves_world ? 1 : 0,
+                        edit_survives_scroll ? 1 : 0,
+                        converges ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
@@ -1652,7 +1725,9 @@ int main(int argc, char** argv) {
                 // Start each phase from a converged world, so the first
                 // frames measure the motion and not the leftovers of the
                 // previous phase.
-                for (int guard = 0; guard < 4000; ++guard) {
+                const auto warm_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(20);
+                while (std::chrono::steady_clock::now() < warm_deadline) {
                     wrld.drain_finished(256);
                     wrld.flush_pending_remeshes(pool, 256);
                     if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
@@ -1706,12 +1781,45 @@ int main(int argc, char** argv) {
                 // is the number a player feels as the world catching up,
                 // and it is the one a whole-world rebuild would blow out.
                 const auto settle_t0 = std::chrono::steady_clock::now();
-                for (int guard = 0; guard < 4000; ++guard) {
+                // Whether it actually converged, or ran out of guard.
+                //
+                // This is reported rather than assumed because the
+                // difference was invisible once: with the slice-stamp
+                // defect, restored and re-meshed chunks landed claiming
+                // slice (0, 0), so they were instantly stale again and
+                // this loop never converged - it exhausted the guard and
+                // reported the time that took, which looked like a settle
+                // time and was published as one. A settle that times out
+                // must not be able to masquerade as a fast settle.
+                // Bounded by TIME, not by iteration count, and this is
+                // the second time that distinction has bitten in this
+                // file. An iteration guard is a spin count: the body is a
+                // couple of microseconds when there is nothing finished to
+                // drain, so 4000 of them elapse in 8 ms while the nine
+                // workers have barely started. The loop then exits with
+                // most of the window still stale, having measured how long
+                // it takes to spin 4000 times - which is a number, is
+                // stable, looks like a settle time, and is not one.
+                bool converged = false;
+                const auto settle_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(20);
+                while (std::chrono::steady_clock::now() < settle_deadline) {
                     wrld.drain_finished(48);
                     wrld.flush_pending_remeshes(pool, 4);
                     if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
-                        && wrld.stream_slice(terrain, pool) == 0) break;
+                        && wrld.stream_slice(terrain, pool) == 0) {
+                        converged = true;
+                        break;
+                    }
                     std::this_thread::yield();
+                }
+                if (!converged) {
+                    const auto l = wrld.slice_lag();
+                    std::fprintf(stderr, "[settle] %s did not converge: "
+                                 "stale=%d/%d async=%d remesh=%d issued=%d\n",
+                                 ph.name, l.stale, l.resident,
+                                 wrld.pending_async(), wrld.pending_remesh(),
+                                 wrld.stream_slice(terrain, pool));
                 }
                 const double settle_ms =
                     std::chrono::duration<double, std::milli>(
@@ -1728,9 +1836,16 @@ int main(int argc, char** argv) {
                 char behind[32];
                 std::snprintf(behind, sizeof behind, "%d / %d",
                               lag.stale, lag.resident);
-                std::printf("  %-10s %10.2f %10.2f %6.1f / %-5d %12s %12.0f\n",
+                char settle[24];
+                if (converged) {
+                    std::snprintf(settle, sizeof settle, "%.0f", settle_ms);
+                } else {
+                    std::snprintf(settle, sizeof settle, "NEVER (%.0f)",
+                                  settle_ms);
+                }
+                std::printf("  %-10s %10.2f %10.2f %6.1f / %-5d %12s %12s\n",
                             ph.name, mean, p99, issued_per_frame, kStreamBudget,
-                            behind, settle_ms);
+                            behind, settle);
                 (void)elapsed_s;
             }
             std::printf("\nmain-thread cost only; chunk generation and "
