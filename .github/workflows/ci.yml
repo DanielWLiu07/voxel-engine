@@ -55,8 +55,11 @@ jobs:
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
         # is the part that quietly stops being true. This checks the slice
-        # a machine can: every --flag the README documents exists.
-        run: ./scripts/check_readme_flags.py ./build/voxel_engine
+        # a machine can: every --flag the README documents exists, across
+        # every binary the README gives a command line for - not just the
+        # engine, which is what it used to check and which made a real
+        # slice4d flag look like a documentation error.
+        run: ./scripts/check_readme_flags.py ./build
 
       - name: Run benchmark and validate ratios
         run: |

@@ -12,6 +12,13 @@
 //     cmake --build build --target slice4d && ./build/slice4d
 //
 // Writes docs/media/slice4d/w_XX.png plus a SLICE4D line of measurements.
+//
+//     ./build/slice4d --tilt [seed]
+//
+// answers the same question for the OTHER motion through w. Translating
+// along w moves an axis-aligned slice; ROTATING it tilts the cut, which
+// is what shows blocks in cross section instead of swapping one
+// axis-aligned world for another. Prints a table and no images.
 
 #include "world/terrain_gen.h"  // altitude band constants
 #include "world/terrain_gen4d.h"
@@ -101,7 +108,83 @@ Rgb shade(int height, float relief) {
 
 }  // namespace
 
+// How far a tilted slice diverges from a flat one, over the same window
+// the images use. Reported against theta = 0 rather than against the
+// previous row, because the question is how far a given tilt takes you
+// from where you started, not how far each row is from its neighbour.
+int tilt_table(std::uint32_t seed) {
+    const world::TerrainGen4D terrain(seed);
+    std::vector<int> flat(static_cast<std::size_t>(kSize) * kSize);
+    auto sample = [&](float theta, std::vector<int>& out) {
+        for (int py = 0; py < kSize; ++py)
+            for (int px = 0; px < kSize; ++px) {
+                const int x = static_cast<int>(px) - kSize / 2;
+                const int z = static_cast<int>(py) - kSize / 2;
+                out[static_cast<std::size_t>(py) * kSize + px] =
+                    terrain.height_at(x, z, {0.0f, theta});
+            }
+    };
+    sample(0.0f, flat);
+
+    // 0.003 is one scroll notch; 0.03 and 0.08 are the two tilts the
+    // README's triptych is captured at; the rest bracket them.
+    const float tilts[] = {0.003f, 0.01f, 0.03f, 0.05f, 0.08f, 0.25f, 1.5708f};
+    std::printf("tilt divergence from theta=0, seed %u, %dx%d columns\n\n",
+                seed, kSize, kSize);
+    std::printf("  %8s  %10s  %8s  %10s\n",
+                "tilt", "degrees", "changed", "max jump");
+    std::vector<int> tilted(flat.size());
+    for (const float t : tilts) {
+        sample(t, tilted);
+        int changed = 0, worst = 0;
+        for (std::size_t i = 0; i < flat.size(); ++i) {
+            const int d = std::abs(flat[i] - tilted[i]);
+            if (d != 0) ++changed;
+            worst = std::max(worst, d);
+        }
+        std::printf("  %8.4f  %7.2f deg  %7.1f%%  %7d\n", t,
+                    t * 180.0f / 3.14159265f,
+                    100.0 * changed / static_cast<double>(flat.size()), worst);
+    }
+    // The comparison that matters: a whole rebuild threshold of w, which
+    // is the strongest thing TRANSLATION does between two rebuilds.
+    std::vector<int> shifted(flat.size());
+    for (int py = 0; py < kSize; ++py)
+        for (int px = 0; px < kSize; ++px)
+            shifted[static_cast<std::size_t>(py) * kSize + px] =
+                terrain.height_at(px - kSize / 2, py - kSize / 2, {0.12f, 0.0f});
+    int changed = 0, worst = 0;
+    for (std::size_t i = 0; i < flat.size(); ++i) {
+        const int d = std::abs(flat[i] - shifted[i]);
+        if (d != 0) ++changed;
+        worst = std::max(worst, d);
+    }
+    std::printf("\n  for comparison, translating w by one rebuild threshold "
+                "(0.12): %.1f%% changed, max jump %d\n",
+                100.0 * changed / static_cast<double>(flat.size()), worst);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::string(argv[1]) == "--help" ||
+                     std::string(argv[1]) == "-h")) {
+        std::printf(
+            "slice4d - renders 3D slices of the 4D heightfield\n\n"
+            "  slice4d [seed] [out_dir] [w_step]\n"
+            "      write out_dir/w_NN.png for 24 values of w\n"
+            "      (default seed 1337, docs/media/slice4d, step 1.0)\n\n"
+            "  slice4d --tilt [seed]\n"
+            "      table of how far a ROTATED slice diverges from a flat\n"
+            "      one, and how that compares with translating along w\n\n"
+            "  slice4d --help\n");
+        return 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--tilt") {
+        return tilt_table(argc > 2
+            ? static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10))
+            : 1337u);
+    }
+
     const std::uint32_t seed = (argc > 1)
         ? static_cast<std::uint32_t>(std::strtoul(argv[1], nullptr, 10)) : 1337u;
     const std::string out_dir = (argc > 2) ? argv[2] : "docs/media/slice4d";
