@@ -97,6 +97,18 @@ struct CliOptions {
     // the world morphs on its own: if it does, the fourth dimension is
     // fine and the problem is input; if it does not, it is not.
     bool auto_w = false;
+    // --bench-4d: what moving through the fourth dimension costs, for both
+    // motions, under real 60 Hz pacing. Implies --4d.
+    //
+    // The other benches measure a static world. This measures the thing
+    // that makes a 4D engine hard: motion along w invalidates geometry
+    // rather than just moving the camera through it.
+    bool bench_4d = false;
+    // --monitor N: open the window on display N instead of wherever GLFW
+    // puts it, which on a laptop with external screens attached is the
+    // built-in one. --list-monitors prints the indices and exits.
+    int  monitor = -1;
+    bool list_monitors = false;
     int  slice_w = 0;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;

@@ -33,6 +33,14 @@ public:
         bool visible = true;
         bool vsync = true;
         int msaa_samples = 2;
+        // Which display to open on. -1 keeps GLFW's default, which on a
+        // laptop with external screens attached is the built-in one - and
+        // that is the wrong answer when the person is looking at a
+        // different screen. 0 is the primary display, 1 the next, and so
+        // on in the order glfwGetMonitors reports them.
+        int monitor = -1;
+        // List the displays and their indices instead of opening a window.
+        bool list_monitors = false;
     };
 
     // Returns nullopt after printing the reason. Any partially built state

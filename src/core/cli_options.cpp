@@ -131,12 +131,15 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
                 "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
-                "  voxel_engine                          4D world by default; , and . step along w\n"
+                "  voxel_engine                          4D world by default; E and Q step along w, wheel rotates the slice\n"
                 "  voxel_engine --3d                     the 3D world instead\n"
                 "  voxel_engine --trace-input            log every key the engine receives, and w\n"
                 "  voxel_engine --auto-w                 travel along w automatically, no input needed\n"
                 "  voxel_engine --4d                     force 4D on (benches and captures default to 3D)\n"
                 "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
+                "  voxel_engine --bench-4d               cost of travelling and of rotating the slice, exit\n"
+                "  voxel_engine --list-monitors          list the displays and their indices, exit\n"
+                "  voxel_engine --monitor N              open on display N (default: wherever GLFW puts it)\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
                 "  voxel_engine --slice-tilt R           start with the 3D slice rotated R radians\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
@@ -192,6 +195,18 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--auto-w") { o.auto_w = true; o.four_d = true; continue; }
         if (arg == "--3d") { o.force_3d = true; continue; }
         if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
+        if (arg == "--bench-4d") { o.bench_4d = true; o.four_d = true; continue; }
+        if (arg == "--list-monitors") { o.list_monitors = true; continue; }
+        if (arg == "--monitor" && i + 1 < argc) {
+            o.monitor = std::atoi(argv[++i]);
+            if (o.monitor < 0) {
+                std::fprintf(stderr, "--monitor takes a display index >= 0; "
+                                     "run --list-monitors to see them\n");
+                exit_code = EXIT_FAILURE;
+                return std::nullopt;
+            }
+            continue;
+        }
         if (arg == "--slice-w") {
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v) return std::nullopt;
@@ -427,8 +442,9 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
     }
     // A capture or a bench can still ask for 4D explicitly, and --verify-4d
     // already sets four_d itself, so neither is overridden here.
-    if (o.force_3d && o.verify_4d) {
-        std::fprintf(stderr, "--3d and --verify-4d are contradictory\n");
+    if (o.force_3d && (o.verify_4d || o.bench_4d)) {
+        std::fprintf(stderr, "--3d and %s are contradictory\n",
+                     o.verify_4d ? "--verify-4d" : "--bench-4d");
         exit_code = EXIT_FAILURE;
         return std::nullopt;
     }
