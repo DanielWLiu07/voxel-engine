@@ -1217,6 +1217,14 @@ int main(int argc, char** argv) {
             const std::uint64_t hash_rapid = world_hash();
             const int bad_rapid = wrld.debug_validate_gpu_meshes();
 
+            // Captured before the held-key phase below, which deliberately
+            // leaves the player somewhere else along w. Asserting it after
+            // that phase compared the post-travel position against the
+            // start and failed every run - the check was reporting a
+            // failure of its own bookkeeping while every real property
+            // passed.
+            const bool position_ok = std::fabs(wrld.slice_w() - w0) < 1e-4f;
+
             // Simulated held key: the interactive path, driven exactly as
             // the render loop drives it - move_w once per frame with a
             // frame's worth of dt, then the same per-frame drain the loop
@@ -1263,7 +1271,7 @@ int main(int argc, char** argv) {
                             hash_w1 != hash_w0 &&      // w is a real axis
                             hash_back == hash_w0 &&    // and a reversible one
                             hash_rapid == hash_w0 &&   // even under rapid steps
-                            std::fabs(wrld.slice_w() - w0) < 1e-4f &&
+                            position_ok &&
                             bad_w0 == 0 && bad_w1 == 0 &&
                             bad_back == 0 && bad_rapid == 0;
 

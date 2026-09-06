@@ -35,6 +35,18 @@ std::optional<Window> Window::create(const Config& config) {
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, config.msaa_samples);
     if (!config.visible) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    // Take keyboard focus when shown.
+    //
+    // Launched from a terminal on macOS the window appears but focus stays
+    // with whatever was frontmost, so every keypress goes somewhere else
+    // and the engine looks completely unresponsive - it renders, the HUD
+    // updates, and nothing you press does anything. That is indis-
+    // tinguishable from a broken input path, and it cost several rounds of
+    // debugging the wrong layer.
+    //
+    // Only for a visible window: a headless bench or capture must never
+    // steal focus from whatever the user is actually doing.
+    if (config.visible) glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(config.width, config.height,
                                           config.title, nullptr, nullptr);
@@ -43,6 +55,13 @@ std::optional<Window> Window::create(const Config& config) {
         return std::nullopt;
     }
     glfwMakeContextCurrent(window);
+    // The hint covers the normal case; this covers being launched from a
+    // background shell, where the process itself is not frontmost and the
+    // hint alone does not raise it.
+    if (config.visible) {
+        glfwShowWindow(window);
+        glfwFocusWindow(window);
+    }
     glfwSwapInterval(config.vsync ? 1 : 0);
 
     const int version = gladLoadGL(glfwGetProcAddress);
