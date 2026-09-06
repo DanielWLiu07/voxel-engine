@@ -378,6 +378,7 @@ int World::move_w(float delta, float speed, const TerrainGen& terrain,
                   core::ThreadPool& pool) {
     if (!slice_gen_ || delta == 0.0f) return 0;
     slice_w_ += delta;
+    travel_w_ += delta;
     // Travel along w is continuous; rebuilding is not. The world is
     // rebuilt once the player has moved far enough from the w the
     // geometry was built at that the difference would be visible - and

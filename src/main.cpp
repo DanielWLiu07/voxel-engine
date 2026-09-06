@@ -1569,6 +1569,33 @@ int main(int argc, char** argv) {
             wrld.set_block(sx, sy, sz, world::BlockId::Air);
             settle_slice();
 
+            // The edit namespace must not move when the player does not.
+            //
+            // Edits are filed under an integer slice, and that used to be
+            // floor(slice_w_) - a float that rotation rewrites every
+            // notch. A round trip returns it to a residue rather than to
+            // zero, and floor is one-sided there, so a value of -1e-16
+            // read as slice -1 while every resident chunk still recorded
+            // slice 0. The lookup missed, the terrain regenerated without
+            // the edit, and the edit was filed under a key the player
+            // would never consult again.
+            //
+            // Seven notches out and back, fifty blocks from spawn - which
+            // is somebody trying the wheel out - was enough to trigger it.
+            // That is what this reproduces.
+            bool namespace_stable = true;
+            {
+                const std::int32_t before = wrld.edit_slice();
+                for (const float pz : {50.0f, 137.0f, 640.0f}) {
+                    for (const int n : {7, 40}) {
+                        for (int i = 0; i < n; ++i) wrld.rotate_slice(kNotch, pz);
+                        for (int i = 0; i < n; ++i) wrld.rotate_slice(-kNotch, pz);
+                        if (wrld.edit_slice() != before) namespace_stable = false;
+                    }
+                }
+                settle_slice();
+            }
+
             // An edited chunk must keep rotating with the world.
             //
             // The edit stash used to hold the whole chunk and hand it
@@ -1640,6 +1667,17 @@ int main(int argc, char** argv) {
             constexpr float kRevPlayerZ = 640.0f;   // well away from 0
             for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, kRevPlayerZ);
             for (int i = 0; i < 40; ++i) wrld.rotate_slice(-kNotch, kRevPlayerZ);
+            // The tolerance is 1e-4 and cannot usefully be tighter: at
+            // player_z = 640, eighty float32 rotations of a value that
+            // size accumulate about 1e-5 of rounding, and that is
+            // arithmetic rather than a defect.
+            //
+            // Which is exactly why the edit namespace must not be derived
+            // from this number. A residue a hundred times smaller than
+            // this tolerance was enough to move floor(slice_w_) from 0 to
+            // -1 and strand every edit in the world; the check would have
+            // passed while it happened. edit_slice() reads travel_w_ now,
+            // and edit_ns_stable pins that separately.
             const bool reversible_away =
                 std::fabs(wrld.slice_w() - rev_w0) < 1e-4f &&
                 std::fabs(wrld.slice().z_shift - rev_shift0) < 1e-3f &&
@@ -1709,7 +1747,7 @@ int main(int argc, char** argv) {
 
             const bool tilt_ok = edit_survives_scroll && converges &&
                                  pivot_ok && reversible_away &&
-                                 edit_rotates &&
+                                 edit_rotates && namespace_stable &&
                                  hash_tilt != hash_w0 &&
                                  hash_untilt == hash_w0 &&
                                  bad_tilt == 0 && bad_untilt == 0 &&
@@ -1813,6 +1851,7 @@ int main(int argc, char** argv) {
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
                         "pivot=%d reversible_away=%d edit_rotates=%d "
+                        "edit_ns_stable=%d "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
@@ -1829,6 +1868,7 @@ int main(int argc, char** argv) {
                         pivot_ok ? 1 : 0,
                         reversible_away ? 1 : 0,
                         edit_rotates ? 1 : 0,
+                        namespace_stable ? 1 : 0,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;

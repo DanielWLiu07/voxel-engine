@@ -42,6 +42,21 @@ struct ChunkCoord {
 // around it means something completely different - a hole dug into a
 // hillside at w=0 turning up in mid-air at w=5. In the 3D engine w is
 // always 0 and this behaves exactly as a bare ChunkCoord did.
+// Which slice an edit belongs to: a chunk and an integer w.
+//
+// Deliberately NOT the orientation. An edit made on a flat slice is
+// restored on a tilted one, and that is a decision rather than an
+// oversight: the player built it, and turning their view of the fourth
+// dimension should not delete their house. Keying on theta as well would
+// make anything built vanish the moment the wheel moved, which is the
+// opposite failure and a worse one.
+//
+// The cost is that two hyperplanes sharing an integer w share a bucket,
+// so a structure built flat reappears in terrain that a tilted cut has
+// rearranged around it. That is the same trade the w key already makes
+// at coarser grain, and it is the reason the w key is integer at all:
+// edits belong to a slab you can return to, not to an exact real number
+// nobody can hit twice.
 struct SliceCoord {
     ChunkCoord c{};
     std::int32_t w = 0;
@@ -298,6 +313,7 @@ public:
     void set_slice_source(const TerrainGen4D* gen, float w) {
         slice_gen_ = gen;
         slice_w_ = w;
+        travel_w_ = w;
         meshed_w_ = w;
         slice_theta_ = 0.0f;
         slice_z_shift_ = 0.0f;
@@ -306,8 +322,25 @@ public:
     float slice_w() const { return slice_w_; }
     // Which integer slice edits made right now belong to. Always 0 in the
     // 3D engine, so the stash keys are exactly what they always were.
+    //
+    // Derived from travel_w_, which only TRAVEL changes - never from
+    // slice_w_, which rotation rewrites every notch.
+    //
+    // Rotating about the player leaves the player's 4D position exactly
+    // where it was, so it must not move them to a different edit
+    // namespace. It did. slice_w_ comes back from a round trip as a tiny
+    // residue rather than as zero, and floor is one-sided there, so a
+    // value of -1e-16 reads as slice -1 while every resident chunk still
+    // records slice 0. Seven notches out and back, fifty blocks from
+    // spawn - somebody trying the wheel - was enough. The lookup then
+    // misses, the terrain regenerates without the edit, and the edit is
+    // filed under a key the player will never consult again. Scrolling
+    // back does not bring it back.
+    //
+    // Rounding instead of flooring does not help; it moves the straddle
+    // to +/-0.5 and waits.
     std::int32_t edit_slice() const {
-        return slice_gen_ ? static_cast<std::int32_t>(std::floor(slice_w_)) : 0;
+        return slice_gen_ ? static_cast<std::int32_t>(std::floor(travel_w_)) : 0;
     }
     // The w of the most-stale chunk anywhere in the window. Informational:
     // at a large radius the worst chunk is past the fog, so this says more
@@ -454,7 +487,11 @@ public:
     // derive the rebuild threshold; pass 0 to fall back to kSliceRemeshStep.
     // Moves the player along w and nothing else. The world catches up
     // through stream_slice, which the render loop calls every frame.
-    void advance_w(float delta) { if (slice_gen_) slice_w_ += delta; }
+    void advance_w(float delta) {
+        if (!slice_gen_) return;
+        slice_w_ += delta;
+        travel_w_ += delta;
+    }
 
     // Rotates the slicing hyperplane in the (z, w) plane.
     //
@@ -803,6 +840,10 @@ private:
     // benches and --validate ever see.
     const TerrainGen4D* slice_gen_ = nullptr;
     float               slice_w_ = 0.0f;      // where the player is
+    // How far the player has TRAVELLED along w, which is what the
+    // edit namespace is keyed on. Rotation deliberately leaves it
+    // alone: turning the slice does not move the player.
+    float               travel_w_ = 0.0f;
     float               slice_theta_ = 0.0f;  // how their cut is tilted
     // Where the slice's z axis starts; moves only when the cut turns.
     float               slice_z_shift_ = 0.0f;
