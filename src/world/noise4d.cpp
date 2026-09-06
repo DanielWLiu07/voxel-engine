@@ -56,6 +56,21 @@ static_assert(grad4_table_is_well_formed(),
               "(0, +/-1, +/-1, +/-1); a zero, duplicated, or over-long row "
               "biases the field in a direction and is nearly invisible in "
               "the output statistics");
+// This assert does more than it appears to, which is worth writing down
+// because it is the one ingredient here with zero residual risk.
+//
+// There are EXACTLY 32 vectors that are permutations of (0, +/-1, +/-1,
+// +/-1): four choices of which axis is zeroed, times eight sign
+// combinations. The assert demands 32 rows, each with exactly three
+// non-zero components in {-1, 0, 1}, all pairwise distinct. Thirty-two
+// distinct vectors meeting that description are necessarily the complete
+// set - there is nothing else they could be.
+//
+// So the table is pinned entirely, not merely sanity-checked, and the
+// only freedom left is row ORDER, which is statistically irrelevant since
+// the hash selects uniformly across it. A differential test against a
+// reference implementation could not establish this: a retyped table
+// would agree with itself.
 
 // Integer hash over a lattice corner. Same shape as terrain_gen's hash2d
 // (multiply by odd constants, xor-shift, multiply again) widened to four

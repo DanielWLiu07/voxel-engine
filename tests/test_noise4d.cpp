@@ -86,6 +86,87 @@ void test_noise_is_not_zero_between_lattice_points() {
     EXPECT(nonzero > 190, "the field is alive between lattice points");
 }
 
+// ----- the one thing only a known answer can pin ---------------------------
+
+void test_known_values_pin_the_field_including_its_sign() {
+    // A golden test, deliberately, in a file that otherwise pins
+    // relationships. It is here because of a specific hole an adversarial
+    // review found and demonstrated.
+    //
+    // Taking the distance vector as (corner - sample) instead of
+    // (sample - corner) is an ordinary transcription slip, and because
+    // the dot product is linear in it, the result is exactly a global
+    // negation of the field. Injected on this code, ALL 67 checks in this
+    // file and test_terrain_gen4d.cpp pass: a negated Perlin field is
+    // still zero-mean, still isotropic, still C1 and C2, still in range,
+    // still zero at lattice points. It is genuinely valid noise. No
+    // relational property can see it.
+    //
+    // Worse, the review's reference implementation - which agreed with
+    // sample() to 7.2e-07 over 1.6M points - shared the convention, so
+    // the differential check could not see it either. That is the clearest
+    // available demonstration of what "validated against an independent
+    // reference" does not buy: the oracle covers the algebra it does not
+    // share, and nothing else.
+    //
+    // A sign convention has no relational anchor - it is arbitrary but
+    // fixed, like the CRC polynomial that test_crc_known_answer pins in
+    // test_world.cpp. So: fixed points, fixed seed, exact expected
+    // values. These were generated from this implementation and verified
+    // identical at -O0 and -O2.
+    struct Known { float x, y, z, w, expected; };
+    constexpr Known kKnown[] = {
+        {0.5f, 0.5f, 0.5f, 0.5f, 0.328125f},
+        {0.25f, 0.75f, 0.125f, 0.625f, 0.0762925595f},
+        {-3.5f, 7.25f, -1.75f, 2.5f, -0.314070404f},
+        {100.5f, -50.25f, 0.75f, -7.5f, -0.0463432074f},
+    };
+    const world::Noise4D noise(1337);
+    for (const Known& k : kKnown) {
+        const float got = noise.sample(k.x, k.y, k.z, k.w);
+        // Tolerance rather than equality, so a different compiler's
+        // float contraction does not fail this. Far tighter than any
+        // global transformation - a negation moves these by twice their
+        // magnitude, a rescale by percent.
+        EXPECT(std::fabs(got - k.expected) < 1e-6f,
+               "seed 1337 gives the expected value at this point");
+        if (std::fabs(got - k.expected) >= 1e-6f) {
+            std::printf("    (at %g,%g,%g,%g expected %.9g, got %.9g)\n",
+                        k.x, k.y, k.z, k.w, k.expected, got);
+        }
+    }
+    // A second seed, so the check is not pinned to one hash path.
+    const world::Noise4D zero_seed(0);
+    EXPECT(std::fabs(zero_seed.sample(0.5f, 0.5f, 0.5f, 0.5f) - 0.046875f) < 1e-6f,
+           "seed 0 gives its expected value too");
+}
+
+// Not tested here: that `hash & 31` selects the 32 gradients uniformly.
+//
+// It was, briefly, and the test was removed rather than tuned. The
+// gradient index is not observable through this class's public surface,
+// so the attempt used a histogram of output VALUES as a proxy - and that
+// proxy is wrong, because the field is bell-shaped rather than uniform
+// over [-1, 1], so buckets at the extremes are legitimately empty. Making
+// it pass would have meant fitting the bucketing to the field's own
+// distribution, which is circular: the test would then pass for a reason
+// unrelated to what it claims.
+//
+// The property was verified externally instead. An adversarial review
+// measured the selection directly over 164,000,000 lattice corners across
+// four seeds: bins ranged 5,116,131 to 5,126,084, a spread of 0.194%, and
+// chi-square 28.1 on 31 degrees of freedom against a p=0.001 critical
+// value of 61.1. Uniform.
+//
+// That is a one-off verification, not a regression guard, and the
+// difference is worth being explicit about: nothing in this suite would
+// notice if the hash's low bits later became biased. Closing it properly
+// needs the index exposed for testing, which is an API change made for a
+// test and has not been judged worth it.
+//
+// Also uncovered, from the same analysis: cross-cell correlation and
+// lattice-scale periodicity in the hash.
+
 // ----- determinism ----------------------------------------------------------
 
 void test_sampling_is_pure_and_seed_stable() {
@@ -500,6 +581,7 @@ int main() {
     std::printf("noise4d_tests: running...\n\n");
     test_noise_is_exactly_zero_at_lattice_points();
     test_noise_is_not_zero_between_lattice_points();
+    test_known_values_pin_the_field_including_its_sign();
     test_sampling_is_pure_and_seed_stable();
     test_the_seed_reaches_the_field();
     test_edge_seeds_behave();
