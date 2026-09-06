@@ -159,32 +159,61 @@ touched chunk once at the end. The obvious implementation - calling
 scrub across a thousand edits in one chunk costs a thousand rebuilds
 instead of one.
 
-Measured by `--verify-history`, which makes 301 edits and then rewinds
-them, so both paths perform exactly the same block changes:
+Measured by `--verify-history`, which makes 400 edits across 16 chunks
+and then rewinds them, so both paths perform exactly the same block
+changes:
 
 | | block changes | chunk remeshes | wall time (M4) |
 | --- | --- | --- | --- |
-| per edit (`set_block` loop) | 301 | 301 | 297-371 ms |
-| batched (`history_seek`) | 301 | **14** | 13.1-13.9 ms |
+| per edit (`set_block` loop) | 400 | 400 | 369-377 ms |
+| batched (`history_seek`) | 400 | **17** | 15.2-15.8 ms |
 
-**301 remeshes down to 14** is the durable figure: it is a ratio of
-counts, so it reproduces on any machine. The wall-clock speedup is
-**22.7-27.6x on an Apple M4** over four runs, quoted with its spread
-because a timing without one is a number waiting to rot.
+**400 remeshes down to 17** is the durable figure - identical at radius
+2, 4, 8 and 12. The wall clock is **23.5-24.4x on an Apple M4**, quoted
+with its spread because a timing without one is a number waiting to rot.
 
-Fourteen rather than one because the edits are spread across a lattice
-that crosses chunk boundaries, and a boundary edit remeshes the neighbour
-too - the same rule `set_block` follows.
+Seventeen rather than sixteen because a boundary edit remeshes the
+neighbour too, the same rule `set_block` follows.
+
+### The win is a function of edit locality, and the check says so
+
+Batching saves work only when several edits land in the same chunk: one
+remesh instead of many. That makes the ratio a property of *where* the
+edits are, not just how many, and the honest version of the claim has to
+say so.
+
+Spread 400 edits across all 625 chunks of a radius-12 world and each
+chunk gets one, so batching saves nothing and the measured speedup
+collapses to about 1x. Concentrate them and it is large. A player
+building in one place is the concentrated case, which is why the check
+bounds itself to 16 chunks and prints `edit_chunks=16` alongside the
+ratio - the locality behind the number is visible rather than implied.
+
+An earlier version of this section quoted **301 edits and 14 remeshes**
+and called it "a ratio of counts, so it reproduces on any machine". It
+did not. Those were `--radius 6` figures, while the command printed next
+to them - and the one `audit.sh` runs - uses the default radius and
+produced 400 and 20. The check's edit lattice was written in absolute
+coordinates near the origin, so a smaller window silently exercised
+fewer edits: `set_block` returns false for a chunk that is not resident,
+the counter just counted lower, and the run still printed `ok`. At radius
+5 it did 200 of its intended 400 and passed.
+
+Both halves are fixed. Targets are now drawn from the chunks the world
+actually reports as resident, so coverage does not depend on the radius,
+and `made == kEdits` is asserted, so a shortfall fails instead of
+quietly measuring something smaller. Getting a ratio wrong is the
+particular failure this repo has a rule against, and it got in anyway.
 
 ## Verified end to end
 
     ./build/voxel_engine --verify-history
 
-    HISTORY edits=301 ticks=0->301 unbatched_ms=295.5 rewind_ms=13.2
-    replay_ms=13.9 batch_speedup=22.5x rewind_applied=301
-    rewind_remeshed=14 log_bytes=4836 bytes_per_edit=16.1
+    HISTORY edits=400 ticks=0->400 unbatched_ms=371.0 rewind_ms=15.8
+    replay_ms=16.0 batch_speedup=23.5x rewind_applied=400
+    rewind_remeshed=17 edit_chunks=16 log_bytes=6420 bytes_per_edit=16.1
     bad_tris_rewind=0 bad_tris_replay=0 dropped=0
-    main_ok=1 branch_ok=1 ok
+    main_ok=1 branch_ok=1 reload_ok=1 ok
 
 It checks three things, and only the second genuinely needs GL:
 
@@ -196,10 +225,12 @@ It checks three things, and only the second genuinely needs GL:
   and it was missing until a review proved the point - see below.
 - **Branching**: an edit made while the world sits in its past, then
   rewound and replayed.
+- **Reload**: `clear_all()` must leave no history behind, since it
+  describes a world that no longer exists.
 
 It is in `scripts/audit.sh` alongside the other end-to-end checks.
 
-## Two defects an adversarial review found
+## Five defects an adversarial review found
 
 Both were in the wiring rather than the log, both were silent, and both
 are the reason `--verify-history` looks the way it does now.
@@ -250,9 +281,49 @@ the deletion and it reports `bad_tris_rewind=1338`, `FAILED`, exit 1.
 `rewind.chunks_remeshed > 0` is asserted too, so a seek that changes
 voxels and remeshes nothing cannot pass.
 
-Both fixes were verified by restoring the original defects and confirming
-the check fails: `dropped=1 branch_ok=0 FAILED` for the first,
-`bad_tris_rewind=1338 FAILED` for the second.
+### 3. The published ratio was radius-dependent, and its command did not print it
+
+Covered above. The short version: `301 edits / 14 remeshes` were
+`--radius 6` figures printed next to a default-radius command, and the
+check silently exercised fewer edits at smaller radii because its lattice
+was in absolute coordinates. Now drawn from the resident chunk set with
+`made == kEdits` asserted.
+
+### 4. A comment claimed a recovery that does not exist
+
+`history_seek` counts edits to chunks that streamed out as
+`skipped_unloaded`, and the comment said those edits "live in
+`edited_stash_` and will be applied when it comes back". They do not.
+The stash is an RLE snapshot taken at eviction and restored verbatim;
+nothing replays the log against it. A chunk evicted at tick 100 and
+restored while the world sits at tick 5 comes back holding tick-100
+voxels - future edits visible in the past. The comment now says what
+actually happens, and rewriting the stash on seek is listed as
+outstanding below rather than described as done.
+
+### 5. Loading a world left the previous world's history in place
+
+`clear_all()` cleared chunks, requests and the edit stash, but not the
+log. `clear_history()` had no callers at all. So after an F6 load or
+`--bench-io`, the log still held the previous world's `prev`/`next`
+bytes with `history_tick_` at N, and the next seek would write blocks
+from a world the player never saw into the one they were standing in.
+Nothing tied a log to the world instance it was recorded against: the
+seed check in `decode()` guards the on-disk path, and that path is not
+wired to this one. `clear_all()` clears it now, and `--verify-history`
+asserts it - `--bench-io` exercised `clear_all` and passed either way,
+because nothing seeks after a load.
+
+Also removed: `set_history_recording`, a public setter with no callers
+whose comment described loading as replaying "saved edits through
+`set_block`". `world_io.cpp` decodes chunks directly and never calls
+`set_block`. A knob nobody turns, documented against a path that does
+not exist, is worse than no knob.
+
+Every fix was verified by restoring the original defect and confirming
+the check fails: `dropped=1 branch_ok=0 FAILED`, `bad_tris_rewind=1338
+FAILED`, and `reload_ok=0 FAILED`, each exiting 1 and each breaking
+`audit.sh`.
 
 ## What this does not do yet
 
@@ -262,11 +333,13 @@ a short distance) and linear for a jump to the far end. Periodic RLE
 snapshots would bound that, and the RLE codec already exists. The open
 question is the familiar one: checkpoint interval against seek latency.
 
-**Edits to chunks that streamed out.** Those are counted and reported as
-`skipped_unloaded` rather than silently dropped, and they are already
-preserved through `edited_stash_`, but a seek does not currently rewrite
-the stash. So scrubbing works on the resident world and a chunk that was
-away during a rewind comes back holding its latest state.
+**Edits to chunks that streamed out.** Counted and reported as
+`skipped_unloaded` rather than silently dropped, but a seek does not
+rewrite `edited_stash_`, so a chunk that was away during a rewind comes
+back holding its latest voxels regardless of what tick the world is at.
+Scrubbing is correct on the resident world and wrong at its edges, and
+the counter is currently the only signal. Rewriting the stash on seek is
+the fix.
 
 **A scrub UI.** There is no `--replay` flag or timeline slider yet; the
 seek is an API and a verification flag.

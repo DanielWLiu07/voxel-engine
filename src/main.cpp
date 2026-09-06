@@ -1123,7 +1123,35 @@ int main(int argc, char** argv) {
             // A deterministic spread of edits: some fill air, some dig out
             // ground, and the lattice crosses chunk boundaries so the
             // neighbour-remesh path is exercised.
+            // Edit targets are drawn from the chunks that are actually
+            // resident, not from a lattice in absolute coordinates.
+            //
+            // The lattice version silently scaled its own coverage with
+            // --radius: set_block returns false for a chunk that is not
+            // resident, `made` just counted fewer, and the check still
+            // printed ok. At radius 5 it did 200 of its intended 400 edits
+            // and passed. Worse, the figures published in
+            // docs/time_travel.md were taken at radius 6 while audit.sh
+            // runs the default, so the doc quoted numbers the documented
+            // command does not print. Sizing the lattice from
+            // stream_radius instead was not enough either - the resident
+            // set is not exactly the square the radius implies.
+            //
+            // Asking the world which chunks it has is correct at every
+            // radius by construction, and `made == kEdits` below turns any
+            // remaining shortfall into a failure instead of a quieter run.
             constexpr int kEdits = 400;
+            std::vector<world::ChunkCoord> resident;
+            wrld.for_each_chunk([&](world::ChunkCoord c, const world::Chunk&) {
+                resident.push_back(c);
+            });
+            // Sorted so the choice of targets does not depend on the chunk
+            // map's iteration order, which would make the run
+            // non-deterministic between builds.
+            std::sort(resident.begin(), resident.end(),
+                      [](const world::ChunkCoord& a, const world::ChunkCoord& b) {
+                          return a.z != b.z ? a.z < b.z : a.x < b.x;
+                      });
             int made = 0;
             // Timed because this loop IS the unbatched path: every
             // set_block remeshes, relights and re-uploads its chunk
@@ -1131,9 +1159,35 @@ int main(int argc, char** argv) {
             // changes with one remesh per touched chunk, so the two
             // timings are a direct measurement of what batching buys.
             const auto edit_t0 = std::chrono::steady_clock::now();
-            for (int i = 0; i < kEdits; ++i) {
-                const int wx = ((i * 37) % 64) - 32;
-                const int wz = ((i * 53) % 64) - 32;
+            // Edits are spread over a BOUNDED number of chunks rather than
+            // over every resident one, and that bound is the honest part.
+            //
+            // Batching a history seek saves work only when several edits
+            // land in the same chunk: one remesh instead of many. Spread
+            // 400 edits across all 625 chunks of a radius-12 world and
+            // each chunk gets one, so batching saves nothing and the
+            // measured speedup collapses to 1x. Concentrate them and it
+            // is large. Neither number is wrong; the win is a function of
+            // how local the edits are, which is what a player building in
+            // one place actually does.
+            //
+            // Sixteen chunks keeps the correctness sweep wide enough to be
+            // worth running while leaving ~25 edits per chunk, and it is
+            // the same at every radius, so the reported ratio no longer
+            // moves with --radius. chunks_touched is printed so the
+            // locality behind the ratio is visible rather than implied.
+            const std::size_t kEditChunks =
+                std::min<std::size_t>(resident.size(), 16);
+            for (int i = 0; i < kEdits && !resident.empty(); ++i) {
+                // Round-robin over those chunks, with local offsets stepped
+                // by strides coprime to 16 so both boundary columns get hit
+                // and the neighbour-remesh path is exercised.
+                const world::ChunkCoord cc =
+                    resident[static_cast<std::size_t>(i) % kEditChunks];
+                const int lx = (i * 7) % world::kChunkSizeX;
+                const int lz = (i * 11) % world::kChunkSizeZ;
+                const int wx = cc.x * world::kChunkSizeX + lx;
+                const int wz = cc.z * world::kChunkSizeZ + lz;
                 const int wy = 24 + ((i * 7) % 40);
                 const world::BlockId now = wrld.block_at(wx, wy, wz);
                 const world::BlockId want = (now == world::BlockId::Air)
@@ -1160,7 +1214,10 @@ int main(int argc, char** argv) {
             // against.
             const std::size_t log_bytes = wrld.save_history(terrain_seed).size();
             const bool main_ok =
-                made > 0 && after != before &&
+                // Every intended edit has to have landed. `made > 0` was
+                // the only floor before, so a run that managed half its
+                // edits still passed and quietly measured something else.
+                made == kEdits && after != before &&
                 tick_after == tick_before + static_cast<std::uint32_t>(made) &&
                 rewound == before && replayed == after &&
                 wrld.history_tick() == tick_after &&
@@ -1186,9 +1243,15 @@ int main(int argc, char** argv) {
             int branch_x = 0, branch_y = 0, branch_z = 0;
             bool branch_made = false;
             for (int i = 0; i < 64 && !branch_made; ++i) {
-                branch_x = 100 + i;
+                // Inside the window for the same reason as the lattice: a
+                // branch target outside it silently fails to be made, and
+                // the branch check then passes or fails for the wrong
+                // reason. This used to be a fixed (100, 70, 100).
+                const world::ChunkCoord bc =
+                    resident[static_cast<std::size_t>(i) % kEditChunks];
+                branch_x = bc.x * world::kChunkSizeX + (i % world::kChunkSizeX);
                 branch_y = 70;
-                branch_z = 100;
+                branch_z = bc.z * world::kChunkSizeZ;
                 branch_made = wrld.set_block(branch_x, branch_y, branch_z,
                                              world::BlockId::Glow);
             }
@@ -1208,23 +1271,37 @@ int main(int argc, char** argv) {
                 wrld.history_latest_tick() == branch_tick &&
                 wrld.history_dropped() == 0;
 
-            const bool ok = main_ok && branch_ok;
+            // Finding 5: a full reload must not leave the previous world's
+            // history behind. Done last, because it empties the world.
+            //
+            // Without the clear in clear_all(), the log keeps the old
+            // world's prev/next bytes with history_tick_ still at N, and
+            // the next seek writes blocks from a world the player never
+            // saw into the one they are standing in. --bench-io exercises
+            // clear_all and passed either way, because nothing seeks after
+            // a load; this is the assertion that closes it.
+            wrld.clear_all();
+            const bool reload_ok = wrld.history().empty() &&
+                                   wrld.history_tick() == 0 &&
+                                   wrld.history_latest_tick() == 0;
+
+            const bool ok = main_ok && branch_ok && reload_ok;
 
             const double speedup = rewind.ms > 0.0 ? edit_ms / rewind.ms : 0.0;
             std::printf("\nHISTORY edits=%d ticks=%u->%u "
                         "unbatched_ms=%.1f rewind_ms=%.1f replay_ms=%.1f "
                         "batch_speedup=%.1fx "
-                        "rewind_applied=%zu rewind_remeshed=%zu "
+                        "rewind_applied=%zu rewind_remeshed=%zu edit_chunks=%zu "
                         "log_bytes=%zu bytes_per_edit=%.1f "
                         "bad_tris_rewind=%d bad_tris_replay=%d dropped=%zu "
-                        "main_ok=%d branch_ok=%d %s\n",
+                        "main_ok=%d branch_ok=%d reload_ok=%d %s\n",
                         made, tick_before, tick_after,
                         edit_ms, rewind.ms, replay.ms, speedup,
-                        rewind.applied, rewind.chunks_remeshed,
+                        rewind.applied, rewind.chunks_remeshed, kEditChunks,
                         log_bytes,
                         static_cast<double>(log_bytes) / std::max(1, made),
                         bad_after_rewind, bad_after_replay, wrld.history_dropped(),
-                        main_ok ? 1 : 0, branch_ok ? 1 : 0,
+                        main_ok ? 1 : 0, branch_ok ? 1 : 0, reload_ok ? 1 : 0,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
             glfwSetWindowShouldClose(window, GLFW_TRUE);

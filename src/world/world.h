@@ -244,11 +244,13 @@ public:
     std::size_t    history_dropped() const { return history_dropped_; }
     std::uint32_t  history_tick() const { return history_tick_; }
     std::uint32_t  history_latest_tick() const { return history_.latest_tick(); }
-    // Loading a world replays its saved edits through set_block, which
-    // would record them all over again on top of the log they came from.
-    void set_history_recording(bool on) { history_recording_ = on; }
+    // No public setter for recording. There was one, whose comment said
+    // loading a world "replays its saved edits through set_block" - which
+    // world_io.cpp does not do; it decodes chunks directly. It had no
+    // callers, and a knob nobody turns whose documentation describes a
+    // path that does not exist is worse than no knob. history_seek
+    // suspends recording internally, which is the only case that needs it.
     bool history_recording() const { return history_recording_; }
-    void clear_history() { history_.clear(); history_tick_ = 0; }
     bool load_history(std::span<const std::uint8_t> bytes, std::uint32_t seed) {
         if (!EditLog::decode(bytes, history_, seed)) return false;
         history_tick_ = history_.latest_tick();

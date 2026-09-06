@@ -600,6 +600,16 @@ void World::clear_all() {
     // A full reload replaces world state wholesale; stale stashed edits
     // from the previous state must not leak into it.
     edited_stash_.clear();
+    // Nor may the edit history, which describes a world that no longer
+    // exists. Without this, a load leaves the log holding the PREVIOUS
+    // world's prev/next bytes with history_tick_ still at N, and the next
+    // seek writes them into the new world - blocks appearing from a world
+    // the player never saw. Nothing else ties a log to the world instance
+    // it was recorded against: decode()'s seed check guards the on-disk
+    // path, and that path is not wired to this one.
+    history_.clear();
+    history_tick_ = 0;
+    history_dropped_ = 0;
     ++generation_;  // in-flight jobs are now stale; drain_finished drops them
     std::lock_guard<std::mutex> lock(finished_mutex_);
     // Results already queued but not yet drained are dropped here, so their
@@ -671,10 +681,22 @@ World::HistorySeekStats World::history_seek(std::uint32_t to_tick) {
         const ChunkCoord cc{floor_div(wx, kChunkSizeX), floor_div(wz, kChunkSizeZ)};
         auto it = chunks_.find(cc);
         if (it == chunks_.end()) {
-            // The chunk streamed out. Its edits live in edited_stash_ and
-            // will be applied when it comes back, so this is reported
-            // rather than silently dropped - a seek that quietly skipped
-            // half the world would look like it worked.
+            // The chunk streamed out, and this seek does NOT reach it.
+            //
+            // An earlier comment here claimed the edit "lives in
+            // edited_stash_ and will be applied when it comes back". That
+            // is not what the stash is: it is an RLE snapshot taken at
+            // eviction and restored verbatim, so a chunk evicted at tick
+            // 100 and restored while the world sits at tick 5 comes back
+            // holding tick-100 voxels - future edits visible in the past.
+            // Nothing replays the log against the stash and history_seek
+            // does not rewrite it.
+            //
+            // Reported rather than silently dropped, because that counter
+            // is currently the only signal that a seek did not reach the
+            // whole world. Rewriting the stash on seek is the fix, and it
+            // is listed as outstanding in docs/time_travel.md rather than
+            // described here as though it already happened.
             ++stats.skipped_unloaded;
             return;
         }
