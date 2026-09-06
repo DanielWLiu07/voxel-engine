@@ -227,28 +227,31 @@ public:
     // up to kSliceRemeshStep while the player is moving.
     float meshed_w() const { return meshed_w_; }
 
-    // How often the world is rebuilt while travelling along w, in
-    // seconds. The THRESHOLD is derived from this and the player's speed
-    // rather than fixed, so the rebuild rate stays constant however fast
-    // they move.
+    // Target interval between rebuilds while travelling along w, in
+    // seconds. The threshold is derived from this and the player's speed
+    // rather than fixed, so the rebuild rate does not scale with speed.
     //
-    // A fixed threshold made speed and rebuild rate proportional, so
-    // sprinting asked for three times as many rebuilds as walking and
-    // simply outran the pool - the throttle then declined most of them
-    // and the world updated LESS the faster you went. Deriving the
-    // threshold instead means sprinting takes bigger steps at the same
-    // cadence: the terrain changes more per rebuild, which is what
-    // moving faster should look like, and the pool sees the same load.
+    // Deliberately shorter than any radius can actually sustain, because
+    // it is not the rate limiter - resample_slice is. That declines while
+    // a rebuild is draining, so the real cadence is whatever the worker
+    // pool manages, and this only has to avoid being the binding
+    // constraint. The two interact well because a rebuild always targets
+    // the player's CURRENT w rather than the next increment: however long
+    // the throttle makes you wait, the rebuild you get catches all the
+    // way up.
     //
-    // 0.3 s is about three rebuilds a second, which is what the pool
-    // sustains at radius 12 (625 chunks at ~2,200 chunks/sec is ~0.28 s
-    // each).
-    static constexpr float kSliceRebuildPeriod = 0.3f;
+    // The effect is that the engine tunes itself to the draw distance. At
+    // radius 4 (81 chunks, ~0.04 s a rebuild) it updates about twenty
+    // times a second and the terrain genuinely flows; at radius 12 (625
+    // chunks, ~0.28 s) the throttle holds it near three, and each update
+    // is correspondingly larger. Neither needs a different constant.
+    static constexpr float kSliceRebuildPeriod = 0.05f;
 
-    // Floor and ceiling on the derived threshold, so a near-zero speed
-    // cannot rebuild every frame and a very large one cannot make a
-    // single step jump the world somewhere unrecognisable.
-    static constexpr float kSliceStepMin = 0.04f;
+    // Floor and ceiling on the derived threshold. The floor stops a
+    // near-zero speed from rebuilding every frame; the ceiling stops a
+    // very large one from jumping the world somewhere unrecognisable in
+    // a single update.
+    static constexpr float kSliceStepMin = 0.015f;
     static constexpr float kSliceStepMax = 0.60f;
 
     // How far the player can travel along w before the world is rebuilt
