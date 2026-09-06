@@ -381,6 +381,59 @@ void test_the_field_is_centred() {
     if (std::fabs(mean) >= 0.01) std::printf("    (mean %.5f)\n", mean);
 }
 
+// ----- how far the world actually goes --------------------------------------
+
+void test_the_field_keeps_its_detail_out_to_a_million_units() {
+    // Coordinates are floats, and a float has 24 bits of mantissa, so
+    // somewhere past 1e7 two nearby world positions round to the same
+    // float and the noise returns the same value for both. The terrain
+    // does not error when that happens - it goes flat, which is the
+    // quietest possible failure for a world that advertises no bounds.
+    //
+    // Measured over 2000 samples half a unit apart:
+    //
+    //     |coord| 1e2..1e6   2000/2000 distinct
+    //     |coord| 1e7         998/2000 distinct  (half the detail gone)
+    //     |coord| 1e8           1/2000 distinct  (flat)
+    //
+    // So this pins the usable range rather than asserting there is none.
+    // 1e6 world units is 62,500 chunks from the origin, which no player
+    // reaches; the point is that the limit is known and written down
+    // instead of being discovered as "the terrain went flat out there".
+    const world::Noise4D noise(1337);
+    for (double magnitude : {1e2, 1e4, 1e6}) {
+        int distinct = 0;
+        float prev = 1e9f;
+        for (int i = 0; i < 500; ++i) {
+            const float x = static_cast<float>(magnitude)
+                          + static_cast<float>(i) * 0.5f;
+            const float v = noise.sample(x, x * 0.3f, x * 0.7f, x * 0.11f);
+            if (v != prev) ++distinct;
+            prev = v;
+        }
+        EXPECT(distinct == 500, "the field is still fully resolved here");
+    }
+}
+
+void test_the_field_never_returns_nan_or_infinity() {
+    // It degrades at extreme coordinates; it must not explode. A NaN would
+    // propagate into a height, through the clamp (NaN compares false
+    // against both bounds), and into chunk contents.
+    const world::Noise4D noise(1337);
+    int bad = 0;
+    for (double magnitude : {0.0, 1.0, 1e3, 1e6, 1e8, -1e6, -1e8}) {
+        for (int i = 0; i < 200; ++i) {
+            const float x = static_cast<float>(magnitude)
+                          + static_cast<float>(i) * 0.37f;
+            const float v = noise.sample(x, x * 0.3f, x * 0.7f, x * 0.11f);
+            if (std::isnan(v) || std::isinf(v)) ++bad;
+            const float f = noise.fbm(x, x * 0.3f, x * 0.7f, x * 0.11f, 4, 0.02f);
+            if (std::isnan(f) || std::isinf(f)) ++bad;
+        }
+    }
+    EXPECT(bad == 0, "no sample is NaN or infinite, at any magnitude or sign");
+}
+
 // ----- the 3D engine's assumption ------------------------------------------
 
 void test_a_fixed_w_gives_a_usable_3d_field() {
@@ -422,6 +475,8 @@ int main() {
     test_the_field_is_smooth_across_cell_boundaries();
     test_no_axis_is_dead();
     test_the_field_is_centred();
+    test_the_field_keeps_its_detail_out_to_a_million_units();
+    test_the_field_never_returns_nan_or_infinity();
     test_a_fixed_w_gives_a_usable_3d_field();
 
     std::printf("\nnoise4d_tests: %d checks, %d failure%s\n",
