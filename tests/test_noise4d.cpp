@@ -209,9 +209,12 @@ float worst_step_along(int axis, float step, std::uint32_t seed) {
 
 void test_the_field_is_continuous_on_every_axis() {
     // A 0.01 step is a hundredth of a cell. Gradient noise over that
-    // distance moves by a few thousandths; white noise would move by the
-    // full range. The bound is deliberately loose - this is separating
-    // "smooth" from "not smooth", not pinning a constant.
+    // distance moves by at most 0.026 (measured); white noise would move
+    // by the full range. The 0.05 bound is therefore about 2x clear of
+    // the real worst case - enough to separate "smooth" from "not
+    // smooth", but not the wide margin the C1 and C2 checks have, and an
+    // earlier version of this comment said "a few thousandths" when the
+    // measured figure is 26 of them.
     for (int axis = 0; axis < 4; ++axis) {
         const float worst = worst_step_along(axis, 0.01f, 1337);
         EXPECT(worst < 0.05f, "a small step gives a small change");
@@ -442,6 +445,17 @@ void test_the_field_never_returns_nan_or_infinity() {
     // It degrades at extreme coordinates; it must not explode. A NaN would
     // propagate into a height, through the clamp (NaN compares false
     // against both bounds), and into chunk contents.
+    //
+    // Two honest caveats. This is close to structural: sample() has no
+    // division and no unbounded growth, so with finite float inputs there
+    // is little that could produce a NaN, and a review could not construct
+    // a plausible mutation that trips it. And "any magnitude" means any
+    // magnitude THIS TEST REACHES - the real hard limit is the
+    // int32 cast of floor(x) in sample(), which is undefined above
+    // 2^31 ~ 2.1e9. That is 2000x past the ~1e6 usable range the
+    // resolution test pins, so it is documented rather than guarded: a
+    // branch in the hot path to defend a coordinate no world reaches
+    // would cost more than it protects.
     const world::Noise4D noise(1337);
     int bad = 0;
     for (double magnitude : {0.0, 1.0, 1e3, 1e6, 1e8, -1e6, -1e8}) {

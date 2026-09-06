@@ -31,9 +31,17 @@ int TerrainGen4D::height_at(int wx, int wz, int w) const {
     const float z = static_cast<float>(wz);
     const float fw = static_cast<float>(w) * kWScale;
 
-    // Domain warp, then three octave stacks. y is held at 0 throughout:
-    // this is a heightfield, so the vertical axis is the output, and the
-    // free axes are x, z and w.
+    // Domain warp, then three octave stacks over a 3D slice of the 4D
+    // field: world x, world z and w, with the noise's remaining axis
+    // pinned at 0.
+    //
+    // Which axis is pinned is worth stating precisely, because the
+    // argument order hides it: world z goes into the noise's SECOND
+    // argument (its y) and the constant 0 into its third (its z). So it
+    // is the noise's z that is held fixed, not its y - an earlier comment
+    // here said the opposite. Nothing depends on which axis carries what,
+    // since the field is isotropic, but a reader tracing the heightfield
+    // should not have to discover that the labels are shuffled.
     const float ox = warp_.sample(x * kWarpFreq, z * kWarpFreq, 0.0f,
                                   fw * kWarpFreq) * 60.0f;
     const float oz = warp_.sample((x + 113.0f) * kWarpFreq,

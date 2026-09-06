@@ -92,6 +92,8 @@ SliceCost build_slice(const world::TerrainGen4D& terrain, int radius, int w,
     out.assign(static_cast<std::size_t>(side) * side, world::Chunk{});
     prints.assign(out.size(), Prints{});
 
+    // Generate the whole slice first, so every chunk has its neighbours
+    // available when it is meshed.
     std::size_t i = 0;
     for (int cz = -radius; cz <= radius; ++cz) {
         for (int cx = -radius; cx <= radius; ++cx, ++i) {
@@ -99,10 +101,37 @@ SliceCost build_slice(const world::TerrainGen4D& terrain, int radius, int w,
             terrain.fill_chunk(cx, cz, w, out[i]);
             cost.gen_ms += ms_since(t0);
             prints[i] = fingerprint(out[i]);
+        }
+    }
 
+    // Meshed against neighbours, not in isolation.
+    //
+    // This used to pass {} for NeighborPlanes, which is the
+    // pre-cross-chunk-culling configuration the engine stopped using -
+    // and which the repo's headline memory figure exists because it
+    // abandoned. It reported 108,254 quads at radius 6 against the 92,136
+    // the shipped path produces, 17.5% too many. Mesh time was only 1.4%
+    // higher and the 1.70x conclusion did not move, but a quad count from
+    // a configuration nothing ships is the kind of number that gets
+    // quoted later and is wrong when it is.
+    auto chunk_at = [&](int cx, int cz) -> const world::Chunk* {
+        if (cx < -radius || cx > radius || cz < -radius || cz > radius) {
+            return nullptr;  // outside the window: genuinely unknown
+        }
+        const std::size_t idx = static_cast<std::size_t>(cz + radius) * side
+                              + static_cast<std::size_t>(cx + radius);
+        return &out[idx];
+    };
+    i = 0;
+    for (int cz = -radius; cz <= radius; ++cz) {
+        for (int cx = -radius; cx <= radius; ++cx, ++i) {
+            const world::NeighborChunks n{
+                chunk_at(cx - 1, cz), chunk_at(cx + 1, cz),
+                chunk_at(cx, cz - 1), chunk_at(cx, cz + 1)};
+            const auto planes = world::NeighborPlanes::from(n);
             const auto t1 = clock_type::now();
             const auto mesh = world::build_chunk_mesh(
-                world::MesherKind::Greedy, out[i], {}, {});
+                world::MesherKind::Greedy, out[i], planes, {});
             cost.mesh_ms += ms_since(t1);
             cost.quads += static_cast<std::size_t>(mesh.quad_count);
         }
@@ -139,6 +168,7 @@ int main(int argc, char** argv) {
     // was actually necessary.
     constexpr int kSteps = 4;
     double total_step_ms = 0.0;
+    double total_gen_ms = 0.0, total_mesh_ms = 0.0;
     std::size_t total_changed = 0;
     std::size_t total_chunks = 0;
     std::size_t total_sections = 0, total_sections_all = 0;
@@ -158,6 +188,8 @@ int main(int argc, char** argv) {
             }
         }
         total_step_ms += step_ms;
+        total_gen_ms += c.gen_ms;
+        total_mesh_ms += c.mesh_ms;
         total_changed += changed;
         total_chunks += print_a.size();
         total_sections += changed_sections;
@@ -188,9 +220,14 @@ int main(int argc, char** argv) {
     // Generation is unavoidable: you cannot know a chunk is unchanged
     // without generating it. Meshing is the half an incremental scheme
     // skips, and at these ratios it is also the larger half.
-    const double gen_share = first.gen_ms / (first.gen_ms + first.mesh_ms);
-    const double mean_gen_ms = mean_step_ms * gen_share;
-    const double mean_mesh_ms = mean_step_ms - mean_gen_ms;
+    //
+    // Split using the steps' own totals rather than the first slice's
+    // ratio. Slice 0 is measurably cold - it ran gen 103 / mesh 118
+    // against the steps' 94 / 103 - so deriving the share from it skewed
+    // the split by about 2 ms while the per-step numbers were already
+    // being computed and thrown away.
+    const double mean_gen_ms = total_gen_ms / kSteps;
+    const double mean_mesh_ms = total_mesh_ms / kSteps;
 
     std::printf("\nWCOST radius=%d chunks=%d full_step_ms=%.1f "
                 "chunk_frac=%.3f section_frac=%.3f column_frac=%.3f\n",
