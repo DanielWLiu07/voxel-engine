@@ -8,6 +8,53 @@
 
 namespace world {
 
+// How much noise-space one unit of movement along w covers.
+//
+// Six. This constant has now been 6, then 1, then 6 again, and the round
+// trip is worth recording because both changes were right about what they
+// measured and the first two were measuring the wrong thing.
+//
+// It was 6, justified by a sweep showing that at scale 1 a step along w
+// changed 4.6% of columns by at most one block. That sweep was taken
+// against a height amplitude of 28, and when the amplitude was refitted
+// to 126 nobody re-measured, so the justification described a generator
+// that no longer existed. Re-measured, scale 1 changes 51.2% of columns
+// per world unit of w - not frozen at all - so it went to 1.
+//
+// That was correct about the FIELD and wrong about the ENGINE, because
+// the field scale and the player's travel speed multiply, and only one
+// of them is free.
+//
+// A rebuild re-requests every chunk in the window, so how often the world
+// is rebuilt is set by travel speed alone: at kSliceRemeshStep the player
+// crosses a rebuild every step/speed seconds, and the worker pool caps
+// that at roughly three per second. Travel speed is therefore expensive
+// and bounded at about 0.4 units/sec. kWScale costs nothing - it changes
+// how DIFFERENT each rebuild looks, not how many there are.
+//
+// So the visual rate has to be bought with kWScale, and at scale 1 with a
+// walk of 0.4 units/sec the result was 19% of columns moving by one block
+// per second: technically continuous, visually nothing. Measured across
+// the scale, per rebuild and per second of walking:
+//
+//     scale   per rebuild (0.12w)   per second walking (0.4w)
+//       1      5.3%,  max jump 1     19.4%,  max jump 1
+//       2     11.9%,  max jump 1     38.8%,  max jump 2
+//       4     23.7%,  max jump 1     62.0%,  max jump 3
+//       6     35.3%,  max jump 2     73.9%,  max jump 5
+//      10     52.6%,  max jump 3     83.5%,  max jump 7
+//
+// 6 is where a second of travel visibly reshapes the landscape (74% of
+// columns, five blocks at the extreme) while a single rebuild still moves
+// nothing by more than two blocks, so the terrain flows rather than
+// stepping. 10 makes each rebuild a visible jolt; 1 and 2 are invisible
+// while walking.
+//
+// The continuity of the field along w does not depend on this at all -
+// that is established by test_adjacent_slices_are_related_not_unrelated,
+// and it holds at every scale in the table.
+inline constexpr float kWScale = 6.0f;
+
 // Terrain generation with a fourth spatial axis.
 //
 // w is a float, not an integer slice index, and that distinction is the
@@ -59,12 +106,34 @@ public:
     // Fills `out` with the chunk at (chunk_x, chunk_z) on the given slice.
     void fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const;
 
-    // Where a point of the slice lands in 4D. The whole rotation lives
-    // here so nothing else has to know the convention.
+    // Where a point of the slice lands in the noise's 4D space. The whole
+    // rotation lives here so nothing else has to know the convention, and
+    // the returned coordinates are ready to sample - kWScale is already
+    // in them.
+    //
+    // The scale is applied to w BEFORE the rotation, and that ordering is
+    // the difference between rotating the world and shearing it.
+    //
+    // It used to be applied afterwards, by each caller, which composed to
+    // the map [[c, -s], [6s, 6c]]: determinant 6, and singular values 1
+    // and 6 rather than 1 and 1. to_4d was a proper rotation, but the
+    // space it rotated was six times finer along w than along z, so a
+    // tilt progressively compressed the world along z. Measured as the
+    // ratio of mean |dh| along z to along x: 1.00 at theta=0, 1.73 at
+    // 0.25, and 4.79 at pi/2, where the terrain visibly corrugates into
+    // ridges running across z. It also broke the no-cliffs invariant the
+    // test suite asserts - adjacent columns differ by at most 8 blocks at
+    // theta=0, and by 12 at theta=1.5.
+    //
+    // Scaling first makes the composed map [[c, -s], [s, c]] applied to
+    // (sz, kWScale * w): a true rotation of an isotropic space. theta=0
+    // is untouched - it reduces to z4 = sz, w4 = kWScale * w, exactly
+    // what every published 3D and untilted 4D figure was measured with.
     static void to_4d(float sz, Slice s, float* out_z4, float* out_w4) {
+        const float w = s.w * kWScale;
         const float c = std::cos(s.theta), sn = std::sin(s.theta);
-        *out_z4 = sz * c - s.w * sn;
-        *out_w4 = sz * sn + s.w * c;
+        *out_z4 = sz * c - w * sn;
+        *out_w4 = sz * sn + w * c;
     }
 
     void set_caves_enabled(bool e) { caves_enabled_ = e; }
@@ -80,52 +149,6 @@ private:
     bool caves_enabled_ = true;
 };
 
-// How much noise-space one unit of movement along w covers.
-//
-// Six. This constant has now been 6, then 1, then 6 again, and the round
-// trip is worth recording because both changes were right about what they
-// measured and the first two were measuring the wrong thing.
-//
-// It was 6, justified by a sweep showing that at scale 1 a step along w
-// changed 4.6% of columns by at most one block. That sweep was taken
-// against a height amplitude of 28, and when the amplitude was refitted
-// to 126 nobody re-measured, so the justification described a generator
-// that no longer existed. Re-measured, scale 1 changes 51.2% of columns
-// per world unit of w - not frozen at all - so it went to 1.
-//
-// That was correct about the FIELD and wrong about the ENGINE, because
-// the field scale and the player's travel speed multiply, and only one
-// of them is free.
-//
-// A rebuild re-requests every chunk in the window, so how often the world
-// is rebuilt is set by travel speed alone: at kSliceRemeshStep the player
-// crosses a rebuild every step/speed seconds, and the worker pool caps
-// that at roughly three per second. Travel speed is therefore expensive
-// and bounded at about 0.4 units/sec. kWScale costs nothing - it changes
-// how DIFFERENT each rebuild looks, not how many there are.
-//
-// So the visual rate has to be bought with kWScale, and at scale 1 with a
-// walk of 0.4 units/sec the result was 19% of columns moving by one block
-// per second: technically continuous, visually nothing. Measured across
-// the scale, per rebuild and per second of walking:
-//
-//     scale   per rebuild (0.12w)   per second walking (0.4w)
-//       1      5.3%,  max jump 1     19.4%,  max jump 1
-//       2     11.9%,  max jump 1     38.8%,  max jump 2
-//       4     23.7%,  max jump 1     62.0%,  max jump 3
-//       6     35.3%,  max jump 2     73.9%,  max jump 5
-//      10     52.6%,  max jump 3     83.5%,  max jump 7
-//
-// 6 is where a second of travel visibly reshapes the landscape (74% of
-// columns, five blocks at the extreme) while a single rebuild still moves
-// nothing by more than two blocks, so the terrain flows rather than
-// stepping. 10 makes each rebuild a visible jolt; 1 and 2 are invisible
-// while walking.
-//
-// The continuity of the field along w does not depend on this at all -
-// that is established by test_adjacent_slices_are_related_not_unrelated,
-// and it holds at every scale in the table.
-inline constexpr float kWScale = 6.0f;
 
 // Height amplitude and offset, fitted to this noise rather than inherited.
 // The 3D generator's `kSeaLevel + n * 28 + 14` put every column between

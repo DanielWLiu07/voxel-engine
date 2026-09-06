@@ -478,20 +478,19 @@ void test_rotating_the_slice_changes_the_cross_section() {
     // structures present different cross-sections - which is what makes
     // them appear to change shape rather than be replaced.
     //
-    // Geometrically a tilted hyperplane diverges from the original
-    // linearly with distance, so rotation is far stronger per unit than
-    // translation. Measured against a flat slice over a 192-block square:
+    // Measured over a 192-block square, seed 1337:
     //
-    //     0.002 rad   27% of columns change, max jump  2
-    //     0.010 rad   66%                          9
-    //     0.050 rad   88%                         20
-    //
-    // against 34% and max jump 2 for a whole rebuild-threshold of w.
+    //     rotate 0.002 rad    4.8% of columns change, max jump  1
+    //     rotate 0.010       22.9%                          2
+    //     rotate 0.030       50.6%                          5
+    //     rotate pi/2        95.3%                         34
+    //     translate w 0.12   33.8%                          2   (one rebuild)
+    //     translate w 2.00   92.1%                         15
     const world::TerrainGen4D t(1337);
-    auto changed = [&](world::TerrainGen4D::Slice a,
-                       world::TerrainGen4D::Slice b) {
+    auto compare = [&](world::TerrainGen4D::Slice a,
+                       world::TerrainGen4D::Slice b, int z_lo, int z_hi) {
         int diff = 0, n = 0, worst = 0;
-        for (int z = -96; z < 96; z += 2)
+        for (int z = z_lo; z < z_hi; z += 2)
             for (int x = -96; x < 96; x += 2) {
                 const int ha = t.height_at(x, z, a);
                 const int hb = t.height_at(x, z, b);
@@ -501,28 +500,103 @@ void test_rotating_the_slice_changes_the_cross_section() {
             }
         return std::pair<double, int>{100.0 * diff / n, worst};
     };
+    auto changed = [&](world::TerrainGen4D::Slice a,
+                       world::TerrainGen4D::Slice b) {
+        return compare(a, b, -96, 96);
+    };
 
     const world::TerrainGen4D::Slice flat{0.0f, 0.0f};
     EXPECT(changed(flat, flat).first == 0.0,
            "the same slice is the same world");
 
-    const auto small = changed(flat, {0.0f, 0.01f});
-    EXPECT(small.first > 20.0, "a small tilt already reshapes the terrain");
-    EXPECT(small.second > 2, "and moves columns by more than translation does");
+    EXPECT(changed(flat, {0.0f, 0.01f}).first > 15.0,
+           "a small tilt already reshapes the terrain");
 
     const auto quarter = changed(flat, {0.0f, 1.5708f});
-    EXPECT(quarter.first > 80.0,
+    EXPECT(quarter.first > 90.0,
            "a quarter turn is a wholly different cross-section");
 
-    // A tilt is not a translation in disguise: at theta = pi/2 the slice's
-    // own z axis IS the fourth dimension, so no w offset can reproduce it.
-    const auto as_translation = changed(flat, {2.0f, 0.0f});
-    EXPECT(quarter.first > as_translation.first,
-           "rotating changes more than translating the same nominal amount");
+    // A tilt is not a translation in disguise, and this is the property
+    // that says so rather than a comparison of totals.
+    //
+    // A tilted hyperplane diverges from the original in proportion to the
+    // distance from the axis it turns about, so a rotation displaces the
+    // far edge of a window far more than the near. A translation moves
+    // every point by the same amount, so it is flat across the same
+    // bands. That difference is structural: no choice of w reproduces it.
+    //
+    // Comparing totals instead would be fragile and was: at 0.01 rad the
+    // largest move is 2 blocks, exactly what a rebuild-threshold
+    // translation gives, so an assertion that rotation always moves
+    // columns further than translation is simply false at small angles.
+    const auto rot_near = compare(flat, {0.0f, 0.03f}, -32, 32);
+    const auto rot_far  = compare(flat, {0.0f, 0.03f}, 64, 128);
+    EXPECT(rot_far.first > rot_near.first * 1.5,
+           "a rotation changes the far field much more than the near");
+    EXPECT(rot_far.second > rot_near.second,
+           "and moves it further");
+
+    const auto tr_near = compare(flat, {2.0f, 0.0f}, -32, 32);
+    const auto tr_far  = compare(flat, {2.0f, 0.0f}, 64, 128);
+    EXPECT(tr_far.first < tr_near.first * 1.5,
+           "a translation moves the whole window by the same amount");
 
     // And it is reversible, like every other motion through this world.
-    const auto there_and_back = changed({0.0f, 0.7f}, {0.0f, 0.7f});
-    EXPECT(there_and_back.first == 0.0, "a tilt is a place, not a mutation");
+    EXPECT(changed({0.0f, 0.7f}, {0.0f, 0.7f}).first == 0.0,
+           "a tilt is a place, not a mutation");
+}
+
+void test_a_tilted_slice_is_still_the_same_kind_of_world() {
+    // Rotating the cut must change WHICH world you see, not what kind of
+    // world it is. A slice at 45 degrees should be as walkable, as smooth
+    // and as isotropic as one at 0 - it is the same 4D terrain, met at a
+    // different angle.
+    //
+    // This is the invariant that caught kWScale being applied after the
+    // rotation instead of before. to_4d was a proper rotation, but it
+    // rotated a space six times finer along w than along z, so the
+    // composed map had singular values 1 and 6 and progressively squashed
+    // the world along z as the tilt grew. Measured as the ratio of mean
+    // |dh| along z to along x:
+    //
+    //     theta      before      after
+    //     0.00        1.00       0.97
+    //     0.25        1.73       0.97
+    //     pi/2        4.79       1.02
+    //
+    // and the largest step between adjacent columns went 3 -> 12 across
+    // the same range, which is terrain corrugated into ridges running
+    // across z. test_a_slice_has_no_cliffs asserted a maximum of 8, and
+    // only ever checked theta = 0.
+    const world::TerrainGen4D t(1337);
+    for (const float theta : {0.0f, 0.25f, 0.7f, 1.2f, 1.5708f}) {
+        double along_x = 0.0, along_z = 0.0;
+        int worst_x = 0, worst_z = 0, n = 0;
+        for (int z = -120; z < 120; ++z) {
+            for (int x = -120; x < 120; ++x) {
+                const int h  = t.height_at(x, z, {0.0f, theta});
+                const int hx = t.height_at(x + 1, z, {0.0f, theta});
+                const int hz = t.height_at(x, z + 1, {0.0f, theta});
+                along_x += std::abs(h - hx);
+                along_z += std::abs(h - hz);
+                worst_x = std::max(worst_x, std::abs(h - hx));
+                worst_z = std::max(worst_z, std::abs(h - hz));
+                ++n;
+            }
+        }
+        along_x /= n;
+        along_z /= n;
+        // No cliffs, at EVERY tilt rather than only at zero.
+        EXPECT(worst_x <= 8 && worst_z <= 8,
+               "a tilted slice has no cliffs either");
+        // And no axis is smoother than another. A 25% band: the fields
+        // are isotropic by construction and the measured spread across
+        // these angles is 0.97-1.03, so this fails long before the
+        // corrugation above would be visible.
+        const double ratio = along_z / along_x;
+        EXPECT(ratio > 0.75 && ratio < 1.33,
+               "a tilt does not squash one axis against the other");
+    }
 }
 
 }  // namespace
@@ -531,6 +605,7 @@ int main() {
     std::printf("terrain4d_tests: running...\n\n");
     test_w_actually_changes_the_world();
     test_rotating_the_slice_changes_the_cross_section();
+    test_a_tilted_slice_is_still_the_same_kind_of_world();
     test_adjacent_slices_are_related_not_unrelated();
     test_a_slice_is_a_deterministic_pure_function();
     test_the_seed_reaches_every_slice();

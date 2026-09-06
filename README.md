@@ -97,8 +97,8 @@ hyperplane slice - and the slice is something you can move.
 <table>
 <tr>
 <td><img src="docs/media/tilt_0.00.jpg" width="270"><br><sub><b>flat cut</b></sub></td>
-<td><img src="docs/media/tilt_0.03.jpg" width="270"><br><sub><b>tilted 1.7 deg</b></sub></td>
-<td><img src="docs/media/tilt_0.08.jpg" width="270"><br><sub><b>tilted 4.6 deg</b></sub></td>
+<td><img src="docs/media/tilt_0.03.jpg" width="270"><br><sub><b>tilted 1.7 deg</b>, 73% of columns moved</sub></td>
+<td><img src="docs/media/tilt_0.08.jpg" width="270"><br><sub><b>tilted 4.6 deg</b>, 85%</sub></td>
 </tr>
 </table>
 
@@ -125,15 +125,20 @@ the far edge of the view moves far more than the near.
 
 | motion | columns changed | largest move |
 |---|---|---|
-| rotate 0.003 rad (one scroll notch, 0.17 deg) | 63.8% | 10 blocks |
-| rotate 0.03 rad (centre image) | 90.8% | 34 |
-| rotate 0.08 rad (right image) | 94.6% | 44 |
-| **translate** w by a full rebuild threshold | 36.3% | **2** |
+| rotate 0.003 rad (one scroll notch, 0.17 deg) | 19.4% | 2 blocks |
+| rotate 0.03 rad (centre image) | 73.2% | 15 |
+| rotate 0.08 rad (right image) | 85.2% | 21 |
+| **translate** w by a full rebuild threshold | 36.3% | 2 |
 
-A fifth of a degree of rotation moves the terrain five times further than
-the largest step translation ever takes between two rebuilds. That is why
-the scroll step is 0.003 rad and not the 0.05 first tried, which rebuilt
-seven eighths of the visible world per notch.
+What separates the two is not the size of the change but its *shape*. A
+translation moves every point of the window by the same amount. A
+rotation's displacement is proportional to distance from the axis it
+turns about, so the far field moves several times more than the near -
+measured at 0.03 rad, the band 64-128 blocks out changes more than 1.5x
+as many columns as the band under the player, while a translation is flat
+across the same two bands. No choice of w reproduces that, which is why a
+tilted cut looks like a different angle on the same world rather than a
+different world.
 
 ### What the motion costs
 

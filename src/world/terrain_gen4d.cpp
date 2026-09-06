@@ -34,8 +34,9 @@ int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
     // rotated. At theta = 0 this reduces to z4 = wz, w4 = w, which is the
     // axis-aligned slice everything started as.
     float z = 0.0f, fw = 0.0f;
+    // to_4d returns coordinates ready to sample: kWScale is inside it,
+    // because scaling after the rotation shears rather than rotates.
     to_4d(static_cast<float>(wz), s, &z, &fw);
-    fw *= kWScale;
 
     // Domain warp, then three octave stacks over a 3D slice of the 4D
     // field: world x, world z and w, with the noise's remaining axis
@@ -84,7 +85,7 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
             // the biome and temperature fields below.
             float z4 = 0.0f, w4 = 0.0f;
             to_4d(static_cast<float>(wz), s, &z4, &w4);
-            const float fw = w4 * kWScale;
+            const float fw = w4;
             surface[z][x] = height;
 
             const float temp = temp_.sample(static_cast<float>(wx) * kTempFreq,
@@ -158,7 +159,7 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
                 const float wx = static_cast<float>(origin_x + x);
                 float cz4 = 0.0f, cw4 = 0.0f;
                 to_4d(static_cast<float>(origin_z + z), s, &cz4, &cw4);
-                const float cfw = cw4 * kWScale;
+                const float cfw = cw4;
                 const int y_max = surface[z][x] - kCaveCeiling;
                 for (int y = kCaveFloor; y <= y_max; ++y) {
                     // y * 1.6 matches the 3D generator's vertical squash,
