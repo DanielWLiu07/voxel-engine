@@ -1217,7 +1217,49 @@ int main(int argc, char** argv) {
             const std::uint64_t hash_rapid = world_hash();
             const int bad_rapid = wrld.debug_validate_gpu_meshes();
 
-            const bool ok = requested > 0 &&
+            // Simulated held key: the interactive path, driven exactly as
+            // the render loop drives it - move_w once per frame with a
+            // frame's worth of dt, then the same per-frame drain the loop
+            // does. Everything above tests one big jump; this tests the
+            // thing the player actually does, and it is the only check
+            // that would notice the throttle refusing every rebuild.
+            travel_to(w0);
+            const float held_w0 = wrld.meshed_w();
+            int rebuilds = 0;
+            constexpr int kFrames = 120;          // two seconds at 60 Hz
+            constexpr float kDt = 1.0f / 60.0f;
+            for (int f = 0; f < kFrames; ++f) {
+                const auto frame_end = std::chrono::steady_clock::now() +
+                    std::chrono::microseconds(16667);
+                if (wrld.move_w(world::World::kWalkSpeedW * kDt,
+                                world::World::kWalkSpeedW, terrain, pool) > 0) {
+                    ++rebuilds;
+                }
+                // What the render loop does each frame, same budgets.
+                wrld.drain_finished(8);
+                wrld.flush_pending_remeshes(pool, 4);
+                // Real frame pacing, and it is load-bearing rather than
+                // cosmetic. Without it this loop ran all 120 iterations in
+                // microseconds while claiming a 1/60 dt, so the worker
+                // pool never got wall-clock time to finish a single
+                // rebuild - in-flight sat at a full window forever and the
+                // check reported the geometry frozen. That looked exactly
+                // like the engine bug it was meant to find, and cost a
+                // round of tuning the wrong constant.
+                while (std::chrono::steady_clock::now() < frame_end) {
+                    std::this_thread::yield();
+                }
+            }
+            const float held_travelled = wrld.slice_w() - w0;
+            const float held_geometry  = wrld.meshed_w() - held_w0;
+            // Two seconds of walking must move the player and must move
+            // the geometry with them. Geometry may lag by up to one
+            // rebuild, so it is checked as a fraction rather than exactly.
+            const bool held_ok = rebuilds > 0 &&
+                                 held_travelled > 0.5f &&
+                                 held_geometry > held_travelled * 0.5f;
+
+            const bool ok = held_ok && requested > 0 &&
                             hash_w1 != hash_w0 &&      // w is a real axis
                             hash_back == hash_w0 &&    // and a reversible one
                             hash_rapid == hash_w0 &&   // even under rapid steps
@@ -1227,11 +1269,13 @@ int main(int argc, char** argv) {
 
             std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
                         "changed=%d returned=%d rapid_ok=%d "
+                        "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
                         "bad_tris=%d/%d/%d/%d %s\n",
                         w0, requested, step_ms,
                         hash_w1 != hash_w0 ? 1 : 0,
                         hash_back == hash_w0 ? 1 : 0,
                         hash_rapid == hash_w0 ? 1 : 0,
+                        rebuilds, held_travelled, held_geometry,
                         bad_w0, bad_w1, bad_back, bad_rapid,
                         ok ? "ok" : "FAILED");
             if (!ok) return EXIT_FAILURE;
