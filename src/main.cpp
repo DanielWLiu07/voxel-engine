@@ -418,8 +418,20 @@ int main(int argc, char** argv) {
     const world::TerrainGen4D terrain4d(terrain_seed);
     if (opt.four_d) {
         wrld.set_slice_source(&terrain4d, opt.slice_w);
-        std::printf("[world] 4D terrain, starting on slice w=%d "
-                    "(, and . step along w)\n", opt.slice_w);
+        std::printf("\n"
+            "  ========================================================\n"
+            "   FOUR-DIMENSIONAL WORLD   (--3d for the ordinary one)\n"
+            "\n"
+            "   HOLD E  travel +w        HOLD Q  travel -w\n"
+            "\n"
+            "   WASD moves you through space and does NOT change the\n"
+            "   world - only travelling along w does. Hold E and watch\n"
+            "   the terrain flow: coastlines move, hills rise, lakes\n"
+            "   open. Hold Q the same amount and it comes back exactly.\n"
+            "\n"
+            "   F2 shows w on the HUD.  Starting at w=%d.\n"
+            "  ========================================================\n\n",
+            opt.slice_w);
     }
 
     core::ThreadPool pool(worker_count);
@@ -686,8 +698,12 @@ int main(int argc, char** argv) {
         // moving through one.
         if (wrld.is_4d()) {
             float w_axis = 0.0f;
-            if (input.key_down(core::key_of(core::Bind::SliceForward))) w_axis += 1.0f;
-            if (input.key_down(core::key_of(core::Bind::SliceBack)))    w_axis -= 1.0f;
+            // . and , kept as aliases so anything that documented them
+            // still works, but E and Q are the bindings that matter.
+            if (input.key_down(core::key_of(core::Bind::SliceForward)) ||
+                input.key_down(GLFW_KEY_PERIOD)) w_axis += 1.0f;
+            if (input.key_down(core::key_of(core::Bind::SliceBack)) ||
+                input.key_down(GLFW_KEY_COMMA))  w_axis -= 1.0f;
             if (w_axis != 0.0f) {
                 // Sprint applies here too, so the fourth axis handles like
                 // the other three.

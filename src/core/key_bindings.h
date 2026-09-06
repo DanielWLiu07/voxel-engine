@@ -49,8 +49,15 @@ inline constexpr KeyBinding kBindings[static_cast<int>(Bind::Count)] = {
     {GLFW_KEY_C,             "C",     "copy a perf snapshot to the clipboard"},
     // The fourth dimension. Only bound when --4d is on; the keys do
     // nothing in the 3D engine, which is the default.
-    {GLFW_KEY_PERIOD,        ".",     "hold: travel +w (4D)"},
-    {GLFW_KEY_COMMA,         ",",     "hold: travel -w (4D)"},
+    // E and Q, not . and , - which is where they started and was a bad
+    // place for a movement axis. They sit under the fingers already on
+    // WASD, which is the convention for a fourth movement direction, and
+    // an input trace showed the real cost of the old binding: a player
+    // flew around for a full minute pressing W, A, Space and Shift and
+    // never once pressed either of the keys that make the world
+    // four-dimensional. The feature worked and was unreachable.
+    {GLFW_KEY_E,             "E",     "hold: travel +w (the 4th axis)"},
+    {GLFW_KEY_Q,             "Q",     "hold: travel -w (the 4th axis)"},
 };
 
 constexpr int key_of(Bind b) { return kBindings[static_cast<int>(b)].key; }
