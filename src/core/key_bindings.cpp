@@ -9,6 +9,11 @@ void print_bindings() {
     // reads them positionally and they are not in the table. This is the
     // one duplication here, and it is deliberate and confined to these
     // three lines.
+    // Stated first because it is the one thing that makes every other
+    // binding work, and its absence is invisible: movement is gated on the
+    // cursor being captured, so without it WASD silently does nothing.
+    std::printf("[input] mouse captured - Tab releases it "
+                "(movement needs it captured)\n");
     std::printf("[input] WASD = move, Space = jump (walk) / up (fly), "
                 "LCtrl = down (fly), Shift = sprint\n");
     std::printf("[input] LClick = break, RClick = place\n");

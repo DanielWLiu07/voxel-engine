@@ -84,6 +84,11 @@ struct CliOptions {
     // --verify-4d: step along w and back, checking the world changes and
     // then returns to exactly what it was. Implies --4d.
     bool verify_4d = false;
+    // --trace-input: log every key the engine actually receives, plus the
+    // player position and w, to stdout. Exists because "nothing happens"
+    // is ambiguous between the engine ignoring input and the engine never
+    // being sent any, and those need completely different fixes.
+    bool trace_input = false;
     int  slice_w = 0;
     int thread_override = 0;
     int orbit_frames = 0;

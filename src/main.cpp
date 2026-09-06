@@ -475,7 +475,20 @@ int main(int argc, char** argv) {
     int streamed_out_total = 0;
 
     gfx::FlyCamera cam;
-    cam.set_position({0.0f, 80.0f, 80.0f});
+    // Launch vantage.
+    //
+    // The 3D world keeps its long-standing (0, 80, 80). The 4D world runs
+    // lower - roughly y=12..56 against the 3D generator's 30..45 plus
+    // lakes - so that vantage puts the camera hard against a snow face
+    // that fills the frame. There is no horizon and no landmark in it, so
+    // the terrain morphing along w is nearly impossible to read: the
+    // fourth dimension was working and invisible, which is a worse
+    // failure than it being broken.
+    //
+    // (0, 64, 0) looks out over coastline, islands and peaks - a view
+    // with enough structure that a change to it registers.
+    cam.set_position(opt.four_d ? glm::vec3{0.0f, 64.0f, 0.0f}
+                                : glm::vec3{0.0f, 80.0f, 80.0f});
     cam.set_yaw_pitch(-90.0f, -35.0f);
     if (have_pose_at) {
         bench_pose = "at";
@@ -518,6 +531,17 @@ int main(int argc, char** argv) {
 
     core::Input input;
     input.attach(window);
+    // Capture the mouse straight away for an interactive run.
+    //
+    // Movement is gated on the cursor being captured, and Input::attach
+    // starts it released - so a fresh launch ignored WASD entirely until
+    // the player happened to press Tab, with nothing on screen saying so.
+    // An input trace caught this: the engine received 152 W keydowns and
+    // the player never left the spawn point.
+    //
+    // Not for headless runs, which have no window to capture into, and
+    // not for scripted captures, which lock the pose deliberately.
+    if (!headless) input.set_cursor_captured(true);
     input.set_cursor_captured(true);
 
     ui::DebugHud hud;
@@ -578,6 +602,47 @@ int main(int argc, char** argv) {
         prev_frame_time = now;
 
         input.begin_frame();
+
+        // --trace-input: make the input path observable from outside the
+        // process. Prints any key the engine sees, and the player's
+        // position and w whenever they move, flushed every line so a
+        // watcher tailing the log sees it immediately.
+        if (opt.trace_input) {
+            static double last_trace = 0.0;
+            static glm::vec3 last_pos{1e9f};
+            static float last_w = 1e9f;
+            for (int k = 32; k < 350; ++k) {
+                if (input.key_down(k)) {
+                    std::printf("[input] key %d down\n", k);
+                    std::fflush(stdout);
+                }
+            }
+            static bool gate_logged = false;
+            if (!gate_logged) {
+                std::printf("[gate] cursor_captured=%d scripted_camera=%d walk_mode=%d\n",
+                            input.cursor_captured() ? 1 : 0,
+                            capture.scripted_camera() ? 1 : 0, walk_mode ? 1 : 0);
+                std::fflush(stdout);
+                gate_logged = true;
+            }
+            // The CAMERA, not the player. In fly mode - the default -
+            // update_movement drives cam.move_local and the player body is
+            // never touched, so tracing player.feet_position() showed a
+            // frozen position while the view was moving perfectly. That
+            // cost a round of hunting a movement bug that did not exist.
+            const glm::vec3 p = walk_mode ? player.feet_position() : cam.position();
+            const float w = wrld.slice_w();
+            if (now - last_trace > 0.25 &&
+                (glm::distance(p, last_pos) > 0.01f ||
+                 std::fabs(w - last_w) > 0.001f)) {
+                std::printf("[state] pos %.2f,%.2f,%.2f  w %.3f (geometry %.3f)\n",
+                            p.x, p.y, p.z, w, wrld.meshed_w());
+                std::fflush(stdout);
+                last_trace = now;
+                last_pos = p;
+                last_w = w;
+            }
+        }
 
         smoothed_frame_ms = smoothed_frame_ms * 0.9f + (dt * 1000.0f) * 0.1f;
         float instant_fps = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
