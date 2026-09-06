@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <random>
 #include <vector>
@@ -650,16 +651,740 @@ void test_visibility_wall_blocks_x_only() {
            "wall keeps -Y/+Y");
 }
 
+// A second, independent answer to the same question: which pairs of a
+// section's six faces are joined by air. compute_section_visibility walks
+// components with an explicit DFS stack and accumulates faces as it pops;
+// this unions cells pairwise and only looks at faces afterwards. Different
+// traversal, different order, same claim - which is the point, because a
+// reimplementation that shared the original's structure would share its
+// mistakes.
+world::SectionVisArray flood_fill_oracle(const world::Chunk& chunk) {
+    constexpr int kW = world::kChunkSizeX;
+    constexpr int kD = world::kChunkSizeZ;
+    constexpr int kH = world::kSectionHeight;
+    constexpr int kCells = kW * kH * kD;
+    auto idx = [](int x, int ly, int z) { return (ly * kD + z) * kW + x; };
+
+    world::SectionVisArray out{};
+    std::vector<int> parent(kCells);
+    for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+        const int y0 = sy * kH;
+        for (int i = 0; i < kCells; ++i) parent[i] = i;
+
+        std::function<int(int)> find = [&](int a) {
+            while (parent[a] != a) { parent[a] = parent[parent[a]]; a = parent[a]; }
+            return a;
+        };
+        auto join = [&](int a, int b) {
+            const int ra = find(a), rb = find(b);
+            if (ra != rb) parent[ra] = rb;
+        };
+        auto air = [&](int x, int ly, int z) {
+            return !world::is_solid(chunk.get(x, y0 + ly, z));
+        };
+
+        for (int ly = 0; ly < kH; ++ly)
+            for (int z = 0; z < kD; ++z)
+                for (int x = 0; x < kW; ++x) {
+                    if (!air(x, ly, z)) continue;
+                    if (x + 1 < kW && air(x + 1, ly, z)) join(idx(x, ly, z), idx(x + 1, ly, z));
+                    if (ly + 1 < kH && air(x, ly + 1, z)) join(idx(x, ly, z), idx(x, ly + 1, z));
+                    if (z + 1 < kD && air(x, ly, z + 1)) join(idx(x, ly, z), idx(x, ly, z + 1));
+                }
+
+        // Faces each component touches, then the pairs within each.
+        std::vector<std::uint8_t> touched(kCells, 0);
+        for (int ly = 0; ly < kH; ++ly)
+            for (int z = 0; z < kD; ++z)
+                for (int x = 0; x < kW; ++x) {
+                    if (!air(x, ly, z)) continue;
+                    std::uint8_t m = 0;
+                    if (x == 0)      m |= 1u << world::kFaceNegX;
+                    if (x == kW - 1) m |= 1u << world::kFacePosX;
+                    if (ly == 0)     m |= 1u << world::kFaceNegY;
+                    if (ly == kH - 1) m |= 1u << world::kFacePosY;
+                    if (z == 0)      m |= 1u << world::kFaceNegZ;
+                    if (z == kD - 1) m |= 1u << world::kFacePosZ;
+                    touched[find(idx(x, ly, z))] |= m;
+                }
+
+        world::SectionVisMask mask = 0;
+        for (int i = 0; i < kCells; ++i) {
+            if (find(i) != i) continue;
+            const std::uint8_t faces = touched[i];
+            for (int a = 0; a < 6; ++a) {
+                if (!((faces >> a) & 1)) continue;
+                for (int b = a + 1; b < 6; ++b) {
+                    if ((faces >> b) & 1) {
+                        mask |= world::SectionVisMask(1) << world::face_pair_bit(a, b);
+                    }
+                }
+            }
+        }
+        out[sy] = mask;
+    }
+    return out;
+}
+
+// Randomized fills covering the shapes the occlusion culler actually meets.
+//
+// Two of these are here because fault injection said so. The worm carves a
+// random walk through solid rock, which is the only style that reliably
+// makes a component whose lowest cell cannot reach the rest by going up -
+// without one, deleting the downward step from the flood fill changed no
+// mask in 25 trials. The sparse style leaves a handful of blocks in an
+// otherwise empty chunk, which is the only input that can tell
+// `chunk.empty()` apart from a fast path that triggers too eagerly.
+void fill_for_visibility(world::Chunk& c, std::mt19937& rng, int style) {
+    switch (style % 7) {
+        case 0: {  // scattered rock: many small components
+            std::uniform_int_distribution<int> coin(0, 3);
+            for (int y = 0; y < world::kChunkSizeY; ++y)
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        if (coin(rng) == 0) c.set(x, y, z, world::BlockId::Stone);
+            break;
+        }
+        case 1: {  // horizontal slabs: -Y/+Y cut, sides open
+            std::uniform_int_distribution<int> gap(2, 9);
+            for (int y = 0; y < world::kChunkSizeY; y += gap(rng))
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        c.set(x, y, z, world::BlockId::Stone);
+            break;
+        }
+        case 2: {  // solid with a few vertical shafts
+            for (int y = 0; y < world::kChunkSizeY; ++y)
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        c.set(x, y, z, world::BlockId::Stone);
+            std::uniform_int_distribution<int> pos(0, world::kChunkSizeX - 1);
+            for (int shaft = 0; shaft < 4; ++shaft) {
+                const int sx = pos(rng), sz = pos(rng);
+                for (int y = 0; y < world::kChunkSizeY; ++y)
+                    c.set(sx, y, sz, world::BlockId::Air);
+            }
+            break;
+        }
+        case 3: {  // real terrain, caves included
+            static world::TerrainGen terrain(1337);
+            std::uniform_int_distribution<int> coord(-40, 40);
+            terrain.fill_chunk(coord(rng), coord(rng), c);
+            break;
+        }
+        case 4: {  // worms: random walks bored through solid rock
+            for (int y = 0; y < world::kChunkSizeY; ++y)
+                for (int z = 0; z < world::kChunkSizeZ; ++z)
+                    for (int x = 0; x < world::kChunkSizeX; ++x)
+                        c.set(x, y, z, world::BlockId::Stone);
+            std::uniform_int_distribution<int> px(0, world::kChunkSizeX - 1);
+            std::uniform_int_distribution<int> py(0, world::kChunkSizeY - 1);
+            std::uniform_int_distribution<int> step(0, 5);
+            static constexpr int kOff[6][3] = {
+                {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+            for (int worm = 0; worm < 6; ++worm) {
+                int x = px(rng), y = py(rng), z = px(rng);
+                for (int i = 0; i < 900; ++i) {
+                    c.set(x, y, z, world::BlockId::Air);
+                    const auto& o = kOff[step(rng)];
+                    const int nx = x + o[0], ny = y + o[1], nz = z + o[2];
+                    if (!world::in_chunk_bounds(nx, ny, nz)) continue;
+                    x = nx; y = ny; z = nz;
+                }
+            }
+            break;
+        }
+        case 5: {  // a handful of blocks in an otherwise empty chunk
+            std::uniform_int_distribution<int> px(0, world::kChunkSizeX - 1);
+            std::uniform_int_distribution<int> py(0, world::kChunkSizeY - 1);
+            for (int i = 0; i < 12; ++i) {
+                c.set(px(rng), py(rng), px(rng), world::BlockId::Stone);
+            }
+            break;
+        }
+        default: break;  // empty
+    }
+}
+
+// The mask is what the occlusion BFS walks, and getting it wrong is
+// invisible in the direction that matters most: a bit set that should not
+// be lets the BFS through a wall, which draws more, and drawing more looks
+// like an open scene rather than like a bug. The published occlusion
+// ratios (up to 70x underground) are exactly the number that would move.
+void test_section_visibility_matches_an_independent_flood_fill() {
+    std::mt19937 rng(90210);
+    int compared = 0, disagreements = 0, nontrivial = 0;
+    for (int trial = 0; trial < 28; ++trial) {
+        world::Chunk c;
+        fill_for_visibility(c, rng, trial);
+        const auto got = world::compute_section_visibility(c);
+        const auto want = flood_fill_oracle(c);
+        for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+            ++compared;
+            if (got[sy] != want[sy]) ++disagreements;
+            if (got[sy] != 0 && got[sy] != world::kSectionVisAll) ++nontrivial;
+        }
+    }
+    EXPECT(compared == 28 * world::kSectionsPerChunk, "every section compared");
+    EXPECT(nontrivial > 20,
+           "the fills produced partly-connected sections, not just open and solid");
+    EXPECT(disagreements == 0,
+           "the flood fill agrees with an independent union-find on every section");
+}
+
+// Carving air can only join components, never split one, so a section's
+// mask can only gain bits. This is the direction the culler is allowed to
+// be wrong in - a bit that should be set and is not hides geometry - and
+// it is the direction the boundary work already went wrong in once, when
+// section_reachable derived its range from mesh AABBs and deleting a wall
+// collapsed it.
+void test_carving_air_only_ever_adds_sightlines() {
+    std::mt19937 rng(31337);
+    std::uniform_int_distribution<int> px(0, world::kChunkSizeX - 1);
+    std::uniform_int_distribution<int> py(0, world::kChunkSizeY - 1);
+
+    int lost_bits = 0, gained_bits = 0;
+    for (int trial = 0; trial < 14; ++trial) {
+        world::Chunk c;
+        fill_for_visibility(c, rng, trial);
+        const auto before = world::compute_section_visibility(c);
+        for (int carve = 0; carve < 200; ++carve) {
+            c.set(px(rng), py(rng), px(rng), world::BlockId::Air);
+        }
+        const auto after = world::compute_section_visibility(c);
+        for (int sy = 0; sy < world::kSectionsPerChunk; ++sy) {
+            if (before[sy] & ~after[sy]) ++lost_bits;
+            if (after[sy] & ~before[sy]) ++gained_bits;
+        }
+    }
+    EXPECT(lost_bits == 0, "removing blocks never removes a sightline");
+    EXPECT(gained_bits > 0, "the carving actually opened new sightlines");
+}
+
+// ----- terrain generation ---------------------------------------------------
+//
+// terrain_gen.cpp is the input to everything the repo measures. Every
+// bench figure, the 10.99 MB the engine validates against, and the
+// byte-identical --bench output the CI invariance gate compares are all
+// downstream of it, and none of them checks it: they check that it does
+// the same thing twice, not that what it does is right. These tests are
+// the missing half - the relationships fill_chunk is supposed to hold,
+// stated where a change that quietly breaks one has to fail.
+
+// Every solid block a column holds, top-down, for comparing two fills.
+// BlockId, not a bool: "the caves pass turned stone into air" and "the
+// caves pass turned stone into dirt" are different bugs.
+struct ColumnDiff {
+    int only_in_a = 0;   // solid in a, air in b
+    int only_in_b = 0;   // solid in b, air in a
+    int different = 0;   // solid in both, different block
+};
+
+ColumnDiff diff_chunks(const world::Chunk& a, const world::Chunk& b) {
+    ColumnDiff d;
+    for (int y = 0; y < world::kChunkSizeY; ++y)
+        for (int z = 0; z < world::kChunkSizeZ; ++z)
+            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                const world::BlockId ba = a.get(x, y, z);
+                const world::BlockId bb = b.get(x, y, z);
+                if (ba == bb) continue;
+                if (!world::is_solid(bb))      ++d.only_in_a;
+                else if (!world::is_solid(ba)) ++d.only_in_b;
+                else                           ++d.different;
+            }
+    return d;
+}
+
+void test_height_at_is_deterministic_and_in_range() {
+    world::TerrainGen a(1337), b(1337);
+    bool same_twice = true, same_instance = true;
+    for (int wz = -300; wz <= 300; wz += 7) {
+        for (int wx = -300; wx <= 300; wx += 7) {
+            const int h = a.height_at(wx, wz);
+            if (h != a.height_at(wx, wz)) same_twice = false;
+            if (h != b.height_at(wx, wz)) same_instance = false;
+        }
+    }
+    EXPECT(same_twice, "height_at is pure: asking twice gives one answer");
+    EXPECT(same_instance,
+           "two generators on one seed agree everywhere (no hidden state)");
+    // Not checked: that height_at stays inside [1, kChunkSizeY). The
+    // clamp is there and it is correct, but the noise it clamps spans
+    // roughly 10..66, so the bound cannot be reached and a test for it
+    // cannot fail. Deleting the clamp would pass it.
+}
+
+void test_the_seed_actually_reaches_the_noise() {
+    // The failure this catches is --seed ceasing to reach the generator at
+    // all. The world would still generate, still be self-consistent, still
+    // pass the invariance gate; it would just stop answering to --seed,
+    // and every per-seed figure in the repo would quietly be one world's.
+    //
+    // What it does not catch, established by injection rather than
+    // assumed: one of the six noise fields losing its seed offset while
+    // the others keep theirs. continents_ carries 0.65 of the height, so
+    // breaking hills_ alone still leaves nearly every column different.
+    // Isolating a single field would need a seam in the class that does
+    // not exist and should not be added for a test.
+    world::TerrainGen a(1337), b(1338);
+    int differing = 0, sampled = 0;
+    for (int wz = -200; wz <= 200; wz += 13) {
+        for (int wx = -200; wx <= 200; wx += 13) {
+            ++sampled;
+            if (a.height_at(wx, wz) != b.height_at(wx, wz)) ++differing;
+        }
+    }
+    EXPECT(differing > sampled / 2,
+           "two seeds disagree about most of the world");
+}
+
+void test_neighbouring_chunks_agree_across_the_seam() {
+    // Nothing in fill_chunk knows about its neighbours, so the only reason
+    // the terrain has no cliffs at chunk borders is that height_at is a
+    // function of world position alone. Stated here because the boundary
+    // meshing path now depends on it: chunks are meshed against a copy of
+    // the neighbour's edge layers, and a seam in the heightfield would show
+    // up as a wall of faces rather than as a visible crack.
+    world::TerrainGen t(1337);
+    world::Chunk left, right;
+    t.fill_chunk(0, 0, left);
+    t.fill_chunk(1, 0, right);
+
+    int mismatches = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        const int wz = z;
+        const int h_left  = t.height_at(world::kChunkSizeX - 1, wz);
+        const int h_right = t.height_at(world::kChunkSizeX, wz);
+        // The two columns are adjacent in the world, so their surfaces
+        // must be within a block or two of each other - and each chunk's
+        // own contents must match what height_at says for that column.
+        if (!world::is_solid(left.get(world::kChunkSizeX - 1, h_left, wz))) ++mismatches;
+        if (!world::is_solid(right.get(0, h_right, wz))) ++mismatches;
+        if (std::abs(h_left - h_right) > 4) ++mismatches;
+    }
+    EXPECT(mismatches == 0, "the heightfield is continuous across a chunk seam");
+}
+
+void test_fill_chunk_puts_the_surface_where_height_at_says() {
+    // The comment in fill_chunk calls height_at the single source of truth
+    // for surface height, because a divergent inline copy would desync the
+    // physics raycast, the bench grid, and the chunk contents from each
+    // other. That is a claim about two functions agreeing, so it is
+    // checkable.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    int wrong_surface = 0, wrong_above = 0, checked = 0;
+    for (int cz = -1; cz <= 1; ++cz) {
+        for (int cx = -1; cx <= 1; ++cx) {
+            world::Chunk c;
+            t.fill_chunk(cx, cz, c);
+            for (int z = 0; z < world::kChunkSizeZ; ++z) {
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    ++checked;
+                    const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                              cz * world::kChunkSizeZ + z);
+                    if (!world::is_solid(c.get(x, h, z))) ++wrong_surface;
+                    if (h + 1 >= world::kChunkSizeY) continue;
+                    // Above the surface is air, or the bottom of a tree.
+                    const world::BlockId above = c.get(x, h + 1, z);
+                    if (above != world::BlockId::Air &&
+                        above != world::BlockId::Wood &&
+                        above != world::BlockId::Leaves) {
+                        ++wrong_above;
+                    }
+                }
+            }
+        }
+    }
+    EXPECT(checked == 9 * 16 * 16, "the sweep covered nine chunks");
+    EXPECT(wrong_surface == 0, "height_at names a solid block in every column");
+    EXPECT(wrong_above == 0, "nothing but foliage sits above the surface");
+}
+
+void test_a_column_is_solid_all_the_way_down_without_caves() {
+    // Caves off is the bench's configuration, and the greedy ratio it
+    // reports means "merged over contiguous terrain". A hole in a column
+    // that nothing carved would quietly make that baseline something else.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    world::Chunk c;
+    t.fill_chunk(3, -2, c);
+    int gaps = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z)
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            const int h = t.height_at(3 * world::kChunkSizeX + x,
+                                      -2 * world::kChunkSizeZ + z);
+            for (int y = 0; y <= h; ++y)
+                if (!world::is_solid(c.get(x, y, z))) ++gaps;
+        }
+    EXPECT(gaps == 0, "with caves off every column is solid from 0 to height");
+}
+
+void test_caves_only_ever_remove() {
+    // The cave pass writes Air and nothing else, so caves-on has to be
+    // caves-off minus some blocks: never a different block, never an extra
+    // one. If it ever added, the bench's caves-off baseline would stop
+    // being an upper bound on the caves-on world and the two greedy ratios
+    // (5.33x contiguous, 2.7x with caves) would not be comparable.
+    world::TerrainGen with(1337), without(1337);
+    without.set_caves_enabled(false);
+    int total_carved = 0;
+    bool subtractive = true;
+    for (int cz = -1; cz <= 1; ++cz) {
+        for (int cx = -1; cx <= 1; ++cx) {
+            world::Chunk a, b;
+            without.fill_chunk(cx, cz, a);
+            with.fill_chunk(cx, cz, b);
+            const ColumnDiff d = diff_chunks(a, b);
+            total_carved += d.only_in_a;
+            if (d.only_in_b != 0 || d.different != 0) subtractive = false;
+        }
+    }
+    EXPECT(subtractive, "the cave pass removes blocks and never adds or changes one");
+    EXPECT(total_carved > 0, "the cave pass actually carved something");
+}
+
+void test_surface_material_follows_altitude() {
+    // The bands are the reason mid-altitude terrain reads as grassland
+    // rather than as monochrome stone, and they are pure functions of
+    // height. Pinned as the ordering between them, not as the numbers:
+    // moving kStoneBand is a design change, snow appearing below the snow
+    // line is a bug.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    int snow_below_line = 0, grass_above_line = 0, dry_shore = 0;
+    int snow_seen = 0, grass_seen = 0, sand_seen = 0;
+    // Radius 4, not 2: seed 1337's spawn bowl is high ground and the
+    // nearest shoreline is four chunks out, so a smaller sweep sees no
+    // sand at all and the coverage check below would be the only thing
+    // failing - a test that passes because it looked at nothing.
+    for (int cz = -4; cz <= 4; ++cz) {
+        for (int cx = -4; cx <= 4; ++cx) {
+            world::Chunk c;
+            t.fill_chunk(cx, cz, c);
+            for (int z = 0; z < world::kChunkSizeZ; ++z)
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                              cz * world::kChunkSizeZ + z);
+                    const world::BlockId top = c.get(x, h, z);
+                    if (top == world::BlockId::Snow) {
+                        ++snow_seen;
+                        if (h < world::kSnowBand) ++snow_below_line;
+                    }
+                    if (top == world::BlockId::Grass) {
+                        ++grass_seen;
+                        if (h >= world::kSnowBand) ++grass_above_line;
+                    }
+                    if (top == world::BlockId::Sand) ++sand_seen;
+                    // Everything at or just above the waterline is beach.
+                    if (h <= world::kSeaLevel + world::kSandBand &&
+                        top != world::BlockId::Sand) {
+                        ++dry_shore;
+                    }
+                }
+        }
+    }
+    EXPECT(snow_seen > 0 && grass_seen > 0 && sand_seen > 0,
+           "the sweep saw all three surface materials");
+    EXPECT(snow_below_line == 0, "no snow below the snow line");
+    EXPECT(grass_above_line == 0, "no grass above the snow line");
+    EXPECT(dry_shore == 0, "everything at the waterline is sand");
+}
+
+void test_lakes_are_carved_below_the_waterline() {
+    // The lake pass exists so the water plane has something to show. It
+    // only ever lowers terrain, and the clamp keeps it off the floor.
+    world::TerrainGen t(1337);
+    int below_sea = 0, at_floor = 0, sampled = 0;
+    for (int wz = -600; wz <= 0; wz += 3) {
+        for (int wx = 0; wx <= 600; wx += 3) {
+            const int h = t.height_at(wx, wz);
+            ++sampled;
+            if (h < world::kSeaLevel) ++below_sea;
+            if (h < 1) ++at_floor;
+        }
+    }
+    EXPECT(below_sea > 0, "somewhere in the lake region the surface is under water");
+    EXPECT(below_sea < sampled / 2, "the carve is a lake, not a flooded world");
+    // Not checked: that the carve never reaches y = 0. The clamp says so
+    // and the lake floor bottoms out around y = 17, so the check passes
+    // with the clamp deleted - it was in the first draft and injection
+    // took it out.
+    (void)at_floor;
+}
+
+// The lake pass smoothsteps its basin and fades out as terrain rises,
+// which the comment on it explains is so shores slope instead of cliff.
+// That is the claim worth pinning, because it is what a change to either
+// factor would break, and it breaks invisibly: a cliff-edged lake is a
+// perfectly good world, just not the one that was designed.
+void test_the_heightfield_has_no_cliffs() {
+    int worst = 0;
+    for (unsigned seed : {1337u, 7u, 99u}) {
+        world::TerrainGen t(seed);
+        for (int wz = -220; wz <= 220; wz += 3) {
+            for (int wx = -220; wx <= 220; wx += 3) {
+                const int h = t.height_at(wx, wz);
+                worst = std::max(worst, std::abs(t.height_at(wx + 1, wz) - h));
+                worst = std::max(worst, std::abs(t.height_at(wx, wz + 1) - h));
+            }
+        }
+    }
+    // Measured at 3 over a million adjacent column pairs on each of these
+    // three seeds. The bound is 4 rather than 3 so ordinary noise tuning
+    // does not trip it; a lake carving straight down drops ~20 at once,
+    // which is what this is here to catch.
+    EXPECT(worst <= 4, "no adjacent columns differ by more than four blocks");
+    EXPECT(worst >= 2, "the terrain has relief (the sweep was not flat)");
+}
+
+void test_trees_stand_on_the_ground_they_were_planted_on() {
+    // The three stamps differ only in trunk height and canopy shape, so
+    // this is the one place their sizes are written down anywhere the
+    // build reads. Their comments said 4-tall and 3x3x2 and had been
+    // wrong for a while; a measured test is what makes the corrected
+    // comments stay true.
+    world::TerrainGen t(1337);
+    t.set_caves_enabled(false);
+    int trees = 0, floating = 0, wrong_height = 0, bald = 0, misplaced = 0;
+    for (int cz = -6; cz <= 6; ++cz) {
+        for (int cx = -6; cx <= 6; ++cx) {
+            world::Chunk c;
+            t.fill_chunk(cx, cz, c);
+            for (int z = 0; z < world::kChunkSizeZ; ++z)
+                for (int x = 0; x < world::kChunkSizeX; ++x) {
+                    const int h = t.height_at(cx * world::kChunkSizeX + x,
+                                              cz * world::kChunkSizeZ + z);
+                    if (h + 2 >= world::kChunkSizeY) continue;
+                    // Find the trunk rather than assume where it starts.
+                    // Looking only at h + 1 was the first draft, and it
+                    // could not see the fault it exists to catch: a stamp
+                    // planted at h + 2 leaves nothing at h + 1, so the
+                    // tree is not found at all and a floating conifer
+                    // reads as a chunk with fewer trees in it.
+                    int base = -1;
+                    for (int y = h + 1; y < h + 12 && y < world::kChunkSizeY; ++y) {
+                        if (c.get(x, y, z) == world::BlockId::Wood) { base = y; break; }
+                    }
+                    if (base < 0) continue;
+                    ++trees;
+                    if (base != h + 1) ++floating;
+                    int trunk = 0;
+                    while (base + trunk < world::kChunkSizeY &&
+                           c.get(x, base + trunk, z) == world::BlockId::Wood) {
+                        ++trunk;
+                    }
+                    // bush 1, oak 5, conifer 7 - the three stamps, and
+                    // nothing in between.
+                    if (trunk != 1 && trunk != 5 && trunk != 7) ++wrong_height;
+                    // Leaves within three blocks of the trunk top, not
+                    // immediately above it: the conifer stacks its canopy
+                    // discs at every other level, so on the trunk axis the
+                    // block straight above the wood is air and the tip
+                    // disc sits one higher. Measured, not assumed - the
+                    // first draft of this check required the next block
+                    // and every conifer failed it.
+                    bool crowned = false;
+                    for (int dy = 0; dy < 3 && !crowned; ++dy) {
+                        const int y = base + trunk + dy;
+                        if (y < world::kChunkSizeY &&
+                            c.get(x, y, z) == world::BlockId::Leaves) {
+                            crowned = true;
+                        }
+                    }
+                    if (!crowned) ++bald;
+                    // Trees are planted only on grass, which is what
+                    // keeps them off beaches, deserts, rock and snow -
+                    // those bands each put a different block on top, so
+                    // this one condition carries all four rules. Checking
+                    // the height bands instead was the first draft, and
+                    // injection showed it unfalsifiable: the grass gate
+                    // already excludes every height they name.
+                    if (c.get(x, h, z) != world::BlockId::Grass) ++misplaced;
+                }
+        }
+    }
+    EXPECT(trees > 50, "the sweep found trees to check");
+    EXPECT(floating == 0, "every trunk starts one block above the surface");
+    EXPECT(wrong_height == 0, "every trunk is one of the three stamp heights");
+    EXPECT(bald == 0, "every trunk carries leaves above it");
+    EXPECT(misplaced == 0, "every tree stands on a grass block");
+}
+
+void test_fill_chunk_is_reproducible_from_one_generator() {
+    // The generator is shared by reference across nine worker threads and
+    // called const. Two fills of one coordinate from one instance have to
+    // be byte-identical, or the invariance gate is measuring luck.
+    world::TerrainGen t(1337);
+    world::Chunk first, second, elsewhere;
+    t.fill_chunk(2, -3, first);
+    t.fill_chunk(9, 9, elsewhere);   // interleave an unrelated fill
+    t.fill_chunk(2, -3, second);
+    const ColumnDiff d = diff_chunks(first, second);
+    EXPECT(d.only_in_a == 0 && d.only_in_b == 0 && d.different == 0,
+           "one coordinate fills the same way twice, whatever ran between");
+    EXPECT(first.solid_count() == second.solid_count(),
+           "and holds the same number of solid blocks");
+}
+
+// ----- frustum --------------------------------------------------------------
+//
+// Frustum is the one piece of the cull chain with no oracle above it: the
+// occlusion BFS is checked against line-of-sight and the mesher against a
+// naive reference, but nothing checked the six planes themselves. It is
+// also where a wrong answer is least visible. Culling too much punches
+// holes in the world, which anyone would see; culling too little just
+// draws more than it needed to and reports a smaller cull ratio, which
+// looks like a scene that happens to be open.
+
+glm::mat4 view_proj_from(const glm::vec3& eye, const glm::vec3& forward,
+                         float zfar) {
+    return glm::perspective(glm::radians(70.0f), 16.0f / 9.0f, 0.1f, zfar) *
+           glm::lookAt(eye, eye + forward, glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
+// True when p lands inside the clip volume the projection defines: what
+// the GPU will do with the vertex, computed the long way. This is the
+// oracle, and it never touches the plane extraction under test.
+bool inside_clip_volume(const glm::mat4& vp, const glm::vec3& p) {
+    const glm::vec4 c = vp * glm::vec4(p, 1.0f);
+    return c.w > 0.0f &&
+           -c.w <= c.x && c.x <= c.w &&
+           -c.w <= c.y && c.y <= c.w &&
+           -c.w <= c.z && c.z <= c.w;
+}
+
+// The property the header states: "No false negatives." A box holding a
+// point the GPU would draw must never be culled. Randomized over cameras
+// and boxes rather than over hand-picked cases, because the failure this
+// guards against - one plane reading the wrong AABB corner - only shows up
+// on the side of the volume that plane bounds, and a hand-picked box tends
+// to sit in the middle of the screen where every plane agrees.
+void test_frustum_never_rejects_a_box_it_can_see() {
+    std::mt19937 rng(20260905);
+    std::uniform_real_distribution<float> pos(-200.0f, 200.0f);
+    std::uniform_real_distribution<float> extent(0.5f, 40.0f);
+    std::uniform_real_distribution<float> dir(-1.0f, 1.0f);
+
+    int visible_boxes = 0;
+    int false_negatives = 0;
+    for (int trial = 0; trial < 4000; ++trial) {
+        glm::vec3 fwd(dir(rng), dir(rng) * 0.5f, dir(rng));
+        if (glm::length(fwd) < 0.1f) continue;
+        fwd = glm::normalize(fwd);
+        const glm::vec3 eye(pos(rng), pos(rng) * 0.25f, pos(rng));
+        const glm::mat4 vp = view_proj_from(eye, fwd, 300.0f);
+        gfx::Frustum f;
+        f.from_view_proj(vp);
+
+        const glm::vec3 lo(pos(rng), pos(rng) * 0.25f, pos(rng));
+        const gfx::AABB box{lo,
+                            lo + glm::vec3(extent(rng), extent(rng), extent(rng))};
+
+        bool any_point_visible = false;
+        for (int c = 0; c < 8 && !any_point_visible; ++c) {
+            const glm::vec3 p((c & 1) ? box.max.x : box.min.x,
+                              (c & 2) ? box.max.y : box.min.y,
+                              (c & 4) ? box.max.z : box.min.z);
+            any_point_visible = inside_clip_volume(vp, p);
+        }
+        if (!any_point_visible) {
+            any_point_visible = inside_clip_volume(vp, (box.min + box.max) * 0.5f);
+        }
+        if (!any_point_visible) continue;
+
+        ++visible_boxes;
+        if (!f.intersects_aabb(box)) ++false_negatives;
+    }
+    // Counted rather than short-circuited: bailing on the first failure
+    // leaves visible_boxes low and fails the coverage check too, which
+    // reads as "the sweep was empty" rather than "the culler is wrong".
+    EXPECT(visible_boxes > 100, "the random sweep actually produced visible boxes");
+    EXPECT(false_negatives == 0, "no box containing a drawable point was culled");
+}
+
+// Each of the six planes has to be doing something on its own. Every box
+// here is outside exactly one plane and comfortably inside the other five,
+// so a plane that is missing, mis-signed, or a copy of its neighbour
+// leaves exactly one of these surviving and the rest still passing.
+void test_every_plane_culls_its_own_side() {
+    const glm::vec3 eye{0.0f, 0.0f, 0.0f};
+    gfx::Frustum f;
+    f.from_view_proj(view_proj_from(eye, {0.0f, 0.0f, -1.0f}, 100.0f));
+
+    auto box_at = [](glm::vec3 c, float r) {
+        return gfx::AABB{c - glm::vec3(r), c + glm::vec3(r)};
+    };
+    // 70 degrees vertical at 16:9, so at z = -50 the volume is ~70 units
+    // tall and ~124 wide: these sit far past one edge and inside the rest.
+    EXPECT(f.intersects_aabb(box_at({0.0f, 0.0f, -50.0f}, 1.0f)),
+           "a box straight ahead is kept");
+    EXPECT(!f.intersects_aabb(box_at({-200.0f, 0.0f, -50.0f}, 1.0f)),
+           "left plane culls a box off the left edge");
+    EXPECT(!f.intersects_aabb(box_at({200.0f, 0.0f, -50.0f}, 1.0f)),
+           "right plane culls a box off the right edge");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, -200.0f, -50.0f}, 1.0f)),
+           "bottom plane culls a box below the view");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 200.0f, -50.0f}, 1.0f)),
+           "top plane culls a box above the view");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 0.0f, -500.0f}, 1.0f)),
+           "far plane culls a box past the draw distance");
+    // Behind the camera is NOT an isolating case for the near plane: back
+    // there w < 0, so the side planes reject the box whatever the near
+    // plane says, and a mis-signed near plane passes this happily. It was
+    // the only case here at first and fault injection caught it. This box
+    // is in front of the camera and nearer than znear (0.1), which only
+    // the near plane can object to.
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 0.0f, -0.05f}, 0.02f)),
+           "near plane culls a box in front of it but nearer than znear");
+    EXPECT(f.intersects_aabb(box_at({0.0f, 0.0f, -0.05f}, 0.5f)),
+           "a box straddling the near plane is kept");
+    EXPECT(!f.intersects_aabb(box_at({0.0f, 0.0f, 50.0f}, 1.0f)),
+           "a box behind the camera is culled");
+}
+
+// Growing a box can only add points to it, so it can only add reasons to
+// keep it. A culler that answers "outside" for a box containing one that
+// answered "inside" is testing something other than containment - the
+// p-vertex selection reading the near corner instead of the far one, say.
+void test_growing_a_box_never_makes_it_invisible() {
+    std::mt19937 rng(778);
+    std::uniform_real_distribution<float> pos(-150.0f, 150.0f);
+    std::uniform_real_distribution<float> grow(0.1f, 30.0f);
+    gfx::Frustum f;
+    f.from_view_proj(view_proj_from({5.0f, 20.0f, 5.0f},
+                                    {0.3f, -0.2f, -1.0f}, 250.0f));
+
+    int shrank_into_view = 0;
+    for (int trial = 0; trial < 3000; ++trial) {
+        const glm::vec3 lo(pos(rng), pos(rng), pos(rng));
+        const gfx::AABB inner{lo,
+                              lo + glm::vec3(grow(rng), grow(rng), grow(rng))};
+        const float g = grow(rng);
+        const gfx::AABB outer{inner.min - glm::vec3(g), inner.max + glm::vec3(g)};
+        if (f.intersects_aabb(inner) && !f.intersects_aabb(outer)) {
+            ++shrank_into_view;
+        }
+    }
+    EXPECT(shrank_into_view == 0, "a box containing a visible box is visible");
+}
+
+// Not tested here: that from_view_proj normalizes its planes. It was, and
+// the test came out after fault injection - stubbing normalize_plane down
+// to `return p;` failed nothing, its own test included. Scaling a plane by
+// a positive constant cannot change the sign of dot(n, p) + d, and that
+// sign is all intersects_aabb looks at, so through the only thing Frustum
+// exposes a normalized plane and an unnormalized one are the same object.
+// The normalization is real work for a distance query nothing asks for
+// yet. A test that cannot fail is worse than no test: it reports coverage
+// it does not have.
+
 // ----- occlusion BFS --------------------------------------------------------
 
 gfx::Frustum frustum_from(const glm::vec3& eye, const glm::vec3& forward,
                           float zfar) {
     gfx::Frustum f;
-    const glm::mat4 proj = glm::perspective(glm::radians(70.0f),
-                                            16.0f / 9.0f, 0.1f, zfar);
-    const glm::mat4 view = glm::lookAt(eye, eye + forward,
-                                       glm::vec3(0.0f, 1.0f, 0.0f));
-    f.from_view_proj(proj * view);
+    f.from_view_proj(view_proj_from(eye, forward, zfar));
     return f;
 }
 
@@ -1365,6 +2090,22 @@ int main() {
     test_frame_stats_empty_is_safe();
     test_visibility_slab_blocks_vertical_only();
     test_visibility_wall_blocks_x_only();
+    test_section_visibility_matches_an_independent_flood_fill();
+    test_carving_air_only_ever_adds_sightlines();
+    test_height_at_is_deterministic_and_in_range();
+    test_the_seed_actually_reaches_the_noise();
+    test_neighbouring_chunks_agree_across_the_seam();
+    test_fill_chunk_puts_the_surface_where_height_at_says();
+    test_a_column_is_solid_all_the_way_down_without_caves();
+    test_caves_only_ever_remove();
+    test_surface_material_follows_altitude();
+    test_lakes_are_carved_below_the_waterline();
+    test_the_heightfield_has_no_cliffs();
+    test_trees_stand_on_the_ground_they_were_planted_on();
+    test_fill_chunk_is_reproducible_from_one_generator();
+    test_frustum_never_rejects_a_box_it_can_see();
+    test_every_plane_culls_its_own_side();
+    test_growing_a_box_never_makes_it_invisible();
     test_bfs_solid_chunk_blocks_sightline();
     test_bfs_never_culls_line_of_sight();
     test_atomic_write_creates_then_replaces();

@@ -7,9 +7,10 @@
 namespace world {
 namespace {
 
-// BFS frontier entry. Packed into one int rather than a struct so the
-// queue stays cache-friendly: propagation is the hot loop here and it
-// visits far more cells than the mesher does.
+// BFS frontier entry, 8 bytes: int16 coordinates and a byte of level,
+// rather than three ints and an int for 16. Propagation is the hot loop
+// here and visits far more cells than the mesher does, so twice as many
+// frontier entries per cache line is worth the casts at the push sites.
 struct Cell {
     std::int16_t x, y, z;
     std::uint8_t level;

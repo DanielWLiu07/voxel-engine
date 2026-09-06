@@ -220,6 +220,17 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME mesher_equivalence COMMAND mesher_fuzz_tests)
 
+  # Command-line parsing. Its own binary for the same reason as the fuzzer:
+  # it is pure string -> struct with no voxel or GL dependency at all, so
+  # it should fail on its own line rather than inside the world tests.
+  add_executable(cli_tests tests/test_cli_options.cpp src/core/cli_options.cpp)
+  target_include_directories(cli_tests PRIVATE src)
+  target_link_libraries(cli_tests PRIVATE glm::glm)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(cli_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME cli_options COMMAND cli_tests)
+
   # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
   # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
   add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)
