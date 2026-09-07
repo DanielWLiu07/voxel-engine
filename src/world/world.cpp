@@ -370,7 +370,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
             t_after_terrain - t0).count();
         propagate_light(fc.chunk, nlight, fc.light);
         fc.mesh_data = cells
-            ? build_prism_mesh(*cells, {&fc.light, &nlight})
+            ? build_prism_mesh(*cells, planes, {&fc.light, &nlight})
             : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
@@ -980,7 +980,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // tiling reads its columns back rather than regenerating them.
         fc.mesh_data = prisms
             ? build_prism_mesh(build_prism_chunk_from_blocks(fc.chunk, c, stamp),
-                               {&fc.light, &nlight})
+                               planes, {&fc.light, &nlight})
             : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
@@ -1090,7 +1090,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // the shape the player is actually looking at.
     auto mesh_data = prisms_
         ? build_prism_mesh(build_prism_chunk_from_blocks(slot.chunk, cc, slice()),
-                           {&slot.light, &nlight})
+                           planes, {&slot.light, &nlight})
         : build_chunk_mesh(mesher_kind_, slot.chunk, planes,
                            {&slot.light, &nlight});
     slot.meshed_with = mask;

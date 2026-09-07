@@ -128,7 +128,21 @@ void rasterize_to_chunk(const PrismChunk& pc, Chunk& out);
 
 // The mesh: for each cell, vertical runs of one block become one prism,
 // with polygon caps top and bottom and a wall per polygon edge.
+//
+// `neighbors` is the four boundary voxel layers of the adjacent chunks,
+// the same snapshot the cube mesher takes, and it is worth roughly a
+// quarter of the mesh. Interior walls are already 98% hidden by the cell
+// across them, so a chunk's OUTER walls are about 80% of the wall
+// geometry that survives - and without the neighbours every one of them
+// is emitted, buried in the next chunk's rock where no camera will ever
+// see it.
+//
+// Absent or not present means "unknown", which emits the wall. That is
+// the safe direction, and it is the same one the cube mesher takes:
+// guessing solid culls a face that might be visible, which is a hole in
+// the world, and guessing air costs a quad nobody sees.
 ChunkMeshData build_prism_mesh(const PrismChunk& pc,
+                               const NeighborPlanes& neighbors = {},
                                const LightSource& light = {});
 
 }  // namespace world

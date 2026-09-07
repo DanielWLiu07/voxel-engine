@@ -367,7 +367,9 @@ void push_quad(ChunkMeshData& out, const PrismVertex q[4], std::uint8_t normal,
 
 }  // namespace
 
-ChunkMeshData build_prism_mesh(const PrismChunk& pc, const LightSource& light) {
+ChunkMeshData build_prism_mesh(const PrismChunk& pc,
+                               const NeighborPlanes& neighbors,
+                               const LightSource& light) {
     ZoneScopedN("build_prism_mesh");
     const auto t0 = std::chrono::steady_clock::now();
 
@@ -377,6 +379,49 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc, const LightSource& light) {
 
     // Normal indices 2 and 3 are +Y and -Y in the packed table.
     constexpr std::uint8_t kUp = 2, kDown = 3;
+
+    // Whether the chunk next door hides a wall that sits on this chunk's
+    // own boundary.
+    //
+    // The neighbour is held as a voxel layer, not as cells, so this is a
+    // grid answer to a lattice question and it is deliberately biased:
+    // the wall is hidden only if EVERY voxel the segment touches is
+    // solid. One air voxel anywhere along it keeps the wall. A cell
+    // narrower than a voxel could still fall between two solid voxels and
+    // lose a wall it needed, and the artifact would be a gap thinner than
+    // a block; that is the residual, and it is the same order as the
+    // rasterisation error physics already carries.
+    //
+    // An edge with no cell across it is not necessarily a chunk boundary
+    // - it can also be an edge whose neighbouring cell was too thin to
+    // keep - so the boundary is identified from where the outward step
+    // actually lands, not from the missing index.
+    auto boundary_hides = [&](float ax, float az, float bx, float bz,
+                              float nx, float nz, int at_y) {
+        const float mx = (ax + bx) * 0.5f + nx * 0.01f;
+        const float mz = (az + bz) * 0.5f + nz * 0.01f;
+        const BoundaryPlane* plane = nullptr;
+        float t0 = 0.0f, t1 = 0.0f;
+        if (mx < 0.0f) {
+            plane = &neighbors.neg_x; t0 = std::min(az, bz); t1 = std::max(az, bz);
+        } else if (mx > static_cast<float>(kChunkSizeX)) {
+            plane = &neighbors.pos_x; t0 = std::min(az, bz); t1 = std::max(az, bz);
+        } else if (mz < 0.0f) {
+            plane = &neighbors.neg_z; t0 = std::min(ax, bx); t1 = std::max(ax, bx);
+        } else if (mz > static_cast<float>(kChunkSizeZ)) {
+            plane = &neighbors.pos_z; t0 = std::min(ax, bx); t1 = std::max(ax, bx);
+        } else {
+            return false;
+        }
+        if (!plane->present) return false;
+        const int lo = std::clamp(static_cast<int>(std::floor(t0)),
+                                  0, kChunkSizeX - 1);
+        const int hi = std::clamp(static_cast<int>(std::ceil(t1)) - 1,
+                                  0, kChunkSizeX - 1);
+        for (int t = lo; t <= hi; ++t)
+            if (!is_solid(plane->at(t, at_y))) return false;
+        return true;
+    };
 
     PrismVertex q[4];
     for (const auto& cell : pc.cells) {
@@ -483,8 +528,9 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc, const LightSource& light) {
                 int wy = y;
                 while (wy <= y1) {
                     auto hidden = [&](int yy) {
-                        return other != nullptr &&
-                               solid(other->blocks[static_cast<std::size_t>(yy)]);
+                        if (other != nullptr)
+                            return solid(other->blocks[static_cast<std::size_t>(yy)]);
+                        return boundary_hides(ax, az, bx, bz, dz / len, -dx / len, yy);
                     };
                     if (hidden(wy)) { ++wy; continue; }
                     int wy1 = wy;

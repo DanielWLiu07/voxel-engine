@@ -262,6 +262,105 @@ void test_one_prism_is_a_closed_surface() {
     }
 }
 
+void test_the_neighbouring_chunk_hides_the_outer_walls() {
+    // Interior walls are already 98% hidden by the cell across them, so a
+    // chunk's OUTER walls are most of the wall geometry that survives.
+    // Without the neighbour every one of them is emitted, buried in the
+    // next chunk's rock.
+    //
+    // Checked in both directions, because only one of them is safe to get
+    // wrong: a solid neighbour must remove walls, and an ABSENT one must
+    // not. Guessing solid where nothing is known culls a face that might
+    // be visible, which is a hole in the world.
+    world::TerrainGen4D gen(1337);
+    const auto s = slice_of(0.0f, 0.35f, 0.25f);
+    const auto pc = world::build_prism_chunk(gen, {1, 1}, s);
+
+    auto wall_quads = [](const world::ChunkMeshData& m) {
+        int walls = 0;
+        for (int q = 0; q * 4 + 3 < static_cast<int>(m.vertices.size()); ++q) {
+            const int n = m.vertices[4 * q].normal;
+            if (n != 2 && n != 3) ++walls;
+        }
+        return walls;
+    };
+
+    const int alone = wall_quads(world::build_prism_mesh(pc));
+
+    world::NeighborPlanes solid;
+    for (auto* p : {&solid.neg_x, &solid.pos_x, &solid.neg_z, &solid.pos_z}) {
+        p->present = true;
+        for (int y = 0; y < world::kChunkSizeY; ++y)
+            for (int t = 0; t < world::kChunkSizeX; ++t)
+                p->set(t, y, world::BlockId::Stone);
+    }
+    const int walled_in = wall_quads(world::build_prism_mesh(pc, solid));
+
+    world::NeighborPlanes empty;
+    for (auto* p : {&empty.neg_x, &empty.pos_x, &empty.neg_z, &empty.pos_z}) {
+        p->present = true;
+        for (int y = 0; y < world::kChunkSizeY; ++y)
+            for (int t = 0; t < world::kChunkSizeX; ++t)
+                p->set(t, y, world::BlockId::Air);
+    }
+    const int open_air = wall_quads(world::build_prism_mesh(pc, empty));
+
+    // The safety-critical half, and a uniform plane cannot see it: a wall
+    // segment spans several of the neighbour's voxels, and it may only be
+    // hidden if ALL of them are solid. Hiding on ANY of them opens a gap
+    // wherever the segment straddles the edge of the neighbour's rock.
+    //
+    // One column of air in an otherwise solid wall separates the rules,
+    // but only if the count is of walls that STRADDLE that column - walls
+    // lying wholly inside it survive either rule. The all-solid plane is
+    // the baseline, because a handful of walls are on neither chunk
+    // boundary and are counted the same way under both.
+    world::NeighborPlanes one_gap = solid;
+    for (auto* p : {&one_gap.neg_x, &one_gap.pos_x, &one_gap.neg_z, &one_gap.pos_z})
+        for (int y = 0; y < world::kChunkSizeY; ++y)
+            p->set(8, y, world::BlockId::Air);
+
+    auto straddling_walls = [](const world::ChunkMeshData& m) {
+        int found = 0;
+        const auto& v = m.vertices;
+        for (int q = 0; q * 4 + 3 < static_cast<int>(v.size()); ++q) {
+            const int n = v[4 * q].normal;
+            if (n == 2 || n == 3) continue;
+            bool on_x = true, on_z = true;
+            for (int i = 0; i < 4; ++i) {
+                if (v[4 * q + i].x != 0 && v[4 * q + i].x != 255) on_x = false;
+                if (v[4 * q + i].z != 0 && v[4 * q + i].z != 255) on_z = false;
+            }
+            if (!on_x && !on_z) continue;
+            float lo = 1e9f, hi = -1e9f;
+            for (int i = 0; i < 4; ++i) {
+                const float t = static_cast<float>(on_x ? v[4 * q + i].z
+                                                        : v[4 * q + i].x)
+                              * m.xz_scale;
+                lo = std::min(lo, t);
+                hi = std::max(hi, t);
+            }
+            if (lo < 8.0f - 1e-3f || hi > 9.0f + 1e-3f) ++found;
+        }
+        return found;
+    };
+    const auto gapped_mesh = world::build_prism_mesh(pc, one_gap);
+    const int gapped = wall_quads(gapped_mesh);
+    const int straddle_gapped = straddling_walls(gapped_mesh);
+    const int straddle_solid  =
+        straddling_walls(world::build_prism_mesh(pc, solid));
+
+    EXPECT(alone > 0, "the chunk has outer walls to cull");
+    EXPECT(gapped > walled_in,
+           "one air column in the neighbour brings some outer walls back");
+    EXPECT(straddle_gapped > straddle_solid,
+           "a wall is hidden only if EVERY voxel it spans is solid");
+    EXPECT(walled_in < alone, "a solid neighbour hides the outer walls");
+    EXPECT(open_air == alone, "an all-air neighbour hides nothing");
+    EXPECT(wall_quads(world::build_prism_mesh(pc, {})) == alone,
+           "and an absent neighbour is treated as air, not as rock");
+}
+
 void test_every_vertex_fits_the_packed_range() {
     // Positions are quantised into a byte pair covering [0, 16]. A vertex
     // outside that clamps silently, which shows up as geometry pinned to
@@ -346,6 +445,7 @@ int main() {
     test_the_tiling_covers_every_voxel_at_any_tilt();
     test_a_compound_cut_produces_shapes_a_cube_cannot();
     test_one_prism_is_a_closed_surface();
+    test_the_neighbouring_chunk_hides_the_outer_walls();
     test_every_vertex_fits_the_packed_range();
     test_winding_matches_the_normal_it_carries();
     test_a_cell_keeps_its_block_when_the_cut_turns();
