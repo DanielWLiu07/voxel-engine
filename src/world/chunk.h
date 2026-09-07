@@ -3,9 +3,29 @@
 #include "world/block.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace world {
+
+// Which chunk, in chunk units. Lives here rather than in world.h so a
+// mesher can name a chunk without pulling in the streaming world, its
+// thread pool and its GL types.
+struct ChunkCoord {
+    std::int32_t x;
+    std::int32_t z;
+    bool operator==(const ChunkCoord& o) const { return x == o.x && z == o.z; }
+};
+
+struct ChunkCoordHash {
+    std::size_t operator()(const ChunkCoord& c) const noexcept {
+        std::uint64_t ux = static_cast<std::uint32_t>(c.x);
+        std::uint64_t uz = static_cast<std::uint32_t>(c.z);
+        std::uint64_t h = (ux * 0x9E3779B97F4A7C15ull) ^ (uz + 0xBF58476D1CE4E5B9ull);
+        h ^= h >> 27; h *= 0x94D049BB133111EBull; h ^= h >> 31;
+        return static_cast<std::size_t>(h);
+    }
+};
 
 inline constexpr int kChunkSizeX = 16;
 inline constexpr int kChunkSizeZ = 16;

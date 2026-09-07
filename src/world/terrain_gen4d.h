@@ -159,19 +159,27 @@ public:
     // columns.
     void fill_column(float x4, float z4, float w4, Column4D& out) const;
 
-    // The column of the 4D lattice cell (i, k, l), sampled at the cell's
-    // centre.
+    // The column of the 4D lattice cell (i, k, l).
     //
-    // Sampling the CENTRE rather than a point of the slice is what makes
-    // a block's material independent of how the world is being looked at.
-    // A cell keeps its contents as the cut turns through it; only the
-    // shape it presents changes. Sample the slice instead and the same
-    // block quietly becomes a different one as you scroll, which is a
-    // world being re-rolled rather than a world being cut.
+    // Two decisions here, and both are load-bearing.
+    //
+    // It takes no Slice. That is what makes a block's material
+    // independent of how the world is being looked at: a cell keeps its
+    // contents as the cut turns through it, and only the shape it
+    // presents changes. Sample a point of the slice instead and the same
+    // block quietly becomes a different one as the player scrolls, which
+    // is a world being re-rolled rather than a world being cut.
+    //
+    // It samples the cell's LOW CORNER, not its centre, and that is not
+    // arbitrary either. The cube path samples the voxel column at integer
+    // (wx, wz) with w4 = w * kWScale, so corner sampling is what makes an
+    // untilted 4D cut reproduce the cube world EXACTLY - same seed, same
+    // terrain, block for block. Half a block of offset would give a world
+    // that looks right and matches nothing, and every comparison between
+    // the two paths would be measuring two different worlds.
     void fill_cell_column(int i, int k, int l, Column4D& out) const {
-        fill_column(static_cast<float>(i) + 0.5f,
-                    static_cast<float>(k) + 0.5f,
-                    static_cast<float>(l) + 0.5f, out);
+        fill_column(static_cast<float>(i), static_cast<float>(k),
+                    static_cast<float>(l), out);
     }
 
     // Fills `out` with the chunk at (chunk_x, chunk_z) on the given slice.

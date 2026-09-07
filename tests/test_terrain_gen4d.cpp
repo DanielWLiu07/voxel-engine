@@ -899,12 +899,13 @@ void test_a_cell_column_is_a_pure_function_of_the_cell() {
     EXPECT(a.top == b.top && a.guide_height == b.guide_height,
            "and so is everything the tree pass reads off it");
 
-    // The centre, not a corner. Off-by-half here would put every column
-    // of a 4D world on a cell boundary, where the field is shared with
-    // the neighbour and the tessellation is ambiguous.
-    world::TerrainGen4D::Column4D centre;
-    gen.fill_column(12.5f, -29.5f, 4.5f, centre);
-    EXPECT(a.blocks == centre.blocks, "the cell is sampled at its centre");
+    // The low corner, not the centre. The cube path samples a voxel
+    // column at integer (wx, wz), so corner sampling is what lets an
+    // untilted 4D cut reproduce the cube world block for block - checked
+    // end to end in prism_tests, which is where both halves meet.
+    world::TerrainGen4D::Column4D corner;
+    gen.fill_column(12.0f, -30.0f, 4.0f, corner);
+    EXPECT(a.blocks == corner.blocks, "the cell is sampled at its low corner");
 
     // And neighbouring cells along w are different worlds' worth of
     // different, or the fourth axis is decorative.

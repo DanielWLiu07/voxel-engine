@@ -29,12 +29,6 @@
 
 namespace world {
 
-struct ChunkCoord {
-    std::int32_t x;
-    std::int32_t z;
-    bool operator==(const ChunkCoord& o) const { return x == o.x && z == o.z; }
-};
-
 // A chunk, plus which slice of the fourth dimension it belongs to.
 //
 // Edits belong to the w they were made at. Without that, an edit made at
@@ -61,16 +55,6 @@ struct SliceCoord {
     ChunkCoord c{};
     std::int32_t w = 0;
     bool operator==(const SliceCoord& o) const { return c == o.c && w == o.w; }
-};
-
-struct ChunkCoordHash {
-    std::size_t operator()(const ChunkCoord& c) const noexcept {
-        std::uint64_t ux = static_cast<std::uint32_t>(c.x);
-        std::uint64_t uz = static_cast<std::uint32_t>(c.z);
-        std::uint64_t h = (ux * 0x9E3779B97F4A7C15ull) ^ (uz + 0xBF58476D1CE4E5B9ull);
-        h ^= h >> 27; h *= 0x94D049BB133111EBull; h ^= h >> 31;
-        return static_cast<std::size_t>(h);
-    }
 };
 
 struct SliceCoordHash {

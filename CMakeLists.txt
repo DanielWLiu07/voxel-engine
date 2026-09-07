@@ -122,6 +122,7 @@ add_executable(voxel_engine
   src/world/chunk_light.cpp
   src/world/chunk_mesh.cpp
   src/world/chunk_serialize.cpp
+  src/world/prism_mesh.cpp
   src/world/section_visibility.cpp
   src/world/terrain_gen.cpp
   src/world/terrain_gen4d.cpp
@@ -177,6 +178,7 @@ if(VOXEL_BUILD_TESTS)
     src/world/chunk_light.cpp
     src/world/chunk_mesh.cpp
     src/world/chunk_serialize.cpp
+    src/world/prism_mesh.cpp
     src/world/world_io.cpp
     src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
@@ -318,6 +320,34 @@ if(VOXEL_BUILD_BENCH)
 
   # What 4D Miner's cross-section look would cost, in geometry rather
   # than in opinion. Pure math: no GL, no engine, no world.
+  # The prism mesher: a chunk meshed as the cross-section of a 4D world.
+  # Its own binary for the same reason mesher_fuzz_tests is - the
+  # properties it pins (a closed surface, a tiling that matches what
+  # physics rasterises) are its own oracle.
+  add_executable(prism_tests
+    tests/test_prism_mesh.cpp
+    src/world/prism_mesh.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_light.cpp
+    src/world/terrain_gen.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+    src/gfx/mesh.cpp
+  )
+  target_include_directories(prism_tests PRIVATE src)
+  target_link_libraries(prism_tests PRIVATE glm::glm fastnoise glad)
+  if(APPLE)
+    target_link_libraries(prism_tests PRIVATE
+      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
+    )
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(prism_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Wno-unused-parameter
+    )
+  endif()
+  add_test(NAME prism_mesh COMMAND prism_tests)
+
   add_executable(hyperslice_tests tests/test_hyperslice.cpp
                                   src/world/noise4d.cpp
                                   src/world/terrain_gen4d.cpp
