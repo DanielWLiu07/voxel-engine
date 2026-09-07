@@ -197,7 +197,50 @@ if(VOXEL_BUILD_TESTS)
     target_link_libraries(voxel_tests PRIVATE
       ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
     )
+    # These two are ctest tests, not benchmarks, and they used to live in
+  # the VOXEL_BUILD_BENCH block below because that is where the
+  # hyperslice binary they grew up beside lives. That put them out of
+  # reach of scripts/run_sanitizers.sh, which configures with
+  # -DVOXEL_BUILD_BENCH=OFF - so the one path in this repo that writes
+  # geometry at computed indices into fixed-size arrays was the one
+  # path ASan never saw.
+  # The prism mesher: a chunk meshed as the cross-section of a 4D world.
+  # Its own binary for the same reason mesher_fuzz_tests is - the
+  # properties it pins (a closed surface, a tiling that matches what
+  # physics rasterises) are its own oracle.
+  add_executable(prism_tests
+    tests/test_prism_mesh.cpp
+    src/world/prism_mesh.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_light.cpp
+    src/world/terrain_gen.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+    src/gfx/mesh.cpp
+  )
+  target_include_directories(prism_tests PRIVATE src)
+  target_link_libraries(prism_tests PRIVATE glm::glm fastnoise glad)
+  if(APPLE)
+    target_link_libraries(prism_tests PRIVATE
+      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
+    )
   endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(prism_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Wno-unused-parameter
+    )
+  endif()
+  add_test(NAME prism_mesh COMMAND prism_tests)
+
+  add_executable(hyperslice_tests tests/test_hyperslice.cpp
+                                  src/world/noise4d.cpp
+                                  src/world/terrain_gen4d.cpp
+                                  src/world/terrain_gen.cpp)
+  target_include_directories(hyperslice_tests PRIVATE src)
+  target_link_libraries(hyperslice_tests PRIVATE fastnoise)
+  add_test(NAME hyperslice COMMAND hyperslice_tests)
+
+endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(voxel_tests PRIVATE
       -Wall -Wextra -Wpedantic -Wno-unused-parameter
@@ -320,42 +363,6 @@ if(VOXEL_BUILD_BENCH)
 
   # What 4D Miner's cross-section look would cost, in geometry rather
   # than in opinion. Pure math: no GL, no engine, no world.
-  # The prism mesher: a chunk meshed as the cross-section of a 4D world.
-  # Its own binary for the same reason mesher_fuzz_tests is - the
-  # properties it pins (a closed surface, a tiling that matches what
-  # physics rasterises) are its own oracle.
-  add_executable(prism_tests
-    tests/test_prism_mesh.cpp
-    src/world/prism_mesh.cpp
-    src/world/chunk_mesh.cpp
-    src/world/chunk_light.cpp
-    src/world/terrain_gen.cpp
-    src/world/terrain_gen4d.cpp
-    src/world/noise4d.cpp
-    src/gfx/mesh.cpp
-  )
-  target_include_directories(prism_tests PRIVATE src)
-  target_link_libraries(prism_tests PRIVATE glm::glm fastnoise glad)
-  if(APPLE)
-    target_link_libraries(prism_tests PRIVATE
-      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
-    )
-  endif()
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(prism_tests PRIVATE
-      -Wall -Wextra -Wpedantic -Wno-unused-parameter
-    )
-  endif()
-  add_test(NAME prism_mesh COMMAND prism_tests)
-
-  add_executable(hyperslice_tests tests/test_hyperslice.cpp
-                                  src/world/noise4d.cpp
-                                  src/world/terrain_gen4d.cpp
-                                  src/world/terrain_gen.cpp)
-  target_include_directories(hyperslice_tests PRIVATE src)
-  target_link_libraries(hyperslice_tests PRIVATE fastnoise)
-  add_test(NAME hyperslice COMMAND hyperslice_tests)
-
   add_executable(hyperslice src/bench/hyperslice.cpp src/world/noise4d.cpp
                             src/world/terrain_gen4d.cpp
                             src/world/terrain_gen.cpp
