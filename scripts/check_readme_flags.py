@@ -37,7 +37,7 @@ FOREIGN = {"--build", "--test-dir", "--output-on-failure", "--target"}
 # --help, which is a small contract but the one this check rests on: a
 # binary that ignores --help and runs its normal job instead would make
 # this script slow, or worse, pass by printing something flag-shaped.
-BINARIES = ("voxel_engine", "slice4d")
+BINARIES = ("voxel_engine", "slice4d", "hyperslice")
 
 
 def main():

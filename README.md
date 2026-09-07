@@ -146,6 +146,36 @@ of the first rotation. Reproduce with:
         --pose-at 20,100,20,-115,-22 --time-of-day 0.62 --screenshot-after 150
     # ... and again with --slice-tilt-xw 0.15 instead
 
+### What a block's cross-section actually is
+
+Looking straight down at the 4D lattice, coloured by which cell each
+point of the slice falls into. The boundaries between cells are the block
+edges a player sees.
+
+<table>
+<tr>
+<td><img src="docs/media/cells_flat.jpg" width="250"><br><sub><b>flat cut</b> - squares</sub></td>
+<td><img src="docs/media/cells_zw.jpg" width="250"><br><sub><b>ZW only</b> (the wheel) - still rectangles</sub></td>
+<td><img src="docs/media/cells_both.jpg" width="250"><br><sub><b>both planes</b> - triangles, pentagons, hexagons</sub></td>
+</tr>
+</table>
+
+    ./build/hyperslice --map 0.4 0.4        # writes the third one
+
+This is the geometry behind "the blocks seem to change their shape", and
+it settles a question that is easy to get wrong. A cut turned in ONE
+plane stays square-on to the two axes it does not turn in, so every cell
+is four-sided however far it turns - drawing those blocks as cubes is
+**exact**, not an approximation. Only a compound turn produces the
+five- and six-sided cells, which extruded in y are the hexagonal pillars
+a 4D slicer is known for.
+
+The algebra says the same thing and says why it is cheap: `to_4d` is
+linear in (sx, sz) and passes y straight through, so the six constraints
+placing a point inside a cell never involve y. A cell's preimage is a
+convex polygon extruded through a unit interval - a prism - and six
+half-planes bound at most six sides.
+
 The cut turns in **two planes**, which is how 4D Miner does it and what
 one plane cannot cover: the wheel and vertical mouse turn it in ZW,
 horizontal mouse in XW. Hold `M` or the middle mouse button and the mouse

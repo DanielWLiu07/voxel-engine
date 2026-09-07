@@ -326,7 +326,10 @@ if(VOXEL_BUILD_BENCH)
   target_link_libraries(hyperslice_tests PRIVATE fastnoise)
   add_test(NAME hyperslice COMMAND hyperslice_tests)
 
-  add_executable(hyperslice src/bench/hyperslice.cpp)
+  add_executable(hyperslice src/bench/hyperslice.cpp src/world/noise4d.cpp
+                            src/world/terrain_gen4d.cpp)
+  target_include_directories(hyperslice PRIVATE src)
+  target_link_libraries(hyperslice PRIVATE stb fastnoise)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(hyperslice PRIVATE -Wall -Wextra -Wpedantic -O2)
   endif()

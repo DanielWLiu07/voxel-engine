@@ -18,10 +18,16 @@
 // hyperplane and counts what comes out.
 
 #include <algorithm>
+#include "world/hyperslice.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 namespace {
@@ -99,7 +105,72 @@ std::vector<V3> cross_section(const Tesseract& t, V4 n, float d) {
 
 }  // namespace
 
+// Draws the cell tiling itself, so the shapes can be looked at rather
+// than counted. Each pixel is coloured by which 4D lattice cell the slice
+// point belongs to, so the boundaries between cells ARE the block edges a
+// player would see looking straight down.
+int write_map(float theta, float phi, const char* path) {
+    constexpr int kPx = 900;        // pixels
+    constexpr float kSpan = 18.0f;  // blocks across
+    world::TerrainGen4D::Slice s{};
+    s.theta = theta;
+    s.phi = phi;
+    const auto b = world::SliceBasis::from(s);
+
+    std::vector<unsigned char> img(static_cast<std::size_t>(kPx) * kPx * 3);
+    for (int py = 0; py < kPx; ++py) {
+        for (int px = 0; px < kPx; ++px) {
+            const float sx = (static_cast<float>(px) / kPx) * kSpan;
+            const float sz = (static_cast<float>(py) / kPx) * kSpan;
+            const int i = static_cast<int>(std::floor(
+                b.x4_sx * sx + b.x4_sz * sz + b.x4_c));
+            const int k = static_cast<int>(std::floor(
+                b.z4_sx * sx + b.z4_sz * sz + b.z4_c));
+            const int l = static_cast<int>(std::floor(
+                b.w4_sx * sx + b.w4_sz * sz + b.w4_c));
+            // A stable colour per cell, so neighbouring cells differ and
+            // the tiling is visible as shapes rather than as a gradient.
+            std::uint32_t h = static_cast<std::uint32_t>(i * 73856093)
+                            ^ static_cast<std::uint32_t>(k * 19349663)
+                            ^ static_cast<std::uint32_t>(l * 83492791);
+            h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+            const std::size_t at = (static_cast<std::size_t>(py) * kPx + px) * 3;
+            img[at + 0] = static_cast<unsigned char>(110 + (h & 0x7f));
+            img[at + 1] = static_cast<unsigned char>(110 + ((h >> 8) & 0x7f));
+            img[at + 2] = static_cast<unsigned char>(110 + ((h >> 16) & 0x7f));
+        }
+    }
+    if (!stbi_write_png(path, kPx, kPx, 3, img.data(), kPx * 3)) {
+        std::fprintf(stderr, "could not write %s\n", path);
+        return 1;
+    }
+    std::printf("wrote %s (%d px, %.0f blocks across, theta=%.2f phi=%.2f)\n",
+                path, kPx, kSpan, theta, phi);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::string(argv[1]) == "--help" ||
+                     std::string(argv[1]) == "-h")) {
+        std::printf(
+            "hyperslice - what shape a 4D block presents to a tilted cut\n\n"
+            "  hyperslice [theta] [phi]\n"
+            "      sweep a hyperplane through one tesseract and report the\n"
+            "      cross-sections it produces (default 0.15 0.0)\n\n"
+            "  hyperslice --map [theta] [phi] [out.png]\n"
+            "      draw the cell tiling looking straight down, coloured by\n"
+            "      cell, so the block shapes can be seen rather than counted\n"
+            "      (default docs/media/cells.png)\n\n"
+            "  hyperslice --help\n");
+        return 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--map") {
+        const float th = (argc > 2) ? std::strtof(argv[2], nullptr) : 0.4f;
+        const float ph = (argc > 3) ? std::strtof(argv[3], nullptr) : 0.4f;
+        const char* out = (argc > 4) ? argv[4] : "docs/media/cells.png";
+        return write_map(th, ph, out);
+    }
+
     const float theta = (argc > 1) ? std::strtof(argv[1], nullptr) : 0.15f;
     const float phi   = (argc > 2) ? std::strtof(argv[2], nullptr) : 0.0f;
 
