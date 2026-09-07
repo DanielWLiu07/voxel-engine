@@ -273,6 +273,14 @@ On a **tilted** cut, yes, and unavoidably: the slice's own z axis leans
 into w, so a step forward is a step along the fourth axis whether you
 asked for one or not.
 
+![Walking on a tilted cut with the cut held still: the terrain reworks as you go, because the slice's own z axis leans into w](docs/media/slice_walk.gif)
+
+    CLIP_TIME_OF_DAY=0.68 scripts/capture_clip.sh walk
+
+Nothing in that clip changes but the camera's position. The cut is held;
+`CLIP_WALK_TILT=0` gives the control, where the same walk changes nothing
+about the world at all.
+
 | cut (ZW, XW) | player-w per block walked | blocks per 4D cell crossed |
 |---|---|---|
 | flat | 0 | never |

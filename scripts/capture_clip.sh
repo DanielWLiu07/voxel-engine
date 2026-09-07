@@ -20,12 +20,18 @@ MODE=${1:-orbit}
 # The tilt clip converges the whole window between frames rather than
 # riding a streaming budget, so each frame costs about a second. 90 is a
 # three-second loop at 30 fps and takes a couple of minutes to capture.
-if [ "${1:-orbit}" = "tilt" ]; then FRAMES=${2:-90}; else FRAMES=${2:-360}; fi
+# The tilt and walk clips converge the whole window between frames rather
+# than riding a streaming budget, so each frame costs about a second.
+case "${1:-orbit}" in
+  tilt|walk) FRAMES=${2:-90} ;;
+  *)         FRAMES=${2:-360} ;;
+esac
 case "$MODE" in
   orbit) OUT=${3:-docs/media/orbit.gif} ;;
   cycle) OUT=${3:-docs/media/daycycle.gif} ;;
   tilt)  OUT=${3:-docs/media/slice_tilt.gif} ;;
-  *) echo "usage: $0 orbit|cycle|tilt [frames] [out.gif]" >&2; exit 1 ;;
+  walk)  OUT=${3:-docs/media/slice_walk.gif} ;;
+  *) echo "usage: $0 orbit|cycle|tilt|walk [frames] [out.gif]" >&2; exit 1 ;;
 esac
 # CLIP_ORBIT_CENTER="x,z[,look_y]" recenters the orbit (the lake clip uses
 # 288,-400,30); unset keeps the spawn triple-point circle.
@@ -56,6 +62,18 @@ rm -rf capture
 # triple point, which is where the biome variety is, and a rotation is
 # only legible against terrain that has something in it.
 POSE_ARGS=()
+if [ "$MODE" = "walk" ]; then
+  # The complement of the tilt clip: the cut is HELD and the camera walks.
+  # On a flat cut that shows only parallax; the tilt is what makes it 4D
+  # travel, because the slice's own z axis leans into w. Tilted by default
+  # for that reason - CLIP_WALK_TILT=0 gives the control, where the same
+  # walk changes nothing about the world.
+  POSE_ARGS=(--pose-at "${CLIP_WALK_POSE:-40,60,-70,-150,-12}"
+             --radius "${CLIP_WALK_RADIUS:-10}"
+             --slice-prisms
+             --slice-tilt "${CLIP_WALK_TILT:-0.45}"
+             --slice-tilt-xw "${CLIP_WALK_TILT_XW:-0.45}")
+fi
 if [ "$MODE" = "tilt" ]; then
   # An elevated mid-distance vantage, not a close one. The cut turns
   # about the VIEWER, so the ground underfoot is nearly still whatever the
