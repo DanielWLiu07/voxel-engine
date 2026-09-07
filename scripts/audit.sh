@@ -121,6 +121,18 @@ grep_step "4D slice step + tilt" \
 grep_step "4D slice step + tilt, cross-section blocks" \
   "changed=1 returned=1.*tilt_changed=1 tilt_returned=1 notch=1 edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1 tilt_survives_travel=1 xw=1 edit_survives_inflight=1 reversible_away=1 edit_rotates=1 settled=1 edit_ns_stable=1" \
   ./build/voxel_engine --verify-4d --slice-prisms --radius 6
+# The same GPU validation at a COMPOUND tilt, which is not the same test.
+#
+# --validate on its own runs the default cut, and the default cut is flat -
+# where every cell is a whole square, every edge is a whole block, and the
+# vertex quantisation cannot round an edge into a different direction.
+# Turning both planes is what produces sub-step edges, and running this
+# for the first time flagged 610 backwards-facing triangles on a world
+# that looked correct and that every unit test passed.
+grep_step "GPU mesh validation, cross-section blocks at a tilt" \
+  "bad_triangles=0 .* ok" \
+  ./build/voxel_engine --slice-prisms --slice-tilt 0.45 --slice-tilt-xw 0.45 \
+                       --validate --radius 6
 # The prism mesher against the cube mesher on the same terrain. Gated on
 # the flat cut only, and on a ratio of COUNTS: an untilted 4D cut tiles
 # into exactly the voxel grid, so 256 cells per chunk is a property of the

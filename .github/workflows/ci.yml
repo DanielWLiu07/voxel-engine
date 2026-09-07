@@ -100,6 +100,18 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a ./build/voxel_engine --verify-4d --slice-prisms --radius 4
 
+      - name: GPU mesh validation, cross-section blocks at a tilt
+        # --validate on its own runs the DEFAULT cut, and the default cut
+        # is flat - where every cell is a whole square and the vertex
+        # quantisation cannot round an edge into a different direction.
+        # Turning both planes is what produces sub-step edges, and running
+        # this for the first time flagged 610 backwards-facing triangles
+        # on a world that looked correct and that every unit test passed.
+        if: runner.os == 'Linux'
+        run: >
+          xvfb-run -a ./build/voxel_engine --slice-prisms
+          --slice-tilt 0.45 --slice-tilt-xw 0.45 --validate --radius 4
+
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
         # is the part that quietly stops being true. This checks the slice
