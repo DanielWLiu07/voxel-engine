@@ -34,6 +34,24 @@ lattice box is convex, so a **box** of cells presents one convex polygon
 at any angle. Greedy meshing works on a tilted cut; it just has to sweep
 in lattice space. **4.97x -> 3.05x** the cube path's quad count.
 
+### The world is made of 4D objects, not 3D ones placed in a slice
+
+![Rock formations on a tilted cut: 4-balls and 4-boxes cut by the hyperplane](docs/media/structures.jpg)
+
+A boulder here is a **4-ball**, so the slice cuts a sphere out of it whose
+radius is `sqrt(r^2 - d^2)` along w - travel and it swells, peaks, and
+vanishes. A monolith is a **4-box**, so rotating turns its footprint from
+a rectangle into a hexagon exactly as one block's does, at eight times the
+size. Structure blocks cover 0.74% of the ground at `w = 0` and 1.4% a few
+slabs along, measured rather than estimated.
+
+They are defined in 4D and evaluated per column, which is why they work
+identically on the cube path and the cross-section path without either
+mesher knowing they exist.
+
+    ./build/voxel_engine --slice-prisms --slice-tilt 0.3 --slice-tilt-xw 0.3 \
+        --pose-at 30,50,10,-140,-8 --time-of-day 0.7 --screenshot-after 130
+
 The other point is that every performance number below is checkable rather
 than claimed. The greedy mesher is fuzzed face-for-face against a naive
 reference, the occlusion culler has to render byte-identical PNGs or the
