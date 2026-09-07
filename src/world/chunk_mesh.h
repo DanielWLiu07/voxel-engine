@@ -126,6 +126,12 @@ struct LightSource {
     const NeighborLight* neighbors = nullptr;
 };
 
+// Light at a chunk-local cell, following the neighbour faces when the
+// coordinate leaves the chunk, and full bright when there is no light
+// data at all. Shared with the prism mesher so both bake light by the
+// same rule: sample the cell OUTSIDE the face, which is the lit one.
+std::uint8_t sample_light(const LightSource& ls, int x, int y, int z);
+
 // One quad per visible face. The slow baseline.
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
                                      const NeighborPlanes& neighbors = {},

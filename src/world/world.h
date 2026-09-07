@@ -7,6 +7,7 @@
 #include "world/chunk.h"
 #include "world/chunk_light.h"
 #include "world/chunk_mesh.h"
+#include "world/prism_mesh.h"
 #include "world/section_visibility.h"
 #include "world/terrain_gen.h"
 #include "world/terrain_gen4d.h"
@@ -675,6 +676,23 @@ public:
     float mesh_xz_scale() const { return mesh_xz_scale_; }
     float mesh_uv_scale() const { return mesh_uv_scale_; }
 
+    // Draw blocks as the cross-section of the 4D lattice rather than as
+    // cubes. Requires a 4D generator; a 3D world has no lattice to cut
+    // and set_prism_meshing is ignored there.
+    //
+    // World-wide and not per chunk, because the mesh encoding rides in
+    // u_model and one uniform serves the whole terrain pass. That is also
+    // why every mesh built while it is on has to come from the prism
+    // path, including chunks restored from disk: a cube mesh drawn with
+    // the prism model matrix would be crushed into a sixteenth of its
+    // chunk.
+    void set_prism_meshing(bool on) {
+        prisms_ = on && slice_gen_ != nullptr;
+        mesh_xz_scale_ = prisms_ ? gfx::kSubUnitXZScale : 1.0f;
+        mesh_uv_scale_ = prisms_ ? gfx::kSubUnitUVScale : 1.0f;
+    }
+    bool prism_meshing() const { return prisms_; }
+
     std::size_t chunk_count() const { return chunks_.size(); }
     // Chunks still owed a re-mesh because a neighbour landed after them.
     // A world with a nonzero count draws correctly but is still carrying
@@ -833,6 +851,7 @@ private:
                         const std::function<void(const glm::mat4&)>& set_model) const;
 
     MesherKind mesher_kind_ = MesherKind::Greedy;
+    bool  prisms_ = false;
     float mesh_xz_scale_ = 1.0f;
     float mesh_uv_scale_ = 1.0f;
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;

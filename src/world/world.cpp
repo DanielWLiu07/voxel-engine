@@ -300,6 +300,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
+    const bool prisms = prisms_;
     // Captured by value, like `gen` and `kind`: the player can step along
     // w while jobs are in flight, and a worker reading slice_w_ off the
     // member would then generate a chunk for a slice nobody asked for.
@@ -317,7 +318,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     }
     const bool had_edits = !edits.empty();
     if (had_edits) ++stream_replayed_;
-    pool.submit([this, &terrain, c, gen, stamp, mask, kind, slice_gen, slice,
+    pool.submit([this, &terrain, c, gen, stamp, mask, kind, prisms, slice_gen, slice,
                  had_edits, edits = std::move(edits),
                  planes = std::move(planes),
                  nlight = std::move(nlight)]() {
@@ -335,24 +336,42 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.slice_x_shift = slice.x_shift;
         // The one branch that makes the engine four-dimensional. Null in
         // the 3D engine, which is every existing path.
-        if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
-        else           terrain.fill_chunk(c.x, c.z, fc.chunk);
+        //
+        // In prism mode the cells come first and the voxel grid is
+        // rasterised FROM them, which is the ordering that keeps what the
+        // player collides with equal to what they can see. The other way
+        // round - voxels first, cells derived - would put the two a
+        // rounding apart at every tilt.
+        std::optional<PrismChunk> cells;
+        if (prisms && slice_gen) {
+            cells = build_prism_chunk(*slice_gen, c, slice);
+            rasterize_to_chunk(*cells, fc.chunk);
+        } else if (slice_gen) {
+            slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
+        } else {
+            terrain.fill_chunk(c.x, c.z, fc.chunk);
+        }
         // Replay the player's edits over the fresh terrain, in the order
         // they were made.
         for (const VoxelEdit& e : edits) {
             const std::uint32_t i = e.index;
             const int y  = static_cast<int>(i / (kChunkSizeZ * kChunkSizeX));
             const int rem = static_cast<int>(i % (kChunkSizeZ * kChunkSizeX));
-            fc.chunk.set(rem % kChunkSizeX, y, rem / kChunkSizeX,
-                         static_cast<BlockId>(e.block));
+            const int lx = rem % kChunkSizeX, lz = rem / kChunkSizeX;
+            fc.chunk.set(lx, y, lz, static_cast<BlockId>(e.block));
+            if (cells) {
+                apply_voxel_edit_to_cells(*cells, lx, y, lz,
+                                          static_cast<BlockId>(e.block));
+            }
         }
         fc.preserve_on_evict = had_edits;
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
             t_after_terrain - t0).count();
         propagate_light(fc.chunk, nlight, fc.light);
-        fc.mesh_data = build_chunk_mesh(kind, fc.chunk, planes,
-                                        {&fc.light, &nlight});
+        fc.mesh_data = cells
+            ? build_prism_mesh(*cells, {&fc.light, &nlight})
+            : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms = std::chrono::duration<double, std::milli>(
@@ -927,8 +946,10 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
+    const bool prisms = prisms_;
     NeighborLight nlight = neighbor_light_for(c);
     pool.submit([this, c, gen, seq, stamp, preserve_on_evict, from_disk, mask, kind,
+                 prisms,
                  planes = std::move(planes),
                  nlight = std::move(nlight),
                  chunk = std::move(chunk)]() mutable {
@@ -955,8 +976,12 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
         propagate_light(fc.chunk, nlight, fc.light);
-        fc.mesh_data  = build_chunk_mesh(kind, fc.chunk, planes,
-                                         {&fc.light, &nlight});
+        // A restored chunk IS the authority on its own contents, so the
+        // tiling reads its columns back rather than regenerating them.
+        fc.mesh_data = prisms
+            ? build_prism_mesh(build_prism_chunk_from_blocks(fc.chunk, c, stamp),
+                               {&fc.light, &nlight})
+            : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms  = std::chrono::duration<double, std::milli>(
@@ -1058,8 +1083,16 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // the whole edit cost, and propagation is 0.04 ms/chunk, so it does not
     // move the block-edit latency figure meaningfully.
     propagate_light(slot.chunk, nlight, slot.light);
-    auto mesh_data = build_chunk_mesh(mesher_kind_, slot.chunk, planes,
-                                      {&slot.light, &nlight});
+    // The edited chunk is the source of truth for its own blocks, so the
+    // prism path re-tiles from it rather than from the generator. That is
+    // a whole re-tile per edit - a few milliseconds against the cube
+    // path's fraction of one - which is the price of the edit landing on
+    // the shape the player is actually looking at.
+    auto mesh_data = prisms_
+        ? build_prism_mesh(build_prism_chunk_from_blocks(slot.chunk, cc, slice()),
+                           {&slot.light, &nlight})
+        : build_chunk_mesh(mesher_kind_, slot.chunk, planes,
+                           {&slot.light, &nlight});
     slot.meshed_with = mask;
     // Edits can shift quads across section boundaries (placing a block on
     // top of a tall column, breaking the lowest solid in a section), so
@@ -1278,18 +1311,73 @@ bool occlusion_bfs(
     return true;
 }
 
+// Pulls a mesh vertex back into blocks. x and z are stored in mesh units,
+// which are blocks for the cube path and sixteenths of one for the prism
+// path; y is blocks either way.
+static glm::vec3 vertex_blocks(const gfx::VertexPacked& v, float xz) {
+    return {static_cast<float>(v.x) * xz, static_cast<float>(v.y),
+            static_cast<float>(v.z) * xz};
+}
+
+// What the GPU actually holds, checked against what the mesher promised.
+//
+// The prism path gets a different question asked of it, and that is not a
+// weaker gate, it is the right one. "Every face is backed by a solid
+// voxel on the correct side" is a statement about a voxel mesh: it
+// assumes faces lie on integer planes and that the cell behind one is a
+// voxel. Neither is true of a cross-section, whose faces sit wherever the
+// hyperplane cut them and whose backing is a lattice cell the chunk grid
+// only approximates.
+//
+// So a prism mesh is checked on the two things that ARE true of it and
+// that a bug would break: every vertex inside the chunk footprint the
+// byte encoding can address, and every triangle winding the way the
+// normal it carries points. The second is the one that matters - a quad
+// wound against its normal is culled from the side it should be seen from
+// and solid from the side it should not, which reads as random holes in
+// the world. It is checked here on the bytes the GPU has, not on what the
+// CPU thinks it sent.
 int World::debug_validate_gpu_meshes() const {
     std::vector<gfx::VertexPacked> verts;
     std::vector<std::uint32_t> idx;
     int bad = 0;
+    const float xz = mesh_xz_scale_;
     for (const auto& kv : chunks_) {
         const ChunkSlot& slot = *kv.second;
         if (!slot.any_section_has_mesh) continue;
         slot.chunk_mesh.debug_read_back(verts, idx);
+        if (prisms_) {
+            for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+                const glm::vec3 p0 = vertex_blocks(verts[idx[t]], xz);
+                const glm::vec3 p1 = vertex_blocks(verts[idx[t + 1]], xz);
+                const glm::vec3 p2 = vertex_blocks(verts[idx[t + 2]], xz);
+                const glm::vec3 n  = verts[idx[t]].nrm();
+                const glm::vec3 g  = glm::cross(p1 - p0, p2 - p0);
+                // A fan's odd filler triangle has zero area on purpose and
+                // rasterises nothing; it carries no winding to check.
+                const bool degenerate = glm::length(g) < 1e-6f;
+                const bool wound = degenerate ||
+                                   glm::dot(glm::normalize(g), n) > 0.5f;
+                const bool in_range =
+                    p0.x >= -0.01f && p0.x <= kChunkSizeX + 0.01f &&
+                    p0.z >= -0.01f && p0.z <= kChunkSizeZ + 0.01f &&
+                    p0.y >= 0.0f   && p0.y <= kChunkSizeY;
+                if (wound && in_range) continue;
+                ++bad;
+                if (bad <= 16) {
+                    std::printf("[validate] chunk(%+d,%+d) tri %zu %s: "
+                                "(%.2f,%.2f,%.2f) n=(%.2f,%.2f,%.2f)\n",
+                                slot.coord.x, slot.coord.z, t / 3,
+                                wound ? "OUT OF RANGE" : "BACKWARDS",
+                                p0.x, p0.y, p0.z, n.x, n.y, n.z);
+                }
+            }
+            continue;
+        }
         for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
-            const glm::vec3 p0 = verts[idx[t]].pos();
-            const glm::vec3 p1 = verts[idx[t + 1]].pos();
-            const glm::vec3 p2 = verts[idx[t + 2]].pos();
+            const glm::vec3 p0 = vertex_blocks(verts[idx[t]], xz);
+            const glm::vec3 p1 = vertex_blocks(verts[idx[t + 1]], xz);
+            const glm::vec3 p2 = vertex_blocks(verts[idx[t + 2]], xz);
             const glm::vec3 n = verts[idx[t]].nrm();
             const int d = (std::abs(n.x) > 0.5f) ? 0 : (std::abs(n.y) > 0.5f ? 1 : 2);
             const bool coplanar = (p0[d] == p1[d]) && (p1[d] == p2[d]);

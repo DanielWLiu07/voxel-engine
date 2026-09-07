@@ -463,6 +463,15 @@ int main(int argc, char** argv) {
             "   F2 shows w on the HUD.  Starting at w=%d.\n"
             "  ========================================================\n\n",
             opt.slice_w);
+        if (opt.slice_prisms) {
+            wrld.set_prism_meshing(true);
+            std::printf(
+                "[world] prism meshing: blocks are drawn as the shape a 4D\n"
+                "        cell presents to your cut, not as cubes. Turn BOTH\n"
+                "        planes (wheel, and horizontal mouse with M held) to\n"
+                "        see it - one plane alone presents four-sided cells\n"
+                "        at every angle, where a cube is already exact.\n");
+        }
     }
 
     core::ThreadPool pool(worker_count);

@@ -133,6 +133,18 @@ struct CliOptions {
     // geometry: turn the cut a little for every block travelled and the
     // world genuinely is a different slice by the time you arrive.
     float warp_walk = 0.0f;
+    // --slice-prisms: draw blocks as the cross-section of the 4D lattice
+    // instead of as cubes. Implies --4d.
+    //
+    // Off by default and that is deliberate, not caution. A cut turned in
+    // ONE plane presents four-sided cells at every angle, so with the
+    // wheel alone a cube is not an approximation of the cross-section, it
+    // IS the cross-section - and the cube path draws it with the greedy
+    // mesher the whole repo is built around. The prism path earns its
+    // cost only when both planes are turned at once, which is where a
+    // cell becomes a pentagon or a hexagon and a cube starts to be a
+    // different shape rather than the same one.
+    bool slice_prisms = false;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;

@@ -11,6 +11,19 @@ namespace world {
 
 namespace {
 
+// The polygon's centroid, as a voxel of the chunk. Used wherever a cell
+// has to be matched to voxel storage - block light is flood-filled on the
+// grid, not on the lattice. The centroid is interior to a convex polygon
+// with area, so it lands in the cell it came from.
+inline void centroid_voxel(const SlicePolygon& p, int& vx, int& vz) {
+    float cx = 0.0f, cz = 0.0f;
+    for (int v = 0; v < p.count; ++v) { cx += p.x[v]; cz += p.z[v]; }
+    cx /= static_cast<float>(p.count);
+    cz /= static_cast<float>(p.count);
+    vx = std::clamp(static_cast<int>(cx), 0, kChunkSizeX - 1);
+    vz = std::clamp(static_cast<int>(cz), 0, kChunkSizeZ - 1);
+}
+
 // A lattice cell key. Three ints, hashed the same way the chunk map hashes
 // two - cells are dense in a small box so the mixing matters more than the
 // spread.
@@ -44,9 +57,13 @@ inline bool solid(std::uint8_t b) { return is_solid(static_cast<BlockId>(b)); }
 
 }  // namespace
 
-PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
-                             TerrainGen4D::Slice s) {
-    ZoneScopedN("build_prism_chunk");
+namespace {
+
+// The tiling alone: which cells, what shape, who is next to whom. Both
+// column sources share it, and neither can change it - a cell's shape is
+// a fact about the cut, not about what is inside the cell.
+PrismChunk tile_footprint(ChunkCoord coord, TerrainGen4D::Slice s) {
+    ZoneScopedN("tile_footprint");
     PrismChunk pc;
     pc.coord = coord;
     pc.slice = s;
@@ -77,18 +94,16 @@ PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
             cell.poly.z[v] = p.z[v] - z0;
         }
         cell.across.fill(-1);
+        {
+            int vx = 0, vz = 0;
+            centroid_voxel(cell.poly, vx, vz);
+            cell.vx = static_cast<std::int16_t>(vx);
+            cell.vz = static_cast<std::int16_t>(vz);
+        }
         index.emplace(CellKey{i, k, l},
                       static_cast<std::int32_t>(pc.cells.size()));
         pc.cells.push_back(cell);
     });
-
-    // The column each cell holds. Sampled at the cell's centre in 4D, so
-    // it does not depend on where the slice happens to cut through it.
-    TerrainGen4D::Column4D col;
-    for (auto& cell : pc.cells) {
-        gen.fill_cell_column(cell.i, cell.k, cell.l, col);
-        cell.blocks = col.blocks;
-    }
 
     // Who is across each edge.
     //
@@ -118,6 +133,50 @@ PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
         }
     }
     return pc;
+}
+
+
+}  // namespace
+
+PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
+                             TerrainGen4D::Slice s) {
+    ZoneScopedN("build_prism_chunk");
+    PrismChunk pc = tile_footprint(coord, s);
+    TerrainGen4D::Column4D col;
+    for (auto& cell : pc.cells) {
+        gen.fill_cell_column(cell.i, cell.k, cell.l, col);
+        cell.blocks = col.blocks;
+    }
+    return pc;
+}
+
+PrismChunk build_prism_chunk_from_blocks(const Chunk& chunk, ChunkCoord coord,
+                                         TerrainGen4D::Slice s) {
+    ZoneScopedN("build_prism_chunk_from_blocks");
+    PrismChunk pc = tile_footprint(coord, s);
+    for (auto& cell : pc.cells) {
+        int vx = 0, vz = 0;
+        centroid_voxel(cell.poly, vx, vz);
+        for (int y = 0; y < kChunkSizeY; ++y) {
+            cell.blocks[static_cast<std::size_t>(y)] =
+                static_cast<std::uint8_t>(chunk.get(vx, y, vz));
+        }
+    }
+    return pc;
+}
+
+void apply_voxel_edit_to_cells(PrismChunk& pc, int x, int y, int z, BlockId b) {
+    if (y < 0 || y >= kChunkSizeY) return;
+    const SliceBasis basis = SliceBasis::from(pc.slice);
+    const float x0 = static_cast<float>(pc.coord.x * kChunkSizeX);
+    const float z0 = static_cast<float>(pc.coord.z * kChunkSizeZ);
+    const CellKey want = cell_at(basis, x0 + static_cast<float>(x) + 0.5f,
+                                 z0 + static_cast<float>(z) + 0.5f);
+    for (auto& cell : pc.cells) {
+        if (cell.i != want.i || cell.k != want.k || cell.l != want.l) continue;
+        cell.blocks[static_cast<std::size_t>(y)] = static_cast<std::uint8_t>(b);
+        return;
+    }
 }
 
 void rasterize_to_chunk(const PrismChunk& pc, Chunk& out) {
@@ -169,14 +228,14 @@ struct PrismVertex {
 };
 
 void push_quad(ChunkMeshData& out, const PrismVertex q[4], std::uint8_t normal,
-               std::uint8_t id, std::uint8_t light) {
+               std::uint8_t id, std::uint8_t light, std::uint8_t ao) {
     for (int i = 0; i < 4; ++i) {
         gfx::VertexPacked p;
         p.x = gfx::quantize_sub_unit_xz(q[i].x);
         p.z = gfx::quantize_sub_unit_xz(q[i].z);
         p.y = static_cast<std::uint16_t>(q[i].y);
         p.normal = normal;
-        p.ao = 3;
+        p.ao = ao;
         p.u = gfx::quantize_sub_unit_uv(q[i].u);
         p.v = gfx::quantize_sub_unit_uv(q[i].v);
         p.block_id = id;
@@ -195,7 +254,6 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc, const LightSource& light) {
     ChunkMeshData out;
     out.xz_scale = gfx::kSubUnitXZScale;
     out.uv_scale = gfx::kSubUnitUVScale;
-    (void)light;  // block light arrives in its own change
 
     // Normal indices 2 and 3 are +Y and -Y in the packed table.
     constexpr std::uint8_t kUp = 2, kDown = 3;
@@ -220,26 +278,69 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc, const LightSource& light) {
             const bool cap_bottom = (y == 0) ||
                 !solid(cell.blocks[static_cast<std::size_t>(y - 1)]);
 
+            // Light is read from the cell OUTSIDE the face, which is the
+            // lit one - the same rule the cube mesher uses. A face lit
+            // from its own solid interior would read black everywhere.
+            //
+            // Per face rather than per vertex. The greedy mesher samples
+            // each corner of a merged rectangle so a long quad running
+            // out of a cave gradates; a prism cap is one cell across, so
+            // there is nothing for four samples to gradate between and
+            // the extra three lookups would buy nothing.
+            const int vx = cell.vx, vz = cell.vz;
+
+            // Ambient occlusion, per face and derived from the tiling
+            // rather than from a 3x3 voxel stencil.
+            //
+            // The voxel formula asks which of the eight cells around a
+            // corner are solid; a cell here has between three and six
+            // neighbours and no corners in common with a grid, so that
+            // formula has nothing to index. What carries over is the
+            // meaning: a face is darker the more enclosed it is. Counting
+            // how many of the cell's own neighbours are solid at the
+            // face's own height is the same statement in the tiling's
+            // terms, and it darkens the inside of a pit, a crevice and a
+            // cave mouth exactly where the voxel version does.
+            auto enclosure_ao = [&](int at_y) {
+                int walls = 0;
+                for (int e = 0; e < n; ++e) {
+                    const std::int32_t o = cell.across[e];
+                    if (o < 0) continue;
+                    if (solid(pc.cells[static_cast<std::size_t>(o)]
+                                  .blocks[static_cast<std::size_t>(at_y)])) ++walls;
+                }
+                if (walls >= n)     return 0;
+                if (walls >= n - 1) return 1;
+                if (walls >= n - 2) return 2;
+                return 3;
+            };
+
             if (cap_top) {
                 const float top_y = static_cast<float>(y1 + 1);
+                const std::uint8_t lt = sample_light(light, vx, y1 + 1, vz);
+                const std::uint8_t ao = static_cast<std::uint8_t>(
+                    enclosure_ao(std::min(y1 + 1, kChunkSizeY - 1)));
                 fan_quads(n, [&](int a, int b, int c, int d) {
                     const int src[4] = {n - 1 - a, n - 1 - b, n - 1 - c, n - 1 - d};
                     for (int v = 0; v < 4; ++v) {
                         q[v] = {cell.poly.x[src[v]], top_y, cell.poly.z[src[v]],
                                 cell.poly.x[src[v]], cell.poly.z[src[v]]};
                     }
-                    push_quad(out, q, kUp, id, kMaxLight);
+                    push_quad(out, q, kUp, id, lt, ao);
                 });
             }
             if (cap_bottom) {
                 const float bot_y = static_cast<float>(y);
+                const std::uint8_t lt = sample_light(light, vx, y - 1, vz);
+                const std::uint8_t ao = static_cast<std::uint8_t>(
+                    enclosure_ao(std::max(y - 1, 0)));
                 fan_quads(n, [&](int a, int b, int c, int d) {
                     const int src[4] = {a, b, c, d};
                     for (int v = 0; v < 4; ++v) {
                         q[v] = {cell.poly.x[src[v]], bot_y, cell.poly.z[src[v]],
                                 cell.poly.x[src[v]], cell.poly.z[src[v]]};
                     }
-                    push_quad(out, q, kDown, id, kMaxLight);
+                    push_quad(out, q, kDown, id, lt, ao);
                 });
             }
 
@@ -270,11 +371,21 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc, const LightSource& light) {
                     while (wy1 + 1 <= y1 && !hidden(wy1 + 1)) ++wy1;
                     const float lo = static_cast<float>(wy);
                     const float hi = static_cast<float>(wy1 + 1);
+                    // The air is on the other side of the wall, so that
+                    // is where the light is. With no cell across (the
+                    // chunk boundary) fall back to this cell's own
+                    // column, which is the neighbour's light one block
+                    // away and the best guess available without holding
+                    // the neighbouring chunk.
+                    const int lx = other ? other->vx : vx;
+                    const int lz = other ? other->vz : vz;
+                    const std::uint8_t lt =
+                        sample_light(light, lx, (wy + wy1) / 2, lz);
                     q[0] = {ax, lo, az, 0.0f,  lo};
                     q[1] = {ax, hi, az, 0.0f,  hi};
                     q[2] = {bx, hi, bz, len,   hi};
                     q[3] = {bx, lo, bz, len,   lo};
-                    push_quad(out, q, nrm, id, kMaxLight);
+                    push_quad(out, q, nrm, id, lt, 3);
                     wy = wy1 + 1;
                 }
             }

@@ -63,6 +63,14 @@ struct PrismCell {
     // solid would cull a wall that might be visible, which is a hole in
     // the world; guessing air costs a wall nobody sees.
     std::array<std::int32_t, SlicePolygon::kMaxVerts> across{};
+    // The voxel this cell's centroid falls in, chunk-local.
+    //
+    // Only used to read per-voxel data that is indexed by the grid rather
+    // than by the lattice - block light, which is flood-filled on the
+    // rasterised chunk. A cell thinner than a voxel shares its
+    // neighbour's light, which is a shading approximation of at most one
+    // block and never a geometric one.
+    std::int16_t vx = 0, vz = 0;
 };
 
 struct PrismChunk {
@@ -78,6 +86,33 @@ struct PrismChunk {
 // one holds. Pure CPU, no GL, safe on a worker.
 PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
                              TerrainGen4D::Slice s);
+
+// The same tiling, with the columns read out of a Chunk instead of
+// generated.
+//
+// Needed because not every chunk comes from the generator: one restored
+// from disk, or one the player has just edited, IS the authority on its
+// own contents and asking the generator would throw that away. Reading
+// them back is lossy in one direction only - a cell too thin to contain
+// any voxel centre has no exact source, so it takes the nearest one -
+// which is the same approximation rasterize_to_chunk makes going the
+// other way, and it is bounded by one block.
+//
+// The alternative was to mesh those chunks with the cube mesher, and that
+// does not work at all: the mesh scale is a property of the whole world's
+// draw call, so one cube mesh in a prism world draws crushed into a
+// sixteenth of its chunk.
+PrismChunk build_prism_chunk_from_blocks(const Chunk& chunk, ChunkCoord coord,
+                                         TerrainGen4D::Slice s);
+
+// Pushes a voxel edit into the cell that contains that voxel's centre, so
+// the drawn prisms agree with the chunk the edit was applied to.
+//
+// Editing a voxel therefore edits a whole 4D block, which is the right
+// behaviour rather than a compromise: what the player is looking at IS
+// the cell, and breaking part of one would leave a shape the lattice
+// cannot express.
+void apply_voxel_edit_to_cells(PrismChunk& pc, int x, int y, int z, BlockId b);
 
 // Writes the cell world into an ordinary Chunk by asking, for each voxel,
 // which cell contains its centre.
