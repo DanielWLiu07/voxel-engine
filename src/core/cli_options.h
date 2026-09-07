@@ -141,6 +141,15 @@ struct CliOptions {
     // from a 4D game, and it is reachable without lying about the
     // geometry: turn the cut a little for every block travelled and the
     // world genuinely is a different slice by the time you arrive.
+    //
+    // It is worth being blunt that the memory is wrong. 4D Miner does not
+    // warp as you walk either - its wiki says the slice stays the same
+    // hyperplane and the change comes from rotating. So this is not
+    // catching up to it, it is offering something neither engine does,
+    // which is why it is off by default.
+    //
+    // R is radians per block: forward/back leans the cut in ZW, strafing
+    // leans it in XW, and both are signed so walking back unwinds them.
     float warp_walk = 0.0f;
     // --slice-prisms: draw blocks as the cross-section of the 4D lattice
     // instead of as cubes. Implies --4d.

@@ -263,23 +263,33 @@ turns the world instead of the camera. One plane alone leaves an axis of
 4D orientation unreachable - you can lean the world away from you but
 never sideways, and the row you turn about never moves at all.
 
-### Does walking around move you through 4D?
+### Does walking around morph the world?
 
-On a flat cut, no - and that is not a limitation, it is what a hyperplane
-is. The slice is `w = constant`, so every point of it sits at the same w
-and walking reveals more of the same cross-section.
+**No, at any tilt - and that is not a limitation, it is what a hyperplane
+is.** Your slice is fixed. Walking moves you *within* it, so terrain
+already in view stays exactly as it is and terrain coming into view is
+ordinary new terrain, indistinguishable from walking in a 3D world. The
+engine makes this structural rather than incidental: staleness is a
+function of the chunk and the slice only, so walking cannot mark a single
+chunk stale and therefore cannot rebuild anything.
 
-On a **tilted** cut, yes, and unavoidably: the slice's own z axis leans
-into w, so a step forward is a step along the fourth axis whether you
-asked for one or not.
+4D Miner is the same. Its wiki: *"the world itself doesn't change when
+you walk around - your 3D hyperplane slice stays the same ... the
+illusion of change occurs when you rotate your slice."* Rotation is the
+control that morphs, in both.
 
-![Walking on a tilted cut with the cut held still: the terrain reworks as you go, because the slice's own z axis leans into w](docs/media/slice_walk.gif)
+![Walking on a tilted cut with the cut held still: terrain slides past, it does not rework - which is the control for the rotation clip above](docs/media/slice_walk.gif)
 
     CLIP_TIME_OF_DAY=0.68 scripts/capture_clip.sh walk
 
-Nothing in that clip changes but the camera's position. The cut is held;
-`CLIP_WALK_TILT=0` gives the control, where the same walk changes nothing
-about the world at all.
+That clip is the **control**, and it is here to be unimpressive. Nothing
+in it changes but the camera's position, and the world behaves like any
+voxel world. Put it beside a rotation and the difference is the whole
+point.
+
+What *is* true about walking a tilted cut is narrower and easy to
+oversell - an earlier version of this section did. Your w coordinate does
+change, because the slice's own z axis leans into w:
 
 | cut (ZW, XW) | player-w per block walked | blocks per 4D cell crossed |
 |---|---|---|
@@ -289,19 +299,20 @@ about the world at all.
 | 0.45, 0.45 | 0.089 | 2.3 |
 | 0.90, 0.70 | 0.275 | 1.3 |
 
-At a 0.45 rad tilt, walking one chunk (16 blocks) carries you 1.4 units
-along w - further than three and a half seconds of holding the travel
-key. That is why the tilt, not the travel key, is the control that makes
-the world feel four-dimensional, and it is pinned as a test: on a flat
-cut walking the whole chunk must never leave the w cell you started in,
-and on a tilted one it must leave within a few blocks - bounded from
-above, because "eventually" would pass on a cut so nearly flat that
-nothing the player does reads as 4D.
+Real, and pinned as a test - on a flat cut walking the whole chunk must
+never leave the w cell you started in, on a tilted one it must leave
+within a few blocks. But it has **no visual consequence**, because the
+axis it moves you along is the one you are already standing in. Reading
+that table as "the world reworks as you walk" is reading it wrong, and
+the sentence that used to sit under it did exactly that.
 
-What does NOT happen in either case is the world warping *while* you
-walk. The cut is fixed; you move within it. `--warp-walk R` turns the cut
-as you move and gives you that anyway, off by default and honest about
-being a feel rather than the geometry.
+`--warp-walk R` turns the cut as you move and gives you the warping
+anyway - R radians per block, forward/back leaning the cut in ZW and
+strafing leaning it in XW, both signed so walking back unwinds them. Off
+by default, because it is not what either engine does; it is a feel, not
+the geometry.
+
+    ./build/voxel_engine --slice-prisms --warp-walk 0.015
 
 That distinction is the whole design, and it took a wrong turn to find.
 The first version only **translated** along w, so every slice was the

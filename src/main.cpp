@@ -455,14 +455,19 @@ int main(int argc, char** argv) {
             "   HOLD E / Q     travel along w, the 4th axis\n"
             "   SCROLL WHEEL   rotate your 3D slice through 4D\n"
             "\n"
-            "   WASD moves you within your slice. On a FLAT cut that\n"
-            "   changes nothing about the world - you see more of the\n"
-            "   same cross-section. On a TILTED cut it is 4D travel:\n"
-            "   your slice's own z axis leans into w, so every block\n"
-            "   walked carries you along the fourth axis too. At a\n"
-            "   0.45 rad tilt that is one 4D cell every 2.3 blocks.\n"
+            "   WASD does NOT morph the world, at any tilt. Your slice\n"
+            "   is a fixed hyperplane and walking moves you WITHIN it,\n"
+            "   so what you can already see stays exactly as it is and\n"
+            "   what comes into view is ordinary new terrain. 4D Miner\n"
+            "   is the same; --warp-walk R turns the cut as you move if\n"
+            "   you want walking to warp anyway.\n"
             "\n"
-            "   The other two controls change the world on purpose:\n"
+            "   (On a tilted cut your w coordinate does change as you\n"
+            "   walk - one 4D cell every 2.3 blocks at 0.45 rad - but\n"
+            "   that has no visual consequence, because the hyperplane\n"
+            "   it moves you along is the one you are already in.)\n"
+            "\n"
+            "   These two are what change the world:\n"
             "\n"
             "   E/Q slide you along w - the world becomes a different\n"
             "   but equally ordinary place, and Q brings it back exactly.\n"
@@ -950,11 +955,33 @@ int main(int argc, char** argv) {
         if (opt.warp_walk > 0.0f && wrld.is_4d() && !capture.scripted_camera()) {
             static glm::vec3 warp_last = cam.position();
             const glm::vec3 now = cam.position();
-            const float moved = std::hypot(now.x - warp_last.x,
-                                           now.z - warp_last.z);
+            const float dx = now.x - warp_last.x;
+            const float dz = now.z - warp_last.z;
             warp_last = now;
-            if (moved > 0.0f) {
-                wrld.rotate_slice(opt.warp_walk * moved, now.z);
+            // BOTH planes, split by which way you moved: walking forward
+            // and back leans the cut in ZW, strafing leans it in XW.
+            //
+            // It used to be hypot(dx, dz) into ZW alone, which had the
+            // same gap the scroll wheel had before XW existed - one plane
+            // is reachable and the other is not, and a cut turned in one
+            // plane presents four-sided cells at every angle. So no
+            // amount of walking could ever make a block anything but a
+            // box, which is precisely the thing this flag exists to show.
+            //
+            // Signed rather than by distance travelled, so it is
+            // reversible: walk back the way you came and the cut unwinds
+            // to where it was. An unsigned magnitude turned the world
+            // further whichever way you moved, so there was no way to
+            // undo an accidental warp except to scroll it out by hand.
+            const float yaw = glm::radians(cam.yaw());
+            const float fx = std::cos(yaw), fz = std::sin(yaw);
+            const float forward = dx * fx + dz * fz;
+            const float strafe  = dx * -fz + dz * fx;
+            if (forward != 0.0f) {
+                wrld.rotate_slice(opt.warp_walk * forward, now.z);
+            }
+            if (strafe != 0.0f) {
+                wrld.rotate_slice_xw(opt.warp_walk * strafe, now.x);
             }
         }
 
