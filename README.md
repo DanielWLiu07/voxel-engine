@@ -2,14 +2,43 @@
 
 [![CI](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielWLiu07/voxel-engine/actions/workflows/ci.yml)
 
-A desktop voxel engine in C++20 and OpenGL 4.1 Core, written solo in three
-weeks. The engine is the workload; the point is that every performance
-number below is checkable rather than claimed. The greedy mesher is fuzzed
-face-for-face against a naive reference, the occlusion culler has to render
-byte-identical PNGs or the audit fails, `--validate` reads meshes back off
-the GPU and checks each triangle against the voxel data, and CI fails the
-build if the merge ratio or the world's mesh footprint regresses in either
-direction. Numbers are from an Apple M4.
+A desktop voxel engine in C++20 and OpenGL 4.1 Core, written solo. The
+world is **four-dimensional**, and what you walk around in is a 3D
+cross-section of it that you can rotate.
+
+![Rotating the 3D slice through a 4D world: the camera never moves, only the cut](docs/media/slice_tilt.gif)
+
+The camera is locked in that clip. Nothing moves but the hyperplane your
+slice is cut on, and the landscape reworks itself because you are seeing a
+different cross-section of the same fixed 4D world.
+
+Blocks are drawn as the polygon their 4D cell actually presents, not as
+cubes:
+
+<table>
+<tr>
+<td><img src="docs/media/blocks_cube.jpg" width="380"><br><sub><b>cubes</b> - every corner a right angle</sub></td>
+<td><img src="docs/media/blocks_prism.jpg" width="380"><br><sub><b>cross-sections</b> - the same blocks, cut at the angle you look through</sub></td>
+</tr>
+</table>
+
+That distinction turns out to have a result in it. The mesher's own
+comments said the cross-section geometry could not be greedy-meshed -
+"neighbouring cells present their own polygons at their own angles" - and
+that is true of the polygons and false of the conclusion. The preimage of
+a convex set under a linear map is convex, `to_4d` is linear, and a
+lattice box is convex, so a **box** of cells presents one convex polygon
+at any angle. Greedy meshing works on a tilted cut; it just has to sweep
+in lattice space. **4.97x -> 3.05x** the cube path's quad count.
+
+The other point is that every performance number below is checkable rather
+than claimed. The greedy mesher is fuzzed face-for-face against a naive
+reference, the occlusion culler has to render byte-identical PNGs or the
+audit fails, `--validate` reads meshes back off the GPU and checks each
+triangle, a multi-frame capture has to be a pure function of its pose, and
+CI fails the build if the merge ratio or the world's mesh footprint
+regresses in either direction. Sixteen audit steps. Numbers are from an
+Apple M4.
 
 ![Sunset over the biome triple point: desert ridges, forest valley, snow field](docs/media/vista_sunset.jpg)
 
