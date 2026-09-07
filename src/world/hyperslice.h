@@ -43,14 +43,30 @@ namespace world {
 // cross-section a prism rather than a general polytope, and it is why
 // vertical runs of blocks merge exactly.
 struct SlicePolygon {
-    // Six half-planes can produce at most six vertices; the extra slot
-    // lets the clipper carry an intermediate result without a branch.
-    static constexpr int kMaxVerts = 8;
+    // Ten, and the arithmetic matters because the clipper truncates
+    // SILENTLY when it runs out of room - it would drop vertices and
+    // hand back a polygon that is simply the wrong shape.
+    //
+    // A cell or a box is bounded by six lattice half-planes, and the
+    // patch square adds four more. The intersection of a convex region
+    // bounded by six lines with a rectangle therefore has at most ten
+    // sides. This was 8, which was the count for the lattice alone: it
+    // held for single cells because a unit cell can only reach one
+    // corner of a 16-wide patch, and it stops holding the moment a
+    // merged BOX spans enough of the patch to touch two edges at once.
+    // Two spare slots on top, so the clipper's intermediate result never
+    // has to be reasoned about.
+    static constexpr int kMaxVerts = 12;
     std::array<float, kMaxVerts> x{};
     std::array<float, kMaxVerts> z{};
     int count = 0;
 
     bool empty() const { return count < 3; }
+
+    // The bound above, as an assertion the tests can make. Ten sides is
+    // the ceiling for anything this file produces; anything more means
+    // the clipper was handed something that is not a lattice region.
+    static constexpr int kMaxSides = 10;
 };
 
 // The three linear forms that carry a slice point into the noise lattice.
@@ -111,6 +127,51 @@ inline void clip_half_plane(SlicePolygon& p, float a, float b, float c) {
 // is unbounded whenever the slice is parallel to one of the cell's faces,
 // which happens for every cell at theta = phi = 0 and for a whole family
 // of them at any axis-aligned angle.
+// The polygon a BOX of lattice cells presents - [i0, i1] x [k0, k1] at
+// w slab l, inclusive - clipped to the patch.
+//
+// This is what makes greedy meshing work on a tilted cut, and the reason
+// is one line of algebra: the preimage of a convex set under a linear map
+// is convex. to_4d is linear, and a lattice box is convex, so the region
+// a box presents to the slice is a convex polygon - always, at any angle,
+// however many cells it spans. It fan-triangulates exactly like a single
+// cell's polygon and it is still bounded by six half-planes, so it still
+// has at most six sides.
+//
+// The prism mesher's own comments used to say caps could not be merged,
+// because "neighbouring cells present their own polygons at their own
+// angles". True of the polygons and false of the conclusion: two cells
+// that share a lattice face present two polygons that share an edge, and
+// their union is the preimage of the two-cell box. Merging just has to
+// happen in LATTICE space rather than in slice space, where the mask is
+// rectangular and the ordinary greedy sweep applies unchanged.
+//
+// At a flat cut the lattice IS the voxel grid, so this reduces to the
+// engine's existing greedy mesher exactly.
+inline SlicePolygon box_polygon(int i0, int i1, int k0, int k1, int l,
+                                const SliceBasis& b,
+                                float x0, float z0, float span) {
+    SlicePolygon p;
+    p.count = 4;
+    p.x = {x0, x0 + span, x0 + span, x0, 0, 0, 0, 0};
+    p.z = {z0, z0, z0 + span, z0 + span, 0, 0, 0, 0};
+
+    const float lo[3] = {static_cast<float>(i0), static_cast<float>(k0),
+                         static_cast<float>(l)};
+    const float hi[3] = {static_cast<float>(i1) + 1.0f,
+                         static_cast<float>(k1) + 1.0f,
+                         static_cast<float>(l) + 1.0f};
+    const float ax[3] = {b.x4_sx, b.z4_sx, b.w4_sx};
+    const float az[3] = {b.x4_sz, b.z4_sz, b.w4_sz};
+    const float ac[3] = {b.x4_c,  b.z4_c,  b.w4_c};
+    for (int axis = 0; axis < 3; ++axis) {
+        detail::clip_half_plane(p, -ax[axis], -az[axis], ac[axis] - lo[axis]);
+        detail::clip_half_plane(p,  ax[axis],  az[axis], hi[axis] - ac[axis]);
+        if (p.empty()) return p;
+    }
+    return p;
+}
+
 inline SlicePolygon cell_polygon(int i, int k, int l, const SliceBasis& b,
                                  float x0, float z0, float span) {
     SlicePolygon p;

@@ -236,6 +236,88 @@ void test_walking_on_a_tilted_cut_is_travel_along_w() {
     }
 }
 
+
+void test_a_box_of_cells_presents_a_convex_polygon() {
+    // The result the prism mesher's merge rests on, and the one its own
+    // comments used to deny: a lattice BOX presents a convex polygon to
+    // the slice, at any angle and however many cells it spans. The
+    // preimage of a convex set under a linear map is convex; to_4d is
+    // linear; a box is convex. That is the whole proof, and this is it
+    // measured.
+    //
+    // If it failed, greedy merging on a tilted cut would produce
+    // non-convex faces and the fan triangulation would fold them inside
+    // out - which is exactly the shape of bug that reads as random holes.
+    int checked = 0, nonconvex = 0, too_many_sides = 0;
+    for (const auto s : {world::TerrainGen4D::Slice{},
+                         world::TerrainGen4D::Slice{0.0f, 0.45f, 0.0f, 0.45f, 0.0f},
+                         world::TerrainGen4D::Slice{2.0f, 0.9f, 3.0f, -0.7f, -1.0f}}) {
+        const auto b = world::SliceBasis::from(s);
+        for (int i0 = -3; i0 <= 3; ++i0)
+            for (int span_i = 0; span_i <= 4; ++span_i)
+                for (int k0 = -3; k0 <= 3; ++k0)
+                    for (int span_k = 0; span_k <= 4; ++span_k)
+                        for (int l = -3; l <= 3; ++l) {
+                            const auto p = world::box_polygon(
+                                i0, i0 + span_i, k0, k0 + span_k, l, b,
+                                0.0f, 0.0f, 16.0f);
+                            if (p.empty()) continue;
+                            ++checked;
+                            if (p.count > world::SlicePolygon::kMaxSides)
+                                ++too_many_sides;
+                            // Convex: every cross product of consecutive
+                            // edges has the same sign.
+                            int pos = 0, neg = 0;
+                            for (int v = 0; v < p.count; ++v) {
+                                const int a = (v + 1) % p.count;
+                                const int c = (v + 2) % p.count;
+                                const float ux = p.x[a] - p.x[v], uz = p.z[a] - p.z[v];
+                                const float vx = p.x[c] - p.x[a], vz = p.z[c] - p.z[a];
+                                const float cross = ux * vz - uz * vx;
+                                if (cross >  1e-5f) ++pos;
+                                if (cross < -1e-5f) ++neg;
+                            }
+                            if (pos > 0 && neg > 0) ++nonconvex;
+                        }
+    }
+    EXPECT(checked > 2000, "the sweep found boxes that meet the patch");
+    EXPECT(nonconvex == 0, "a box of cells always presents a convex polygon");
+    EXPECT(too_many_sides == 0,
+           "and never more than ten sides - six lattice half-planes plus "
+           "the four of the patch it is clipped to");
+}
+
+void test_a_one_cell_box_is_the_cell() {
+    // box_polygon generalises cell_polygon, so the degenerate box has to
+    // agree with it - otherwise the merged path and the unmerged path
+    // draw different worlds wherever a run happens to be length one.
+    //
+    // Compared before ownership, because that is the one thing
+    // cell_polygon adds: box_polygon has no half-open tie to break, since
+    // a mesher only ever asks it about boxes it already owns.
+    world::TerrainGen4D::Slice s{1.0f, 0.35f, 0.0f, 0.25f, 0.0f};
+    const auto b = world::SliceBasis::from(s);
+    int compared = 0, differing = 0;
+    for (int i = -8; i <= 8; ++i)
+        for (int k = -8; k <= 8; ++k)
+            for (int l = -8; l <= 8; ++l) {
+                const auto cell = world::cell_polygon(i, k, l, b, 0.0f, 0.0f, 16.0f);
+                if (cell.empty()) continue;
+                const auto box = world::box_polygon(i, i, k, k, l, b, 0.0f, 0.0f, 16.0f);
+                ++compared;
+                if (box.count != cell.count) { ++differing; continue; }
+                for (int v = 0; v < cell.count; ++v) {
+                    if (std::fabs(box.x[v] - cell.x[v]) > 1e-4f ||
+                        std::fabs(box.z[v] - cell.z[v]) > 1e-4f) {
+                        ++differing;
+                        break;
+                    }
+                }
+            }
+    EXPECT(compared > 100, "there were single cells to compare");
+    EXPECT(differing == 0, "a one-cell box is exactly that cell's polygon");
+}
+
 }  // namespace
 
 int main() {
@@ -244,6 +326,8 @@ int main() {
     test_a_compound_cut_presents_hexagons();
     test_a_cell_far_from_the_cut_presents_nothing();
     test_the_cells_tile_the_patch_without_gaps_or_overlap();
+    test_a_box_of_cells_presents_a_convex_polygon();
+    test_a_one_cell_box_is_the_cell();
     test_walking_on_a_tilted_cut_is_travel_along_w();
     test_enumeration_finds_every_cell_the_hand_search_does();
     test_an_untilted_patch_enumerates_one_cell_per_column();

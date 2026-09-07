@@ -333,8 +333,12 @@ int main(int argc, char** argv) {
     std::printf("\nHYPERSLICE theta=%.3f phi=%.3f sampled=%d mean_vertices=%.2f\n",
                 theta, phi, sampled, mean_v);
     std::printf("\nEach intersected cell presents its own hull at its own\n"
-                "angle, so coplanar merging has nothing to merge: the\n"
-                "greedy ratio this repo gates at >=4.5x would be 1.0.\n");
+                "angle, which looks like it leaves coplanar merging nothing\n"
+                "to grip. It does not: a BOX of cells is convex, and the\n"
+                "preimage of a convex set under a linear map is convex, so\n"
+                "a merged box presents one convex polygon at any angle.\n"
+                "Greedy meshing works here - it just has to sweep in\n"
+                "LATTICE space rather than slice space. See --mesh.\n");
     // The finding that is not obvious and matters most.
     //
     // With ONE rotation plane every cross-section is an 8-vertex box: the

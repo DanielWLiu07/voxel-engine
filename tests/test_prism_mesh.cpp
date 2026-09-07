@@ -467,6 +467,120 @@ void test_reading_columns_back_out_of_voxels_is_lossy() {
            "be chosen by which code path a chunk happened to take");
 }
 
+void test_merging_caps_covers_the_same_area() {
+    // The check every merge needs, and the same one the cube mesher's
+    // greedy path has against its naive baseline: merging is allowed to
+    // change how a surface is PACKED and nothing else. If the merged
+    // horizontal faces do not cover exactly the area the unmerged ones
+    // did, the merge is either leaving holes or drawing ground twice.
+    //
+    // The oracle is independent of the mesher: walk the tiling and the
+    // columns directly, and for every solid run that needs a cap add that
+    // cell's polygon area. Then sum the area of the quads that actually
+    // came out. A fan triangulation of a convex polygon has exactly the
+    // polygon's area, and the odd filler quad is degenerate, so the two
+    // totals are comparable directly.
+    for (const auto s : {slice_of(0.0f, 0.0f, 0.0f), slice_of(0.0f, 0.45f, 0.45f),
+                         slice_of(2.0f, 0.9f, -0.7f)}) {
+        world::TerrainGen4D gen(1337);
+        const auto pc = world::build_prism_chunk(gen, {1, 1}, s);
+
+        double want = 0.0;
+        for (const auto& cell : pc.cells) {
+            const double area = std::fabs(world::polygon_area(cell.poly));
+            int y = 0;
+            while (y < world::kChunkSizeY) {
+                const auto id = cell.blocks[static_cast<std::size_t>(y)];
+                if (!world::is_solid(static_cast<world::BlockId>(id))) { ++y; continue; }
+                int y1 = y;
+                while (y1 + 1 < world::kChunkSizeY &&
+                       cell.blocks[static_cast<std::size_t>(y1 + 1)] == id) ++y1;
+                const bool top = (y1 + 1 >= world::kChunkSizeY) ||
+                    !world::is_solid(static_cast<world::BlockId>(
+                        cell.blocks[static_cast<std::size_t>(y1 + 1)]));
+                const bool bot = (y == 0) ||
+                    !world::is_solid(static_cast<world::BlockId>(
+                        cell.blocks[static_cast<std::size_t>(y - 1)]));
+                if (top) want += area;
+                if (bot) want += area;
+                y = y1 + 1;
+            }
+        }
+
+        const auto mesh = world::build_prism_mesh(pc);
+        const float xs = mesh.xz_scale;
+        double got = 0.0;
+        for (std::size_t q = 0; q * 4 + 3 < mesh.vertices.size(); ++q) {
+            const int n = mesh.vertices[4 * q].normal;
+            if (n != 2 && n != 3) continue;   // horizontal faces only
+            double a = 0.0;
+            for (int v = 0; v < 4; ++v) {
+                const auto& p0 = mesh.vertices[4 * q + v];
+                const auto& p1 = mesh.vertices[4 * q + (v + 1) % 4];
+                a += static_cast<double>(p0.x * xs) * (p1.z * xs) -
+                     static_cast<double>(p1.x * xs) * (p0.z * xs);
+            }
+            got += std::fabs(a) * 0.5;
+        }
+
+        EXPECT(want > 100.0, "there were caps to compare");
+        // A percent, not a rounding: the unmerged total snaps every cell
+        // corner while the merged total snaps only the outline, so the
+        // two agree to the quantisation on the interior edges that
+        // disappeared. Anything structural is orders of magnitude larger.
+        EXPECT(std::fabs(got - want) < want * 0.01,
+               "merged horizontal faces cover the same area the unmerged "
+               "ones did");
+    }
+}
+
+void test_merging_is_a_real_reduction() {
+    // The merge has to actually merge. A pass that quietly did nothing
+    // would satisfy the area check above perfectly, which is exactly the
+    // shape of guard this repo has been caught by before: a check that
+    // only ever runs where the quantity it guards is zero.
+    world::TerrainGen4D gen(1337);
+    const auto flat = world::build_prism_chunk(gen, {1, 1}, slice_of(0.0f, 0.0f, 0.0f));
+    const auto tilt = world::build_prism_chunk(gen, {1, 1}, slice_of(0.0f, 0.45f, 0.45f));
+
+    auto cap_quads = [](const world::ChunkMeshData& m) {
+        int caps = 0;
+        for (std::size_t q = 0; q * 4 + 3 < m.vertices.size(); ++q) {
+            const int n = m.vertices[4 * q].normal;
+            if (n == 2 || n == 3) ++caps;
+        }
+        return caps;
+    };
+    auto cap_faces_unmerged = [](const world::PrismChunk& pc) {
+        int faces = 0;
+        for (const auto& cell : pc.cells) {
+            int y = 0;
+            while (y < world::kChunkSizeY) {
+                const auto id = cell.blocks[static_cast<std::size_t>(y)];
+                if (!world::is_solid(static_cast<world::BlockId>(id))) { ++y; continue; }
+                int y1 = y;
+                while (y1 + 1 < world::kChunkSizeY &&
+                       cell.blocks[static_cast<std::size_t>(y1 + 1)] == id) ++y1;
+                if ((y1 + 1 >= world::kChunkSizeY) ||
+                    !world::is_solid(static_cast<world::BlockId>(
+                        cell.blocks[static_cast<std::size_t>(y1 + 1)]))) ++faces;
+                if (y == 0 || !world::is_solid(static_cast<world::BlockId>(
+                        cell.blocks[static_cast<std::size_t>(y - 1)]))) ++faces;
+                y = y1 + 1;
+            }
+        }
+        return faces;
+    };
+
+    EXPECT(cap_quads(world::build_prism_mesh(flat)) <
+               cap_faces_unmerged(flat) * 3 / 4,
+           "a flat cut merges horizontal faces by at least a quarter");
+    EXPECT(cap_quads(world::build_prism_mesh(tilt)) <
+               cap_faces_unmerged(tilt) * 3 / 4,
+           "and so does a compound tilt, where the mesher used to say "
+           "merging was impossible");
+}
+
 void test_fuzz_random_cuts_and_chunks() {
     // The check that would have found the sub-step wall on its own.
     //
@@ -576,6 +690,8 @@ int main() {
     test_every_vertex_fits_the_packed_range();
     test_winding_matches_the_normal_it_carries();
     test_reading_columns_back_out_of_voxels_is_lossy();
+    test_merging_caps_covers_the_same_area();
+    test_merging_is_a_real_reduction();
     test_fuzz_random_cuts_and_chunks();
     test_a_cell_keeps_its_block_when_the_cut_turns();
     std::printf("\nprism_tests: %d checks, %d failures\n", g_checks, g_failures);

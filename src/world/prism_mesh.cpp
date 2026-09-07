@@ -8,6 +8,7 @@
 #include "world/tree_stamps.h"
 
 #include <algorithm>
+#include <utility>
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
@@ -16,6 +17,16 @@
 namespace world {
 
 namespace {
+
+// Snap one coordinate to the grid the packed vertex can address.
+//
+// Shared by the cell tiling and by merged boxes, and it has to be, or a
+// merged cap's edge and the wall hanging off it would round to different
+// places and open a crack along every merge boundary.
+inline float snap_xz(float v) {
+    return static_cast<float>(gfx::quantize_sub_unit_xz(v)) *
+           gfx::kSubUnitXZScale;
+}
 
 // The polygon's centroid, as a voxel of the chunk. Used wherever a cell
 // has to be matched to voxel storage - block light is flood-filled on the
@@ -168,13 +179,13 @@ PrismChunk tile_footprint(ChunkCoord coord, TerrainGen4D::Slice s) {
     // land in the wrong cell where the tiling is fine.
     for (auto& cell : pc.cells) {
         SlicePolygon snapped;
+        // (see snap_polygon below - kept inline here because the loop also
+        // has to carry the neighbour list across a corner merge)
         std::array<std::int32_t, SlicePolygon::kMaxVerts> across{};
         across.fill(-1);
         for (int v = 0; v < cell.poly.count; ++v) {
-            const float sx = static_cast<float>(
-                gfx::quantize_sub_unit_xz(cell.poly.x[v])) * gfx::kSubUnitXZScale;
-            const float sz = static_cast<float>(
-                gfx::quantize_sub_unit_xz(cell.poly.z[v])) * gfx::kSubUnitXZScale;
+            const float sx = snap_xz(cell.poly.x[v]);
+            const float sz = snap_xz(cell.poly.z[v]);
             if (snapped.count > 0 &&
                 snapped.x[snapped.count - 1] == sx &&
                 snapped.z[snapped.count - 1] == sz) {
@@ -405,6 +416,86 @@ void fan_quads(int n, Emit&& emit) {
     }
 }
 
+
+// A horizontal face waiting to be merged: which lattice cell it belongs
+// to, and everything that has to match for two of them to become one.
+//
+// Block id, light and AO are all in the key rather than averaged over a
+// merge, so a merged face is exactly what the unmerged faces were. The
+// cube mesher can afford to merge across differing light because it
+// samples per corner and lets the gradient interpolate; a merged box here
+// is one flat polygon with one value, so merging across a difference
+// would flatten it. Block light is 0 almost everywhere - only a Glow
+// block makes it otherwise - so this costs nothing on ordinary terrain
+// and keeps a lit cave mouth honest.
+struct CapKey {
+    std::int32_t l, y;
+    std::uint8_t block, dir, light, ao;
+    bool operator==(const CapKey& o) const {
+        return l == o.l && y == o.y && block == o.block && dir == o.dir &&
+               light == o.light && ao == o.ao;
+    }
+};
+
+struct CapKeyHash {
+    std::size_t operator()(const CapKey& c) const noexcept {
+        std::uint64_t h = static_cast<std::uint32_t>(c.l) * 0x9E3779B97F4A7C15ull;
+        h ^= static_cast<std::uint32_t>(c.y) * 0xBF58476D1CE4E5B9ull;
+        h ^= (static_cast<std::uint64_t>(c.block) << 24) ^
+             (static_cast<std::uint64_t>(c.dir)   << 16) ^
+             (static_cast<std::uint64_t>(c.light) <<  8) ^
+              static_cast<std::uint64_t>(c.ao);
+        h ^= h >> 29; h *= 0x94D049BB133111EBull; h ^= h >> 32;
+        return static_cast<std::size_t>(h);
+    }
+};
+
+// The greedy sweep, in lattice space.
+//
+// Identical in shape to the one the cube mesher runs over a voxel slice -
+// take a run along one axis, then extend it along the other while every
+// row matches - and that is the point. The mask here is indexed by (i, k)
+// of the 4D lattice rather than by (x, z) of the chunk, which is the only
+// difference and the whole trick: in lattice space the faces to be merged
+// ARE a rectangular grid, however the slice is turned.
+//
+// Emits inclusive boxes [i0, i1] x [k0, k1].
+template <typename Emit>
+void greedy_merge_lattice(std::vector<std::pair<std::int32_t, std::int32_t>>& cells,
+                          Emit&& emit) {
+    std::sort(cells.begin(), cells.end());
+    std::unordered_set<std::int64_t> live;
+    live.reserve(cells.size() * 2);
+    auto key = [](std::int32_t i, std::int32_t k) {
+        return (static_cast<std::int64_t>(i) << 32) ^
+               static_cast<std::uint32_t>(k);
+    };
+    for (const auto& c : cells) live.insert(key(c.first, c.second));
+
+    for (const auto& c : cells) {
+        const std::int32_t i0 = c.first, k0 = c.second;
+        if (!live.count(key(i0, k0))) continue;
+
+        std::int32_t k1 = k0;
+        while (live.count(key(i0, k1 + 1))) ++k1;
+
+        std::int32_t i1 = i0;
+        for (;;) {
+            const std::int32_t next = i1 + 1;
+            bool whole_row = true;
+            for (std::int32_t k = k0; k <= k1 && whole_row; ++k)
+                if (!live.count(key(next, k))) whole_row = false;
+            if (!whole_row) break;
+            i1 = next;
+        }
+
+        for (std::int32_t i = i0; i <= i1; ++i)
+            for (std::int32_t k = k0; k <= k1; ++k)
+                live.erase(key(i, k));
+        emit(i0, i1, k0, k1);
+    }
+}
+
 struct PrismVertex {
     float x, y, z;
     float u, v;
@@ -486,6 +577,9 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
         return true;
     };
 
+    std::unordered_map<CapKey, std::vector<std::pair<std::int32_t, std::int32_t>>,
+                       CapKeyHash> caps;
+
     PrismVertex q[4];
     for (const auto& cell : pc.cells) {
         const int n = cell.poly.count;
@@ -543,33 +637,25 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
                 return 3;
             };
 
+            // Horizontal faces are COLLECTED here and merged after the
+            // sweep, rather than emitted one polygon per cell. See the
+            // merge pass below: a lattice box presents a convex polygon,
+            // so the ordinary greedy rectangle sweep applies - it just
+            // has to run over (i, k) of the lattice instead of (x, z) of
+            // the chunk.
             if (cap_top) {
-                const float top_y = static_cast<float>(y1 + 1);
-                const std::uint8_t lt = sample_light(light, vx, y1 + 1, vz);
-                const std::uint8_t ao = static_cast<std::uint8_t>(
-                    enclosure_ao(std::min(y1 + 1, kChunkSizeY - 1)));
-                fan_quads(n, [&](int a, int b, int c, int d) {
-                    const int src[4] = {n - 1 - a, n - 1 - b, n - 1 - c, n - 1 - d};
-                    for (int v = 0; v < 4; ++v) {
-                        q[v] = {cell.poly.x[src[v]], top_y, cell.poly.z[src[v]],
-                                cell.poly.x[src[v]], cell.poly.z[src[v]]};
-                    }
-                    push_quad(out, q, kUp, id, lt, ao);
-                });
+                caps[CapKey{cell.l, y1 + 1, id, 0,
+                            sample_light(light, vx, y1 + 1, vz),
+                            static_cast<std::uint8_t>(enclosure_ao(
+                                std::min(y1 + 1, kChunkSizeY - 1)))}]
+                    .emplace_back(cell.i, cell.k);
             }
             if (cap_bottom) {
-                const float bot_y = static_cast<float>(y);
-                const std::uint8_t lt = sample_light(light, vx, y - 1, vz);
-                const std::uint8_t ao = static_cast<std::uint8_t>(
-                    enclosure_ao(std::max(y - 1, 0)));
-                fan_quads(n, [&](int a, int b, int c, int d) {
-                    const int src[4] = {a, b, c, d};
-                    for (int v = 0; v < 4; ++v) {
-                        q[v] = {cell.poly.x[src[v]], bot_y, cell.poly.z[src[v]],
-                                cell.poly.x[src[v]], cell.poly.z[src[v]]};
-                    }
-                    push_quad(out, q, kDown, id, lt, ao);
-                });
+                caps[CapKey{cell.l, y, id, 1,
+                            sample_light(light, vx, y - 1, vz),
+                            static_cast<std::uint8_t>(enclosure_ao(
+                                std::max(y - 1, 0)))}]
+                    .emplace_back(cell.i, cell.k);
             }
 
             // Walls. One per polygon edge, cut into vertical runs by
@@ -621,6 +707,58 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
 
             y = y1 + 1;
         }
+    }
+
+    // The merge. Each bucket is one horizontal plane of one block at one
+    // light and AO level, as a set of (i, k) lattice cells; the greedy
+    // sweep turns that into maximal boxes and each box becomes one convex
+    // polygon.
+    //
+    // Snapped with the same function the cell tiling uses, because a
+    // merged cap's edge has to land exactly where the wall hanging off it
+    // does. Both are the same coordinate; the same coordinate snaps the
+    // same way.
+    const SliceBasis basis = SliceBasis::from(pc.slice);
+    const float px = static_cast<float>(pc.coord.x * kChunkSizeX);
+    const float pz = static_cast<float>(pc.coord.z * kChunkSizeZ);
+    for (auto& bucket : caps) {
+        const CapKey& k = bucket.first;
+        greedy_merge_lattice(bucket.second,
+                             [&](std::int32_t i0, std::int32_t i1,
+                                 std::int32_t k0, std::int32_t k1) {
+            SlicePolygon poly = box_polygon(i0, i1, k0, k1, k.l, basis,
+                                            px, pz, static_cast<float>(kChunkSizeX));
+            SlicePolygon snapped;
+            for (int v = 0; v < poly.count; ++v) {
+                const float sx = snap_xz(poly.x[v] - px);
+                const float sz = snap_xz(poly.z[v] - pz);
+                if (snapped.count > 0 &&
+                    snapped.x[snapped.count - 1] == sx &&
+                    snapped.z[snapped.count - 1] == sz) continue;
+                snapped.x[snapped.count] = sx;
+                snapped.z[snapped.count] = sz;
+                ++snapped.count;
+            }
+            while (snapped.count > 1 &&
+                   snapped.x[0] == snapped.x[snapped.count - 1] &&
+                   snapped.z[0] == snapped.z[snapped.count - 1]) --snapped.count;
+            if (snapped.count < 3) return;
+
+            const int m = snapped.count;
+            const float plane_y = static_cast<float>(k.y);
+            const bool top = (k.dir == 0);
+            fan_quads(m, [&](int a, int b, int c, int d) {
+                // The polygon is positively wound, which is the -Y
+                // winding this engine uses; +Y wants it reversed.
+                const int in[4] = {a, b, c, d};
+                for (int v = 0; v < 4; ++v) {
+                    const int idx = top ? (m - 1 - in[v]) : in[v];
+                    q[v] = {snapped.x[idx], plane_y, snapped.z[idx],
+                            snapped.x[idx], snapped.z[idx]};
+                }
+                push_quad(out, q, top ? kUp : kDown, k.block, k.light, k.ao);
+            });
+        });
     }
 
     out.build_ms = std::chrono::duration<double, std::milli>(

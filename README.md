@@ -211,10 +211,10 @@ in both tilings must hold the same 256 blocks.
 
 | cut | cells/chunk | prism quads | greedy quads | ratio | prism ms | cube ms |
 |---|---|---|---|---|---|---|
-| flat | 256 | 37,511 | 15,200 | 2.47x | 2.80 | 3.06 |
-| ZW only | 346 | 44,705 | 12,965 | 3.45x | 3.03 | 2.40 |
-| both planes | 448 | 74,112 | 14,917 | 4.97x | 4.10 | 2.41 |
-| hard tilt | 481 | 85,109 | 17,085 | 4.98x | 4.79 | 2.49 |
+| flat | 256 | 24,278 | 15,200 | 1.60x | 2.68 | 2.90 |
+| ZW only | 346 | 28,370 | 12,965 | 2.19x | 3.24 | 2.48 |
+| both planes | 448 | 49,491 | 14,917 | 3.32x | 4.40 | 2.47 |
+| hard tilt | 481 | 66,179 | 17,085 | 3.87x | 5.08 | 2.52 |
 
 256 cells at a flat cut is the voxel grid exactly, and it is gated in the
 audit: an untilted 4D cut has to reduce to the cube world block for block,
@@ -224,29 +224,43 @@ cells per unit of area. The `ms` columns are the whole cost of a chunk on
 both paths (terrain plus mesh) on one loaded M4, and they are timings -
 the ratios above them are what reproduces elsewhere.
 
-The quad ratio is the honest price of the look, and the reason is
-structural rather than a missing optimisation: **caps cannot merge.**
-Neighbouring cells present their own polygons at their own angles, so no
-two horizontal faces are coplanar-and-adjacent in the way the greedy
-mesher needs. What does merge is vertical - y is untouched by the
-rotation, so every cell in a column shares one polygon and runs of the
-same block collapse into a single prism exactly. That recovers most of
-greedy's win: at a flat cut the prism mesh is 2.47x the greedy quad
-count where the naive mesher is 5.33x.
+**Greedy meshing works on a tilted cut** - which is not obvious, and this
+mesher's own comments used to say it did not. Neighbouring cells present
+their own polygons at their own angles, so in slice space there is
+nothing for a rectangle sweep to grip. But the preimage of a convex set
+under a linear map is convex, `to_4d` is linear, and a lattice box is
+convex - so a **box** of cells presents one convex polygon, at any angle
+and however many cells it spans. The sweep just has to run over `(i, k)`
+of the 4D lattice instead of `(x, z)` of the chunk. At a flat cut the
+lattice IS the voxel grid and it reduces to the cube mesher's greedy pass
+exactly.
+
+Merging horizontal faces that way took the cost down by a third:
+
+| cut | before | after |
+|---|---|---|
+| flat | 2.47x greedy | **1.60x** |
+| ZW only | 3.45x | **2.19x** |
+| both planes | 4.97x | **3.32x** |
+| hard tilt | 4.98x | **3.87x** |
+
+Vertical runs merge for free on top of that - y is the one axis the
+rotation never touches, so every cell in a column shares one polygon and
+runs of the same block collapse into a single prism exactly.
 
 In the running engine at radius 12, on an M4:
 
 | | GPU mesh | frame | fps | triangles drawn |
 |---|---|---|---|---|
 | cubes (3D engine) | 10.99 MB | 4.69 ms | 213 | 145,418 |
-| cross-sections, flat cut | 37.35 MB | 5.96 ms | 168 | 529,090 |
-| cross-sections, both planes at 0.45 | 77.82 MB | 7.46 ms | 134 | 1,079,646 |
+| cross-sections, flat cut | 22.25 MB | 5.28 ms | 189 | 317,450 |
+| cross-sections, both planes at 0.45 | 48.65 MB | 6.53 ms | 153 | 676,886 |
 
     ./build/voxel_engine --bench-frame 240 --slice-prisms \
         --slice-tilt 0.45 --slice-tilt-xw 0.45
 
-So the mode costs 7.6x the triangles and 1.6x the frame at a compound
-tilt, and still lands 8x inside a 60 Hz budget. Those three rows are
+So the mode costs 4.7x the triangles and 1.4x the frame at a compound
+tilt, and still lands 2.6x inside a 60 Hz budget. Those three rows are
 timings on one loaded machine; the byte counts and triangle counts above
 them are not.
 
