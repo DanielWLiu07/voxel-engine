@@ -2,6 +2,7 @@
 
 #include "world/terrain_gen4d.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -118,7 +119,111 @@ inline SlicePolygon cell_polygon(int i, int k, int l, const SliceBasis& b,
         detail::clip_half_plane(p,  ax[axis],  az[axis], lo[axis] + 1.0f - ac[axis]);
         if (p.empty()) return p;
     }
+
+    // Ownership, decided on the half-open cell [lo, lo+1).
+    //
+    // The clip above has to be CLOSED or adjacent cells would not share
+    // their edge and the world would come apart along every cell
+    // boundary. Closed clipping cannot decide who owns a point that lies
+    // exactly on a shared face, and there is one slice where that is not
+    // a measure-zero curiosity but the common case: at theta = phi = 0
+    // with w = 0 the cut lies exactly ON the lattice plane w4 = 0, so
+    // cells l = -1 and l = 0 BOTH clip to the full square and every
+    // column of the world is drawn twice. That is the engine's default
+    // slice, so the degenerate case is the one it starts in.
+    //
+    // Deciding on the centroid rather than by nudging the slice keeps
+    // the geometry exact and costs one dot product per axis: a convex
+    // polygon with area is strictly inside its own hull, so the vertex
+    // average is an interior point, and an interior point satisfies the
+    // half-open test for exactly one cell per axis.
+    float cx = 0.0f, cz = 0.0f;
+    for (int v = 0; v < p.count; ++v) { cx += p.x[v]; cz += p.z[v]; }
+    cx /= static_cast<float>(p.count);
+    cz /= static_cast<float>(p.count);
+    for (int axis = 0; axis < 3; ++axis) {
+        const float v = ax[axis] * cx + az[axis] * cz + ac[axis];
+        if (v < lo[axis] || v >= lo[axis] + 1.0f) {
+            p.count = 0;
+            return p;
+        }
+    }
     return p;
+}
+
+
+// The area a polygon covers in the slice, by the shoelace formula.
+// Positive for the counter-clockwise winding the clipper preserves.
+inline float polygon_area(const SlicePolygon& p) {
+    if (p.empty()) return 0.0f;
+    float a = 0.0f;
+    for (int i = 0; i < p.count; ++i) {
+        const int j = (i + 1) % p.count;
+        a += p.x[i] * p.z[j] - p.x[j] * p.z[i];
+    }
+    return 0.5f * a;
+}
+
+// The lattice cells that can possibly meet a square patch of the slice.
+//
+// Each of the three linear forms is affine in (sx, sz), so its range over
+// an axis-aligned square is attained at the corners and costs two
+// comparisons rather than a search. The bounds are inclusive and
+// deliberately loose by up to one cell per axis: cell_polygon is the
+// authority on whether a cell is actually met, and widening the box costs
+// one clip that returns empty while narrowing it would drop geometry.
+struct CellRange {
+    int lo[3] = {0, 0, 0};
+    int hi[3] = {0, 0, 0};
+
+    std::size_t volume() const {
+        std::size_t v = 1;
+        for (int a = 0; a < 3; ++a)
+            v *= static_cast<std::size_t>(hi[a] - lo[a] + 1);
+        return v;
+    }
+};
+
+inline CellRange cells_over_patch(const SliceBasis& b, float x0, float z0,
+                                  float span) {
+    const float ax[3] = {b.x4_sx, b.z4_sx, b.w4_sx};
+    const float az[3] = {b.x4_sz, b.z4_sz, b.w4_sz};
+    const float ac[3] = {b.x4_c,  b.z4_c,  b.w4_c};
+    CellRange r;
+    for (int a = 0; a < 3; ++a) {
+        const float at_origin = ax[a] * x0 + az[a] * z0 + ac[a];
+        const float dx = ax[a] * span;
+        const float dz = az[a] * span;
+        const float lo = at_origin + std::min(0.0f, dx) + std::min(0.0f, dz);
+        const float hi = at_origin + std::max(0.0f, dx) + std::max(0.0f, dz);
+        r.lo[a] = static_cast<int>(std::floor(lo));
+        r.hi[a] = static_cast<int>(std::floor(hi));
+    }
+    return r;
+}
+
+// Every cell that actually meets the patch, with the polygon it presents.
+//
+// The callback shape is (i, k, l, polygon). Cells are visited in lattice
+// order, which is not slice order - a mesher that cares about locality
+// should sort what comes out, not expect this to hand it a sweep.
+//
+// This is the brute-force walk of the bounding box, and it stays that way
+// on purpose: a 16x16 patch at a compound tilt has a box of a few
+// thousand cells against the ~65k noise samples the same patch costs to
+// generate, so the clip is noise next to the field it is tiling. If that
+// ever stops being true the fix is a seeded flood fill across shared
+// edges, not a cleverer box.
+template <typename Fn>
+void for_each_cell(const SliceBasis& b, float x0, float z0, float span,
+                   Fn&& fn) {
+    const CellRange r = cells_over_patch(b, x0, z0, span);
+    for (int i = r.lo[0]; i <= r.hi[0]; ++i)
+        for (int k = r.lo[1]; k <= r.hi[1]; ++k)
+            for (int l = r.lo[2]; l <= r.hi[2]; ++l) {
+                const SlicePolygon p = cell_polygon(i, k, l, b, x0, z0, span);
+                if (!p.empty()) fn(i, k, l, p);
+            }
 }
 
 }  // namespace world

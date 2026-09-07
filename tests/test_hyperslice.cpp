@@ -8,6 +8,7 @@
 
 #include "world/hyperslice.h"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <set>
@@ -112,6 +113,71 @@ void test_the_cells_tile_the_patch_without_gaps_or_overlap() {
            "the cell polygons tile the patch exactly");
 }
 
+
+void test_enumeration_finds_every_cell_the_hand_search_does() {
+    // for_each_cell exists so a mesher does not have to guess a search
+    // box. It must find exactly what the exhaustive scan above finds -
+    // no more (wasted clips are free but a duplicate would draw ground
+    // twice) and above all no fewer, since a missed cell is a hole.
+    for (const auto s : {world::TerrainGen4D::Slice{},
+                         world::TerrainGen4D::Slice{0.0f, 0.5f, 0.0f, 0.0f, 0.0f},
+                         world::TerrainGen4D::Slice{1.5f, 0.35f, 0.0f, 0.25f, 0.0f},
+                         world::TerrainGen4D::Slice{-3.0f, -0.7f, 4.0f, 0.9f, -2.0f}}) {
+        const auto b = world::SliceBasis::from(s);
+        constexpr float kX0 = -3.0f, kZ0 = 5.0f, kSpan = 16.0f;
+
+        std::set<std::array<int, 3>> want;
+        for (int i = -60; i <= 60; ++i)
+            for (int k = -60; k <= 60; ++k)
+                for (int l = -60; l <= 60; ++l)
+                    if (!world::cell_polygon(i, k, l, b, kX0, kZ0, kSpan).empty())
+                        want.insert({i, k, l});
+
+        std::set<std::array<int, 3>> got;
+        int visits = 0;
+        world::for_each_cell(b, kX0, kZ0, kSpan,
+                             [&](int i, int k, int l, const world::SlicePolygon&) {
+                                 got.insert({i, k, l});
+                                 ++visits;
+                             });
+        EXPECT(!want.empty(), "the hand search found something to compare against");
+        EXPECT(got == want, "for_each_cell finds exactly the cells that meet the patch");
+        EXPECT(visits == static_cast<int>(got.size()),
+               "and visits each of them once");
+    }
+}
+
+void test_an_untilted_patch_enumerates_one_cell_per_column() {
+    // The floor under every cost claim: with the cut axis-aligned the
+    // tiling IS the voxel grid, so 4D mode pays nothing for a world it is
+    // not tilting.
+    world::TerrainGen4D::Slice s{};
+    const auto b = world::SliceBasis::from(s);
+    int cells = 0;
+    world::for_each_cell(b, 0.0f, 0.0f, 16.0f,
+                         [&](int, int, int, const world::SlicePolygon& p) {
+                             if (world::polygon_area(p) > 1e-4f) ++cells;
+                         });
+    EXPECT(cells == 256, "a flat 16x16 patch tiles into exactly 256 cells");
+}
+
+void test_enumerated_polygons_tile_the_patch() {
+    // The same partition property as above, but through the entry point
+    // the mesher actually calls, and at a patch offset that is not the
+    // origin - an off-origin patch is where a sign error in the search
+    // box would show up.
+    world::TerrainGen4D::Slice s{2.5f, 0.35f, 1.0f, 0.25f, -2.0f};
+    const auto b = world::SliceBasis::from(s);
+    constexpr float kSpan = 16.0f;
+    double area = 0.0;
+    world::for_each_cell(b, 64.0f, -48.0f, kSpan,
+                         [&](int, int, int, const world::SlicePolygon& p) {
+                             area += std::fabs(world::polygon_area(p));
+                         });
+    EXPECT(std::fabs(area - kSpan * kSpan) < 0.02,
+           "the enumerated polygons tile the patch exactly");
+}
+
 }  // namespace
 
 int main() {
@@ -120,6 +186,9 @@ int main() {
     test_a_compound_cut_presents_hexagons();
     test_a_cell_far_from_the_cut_presents_nothing();
     test_the_cells_tile_the_patch_without_gaps_or_overlap();
+    test_enumeration_finds_every_cell_the_hand_search_does();
+    test_an_untilted_patch_enumerates_one_cell_per_column();
+    test_enumerated_polygons_tile_the_patch();
     std::printf("\nhyperslice_tests: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
