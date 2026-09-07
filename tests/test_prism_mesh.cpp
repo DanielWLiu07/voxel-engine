@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <random>
 #include <set>
 #include <vector>
 
@@ -425,6 +426,74 @@ void test_winding_matches_the_normal_it_carries() {
     EXPECT(backwards == 0, "every quad winds the way its normal points");
 }
 
+void test_fuzz_random_cuts_and_chunks() {
+    // The check that would have found the sub-step wall on its own.
+    //
+    // Every property this file pins is checked at hand-picked angles, and
+    // a hand-picked angle is exactly what missed a defect that needed a
+    // particular pair of angles AND a particular chunk. This walks a
+    // pseudo-random sweep of both instead, and asserts the three things
+    // that must hold at EVERY orientation: the tiling covers the chunk,
+    // every corner is addressable, and every triangle winds the way its
+    // normal points.
+    //
+    // Deterministic seed, so a failure is reproducible from the line it
+    // prints rather than from a lucky rerun.
+    std::mt19937 rng(20260907u);
+    std::uniform_real_distribution<float> angle(-1.2f, 1.2f);
+    std::uniform_real_distribution<float> off(-6.0f, 6.0f);
+    std::uniform_int_distribution<int>    coord(-20, 20);
+
+    world::TerrainGen4D gen(1337);
+    int cases = 0, bad_tiling = 0, bad_range = 0, backwards = 0, tris = 0;
+    for (int i = 0; i < 60; ++i) {
+        world::TerrainGen4D::Slice s{};
+        s.w       = off(rng);
+        s.theta   = angle(rng);
+        s.phi     = angle(rng);
+        s.z_shift = off(rng);
+        s.x_shift = off(rng);
+        const world::ChunkCoord c{coord(rng), coord(rng)};
+        const auto pc = world::build_prism_chunk(gen, c, s);
+        const auto mesh = world::build_prism_mesh(pc);
+        ++cases;
+
+        double area = 0.0;
+        for (const auto& cell : pc.cells) {
+            area += std::fabs(world::polygon_area(cell.poly));
+            for (int v = 0; v < cell.poly.count; ++v) {
+                if (cell.poly.x[v] < -1e-3f || cell.poly.x[v] > 16.0f + 1e-3f ||
+                    cell.poly.z[v] < -1e-3f || cell.poly.z[v] > 16.0f + 1e-3f)
+                    ++bad_range;
+            }
+        }
+        // Snapping moves a corner by up to half a quantisation step, so
+        // the tiled area is no longer exact to a rounding - it is exact
+        // to the grid the vertices live on. A tenth of a block of slack
+        // over a 256-block patch is generous against that and still
+        // catches a whole missing cell.
+        if (std::fabs(area - 256.0) > 0.1) ++bad_tiling;
+
+        const float xs = mesh.xz_scale;
+        for (std::size_t q = 0; q * 4 + 3 < mesh.vertices.size(); ++q) {
+            const auto& a = mesh.vertices[4 * q + 0];
+            const auto& b = mesh.vertices[4 * q + 1];
+            const auto& d = mesh.vertices[4 * q + 2];
+            const glm::vec3 p0{a.x * xs, static_cast<float>(a.y), a.z * xs};
+            const glm::vec3 p1{b.x * xs, static_cast<float>(b.y), b.z * xs};
+            const glm::vec3 p2{d.x * xs, static_cast<float>(d.y), d.z * xs};
+            const glm::vec3 g = glm::cross(p1 - p0, p2 - p0);
+            if (glm::length(g) < 1e-7f) continue;
+            ++tris;
+            if (glm::dot(glm::normalize(g), a.nrm()) < 0.5f) ++backwards;
+        }
+    }
+    EXPECT(cases == 60 && tris > 20000, "the fuzz sweep meshed real geometry");
+    EXPECT(bad_tiling == 0, "the prisms tile the chunk at every orientation");
+    EXPECT(bad_range == 0, "every corner is addressable at every orientation");
+    EXPECT(backwards == 0, "every quad winds correctly at every orientation");
+}
+
 void test_a_cell_keeps_its_block_when_the_cut_turns() {
     // The property the whole design exists for. Turn the cut a little and
     // a 4D block must still be made of what it was made of; only the
@@ -465,6 +534,7 @@ int main() {
     test_the_neighbouring_chunk_hides_the_outer_walls();
     test_every_vertex_fits_the_packed_range();
     test_winding_matches_the_normal_it_carries();
+    test_fuzz_random_cuts_and_chunks();
     test_a_cell_keeps_its_block_when_the_cut_turns();
     std::printf("\nprism_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
