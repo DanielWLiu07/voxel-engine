@@ -18,12 +18,15 @@
 // hyperplane and counts what comes out.
 
 #include <algorithm>
+#include "world/chunk_mesh.h"
 #include "world/hyperslice.h"
+#include "world/prism_mesh.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -149,6 +152,75 @@ int write_map(float theta, float phi, const char* path) {
     return 0;
 }
 
+// What a chunk costs meshed as 4D cross-sections, against the greedy cube
+// mesher on the same terrain.
+//
+// Reported as ratios of COUNTS first and timings second, and in that
+// order deliberately: a quad count is a property of the geometry and
+// reproduces on any machine, while a millisecond is a property of this
+// one under whatever else it was doing. The repo has been burned by
+// quoting the second kind as though it were the first.
+int mesh_cost(int side) {
+    struct Cfg { const char* name; float theta, phi; };
+    const Cfg cfgs[] = {
+        {"flat",      0.00f, 0.00f},
+        {"zw only",   0.40f, 0.00f},
+        {"both",      0.40f, 0.40f},
+        {"hard tilt", 0.90f, 0.70f},
+    };
+
+    world::TerrainGen4D gen(1337);
+    std::printf("prism mesh cost against the greedy cube mesher, "
+                "%dx%d chunks, seed 1337\n\n", side, side);
+    std::printf("  %-10s  %8s  %10s  %10s  %7s  %9s  %9s\n",
+                "cut", "cells", "prism qd", "greedy qd", "ratio",
+                "prism ms", "greedy ms");
+
+    const int lo = -(side / 2);
+    const int hi = lo + side - 1;
+    for (const Cfg& cfg : cfgs) {
+        world::TerrainGen4D::Slice s{};
+        s.theta = cfg.theta;
+        s.phi   = cfg.phi;
+
+        long cells = 0, prism_quads = 0, greedy_quads = 0;
+        double prism_ms = 0.0, greedy_ms = 0.0;
+        int chunks = 0;
+        for (int cx = lo; cx <= hi; ++cx) {
+            for (int cz = lo; cz <= hi; ++cz) {
+                const auto t0 = std::chrono::steady_clock::now();
+                world::PrismChunk pc = world::build_prism_chunk(gen, {cx, cz}, s);
+                const auto pm = world::build_prism_mesh(pc);
+                prism_ms += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count();
+                cells += static_cast<long>(pc.cells.size());
+                prism_quads += pm.quad_count;
+
+                world::Chunk cube;
+                const auto t1 = std::chrono::steady_clock::now();
+                gen.fill_chunk(cx, cz, s, cube);
+                const auto cm = world::build_chunk_mesh_greedy(cube);
+                greedy_ms += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t1).count();
+                greedy_quads += cm.quad_count;
+                ++chunks;
+            }
+        }
+        std::printf("  %-10s  %8.0f  %10ld  %10ld  %6.2fx  %8.2f  %9.2f\n",
+                    cfg.name, static_cast<double>(cells) / chunks,
+                    prism_quads, greedy_quads,
+                    static_cast<double>(prism_quads) / static_cast<double>(greedy_quads),
+                    prism_ms / chunks, greedy_ms / chunks);
+    }
+    std::printf("\nCells per chunk is 256 at a flat cut, which is the voxel\n"
+                "grid exactly. It rises with tilt because a turned\n"
+                "hyperplane passes through more cells per unit of area.\n"
+                "The quad ratio is the honest cost of the look: caps cannot\n"
+                "merge, because neighbouring cells present their own\n"
+                "polygons at their own angles.\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && (std::string(argv[1]) == "--help" ||
                      std::string(argv[1]) == "-h")) {
@@ -161,8 +233,16 @@ int main(int argc, char** argv) {
             "      draw the cell tiling looking straight down, coloured by\n"
             "      cell, so the block shapes can be seen rather than counted\n"
             "      (default docs/media/cells.png)\n\n"
+            "  hyperslice --mesh [chunks]\n"
+            "      what a chunk costs to mesh as prisms against the greedy\n"
+            "      cube mesher on the same terrain, over a grid of chunks\n"
+            "      (default 5, i.e. 25 chunks)\n\n"
             "  hyperslice --help\n");
         return 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--mesh") {
+        const int side = (argc > 2) ? std::atoi(argv[2]) : 5;
+        return mesh_cost(std::max(1, side));
     }
     if (argc > 1 && std::string(argv[1]) == "--map") {
         const float th = (argc > 2) ? std::strtof(argv[2], nullptr) : 0.4f;

@@ -46,6 +46,15 @@ struct PerfFrame {
     // and conclude the wheel had done nothing.
     float slice_theta = 0.0f;  // ZW plane: the wheel, and vertical mouse
     float slice_phi   = 0.0f;  // XW plane: horizontal mouse
+    // Whether blocks are drawn as their 4D cross-section (P toggles it).
+    // Worth a line of its own because at a single-plane tilt the two
+    // modes are IDENTICAL - a cut turned in one plane presents four-sided
+    // cells at every angle - so a player who cannot see the mode has no
+    // way to tell the feature is on.
+    bool  prisms      = false;
+    // Cells the tiling produced for the last chunk built, against the 256
+    // voxel columns a flat cut would give. 1.0x flat, rising with tilt.
+    float prism_cells_per_column = 0.0f;
 };
 
 class DebugHud {

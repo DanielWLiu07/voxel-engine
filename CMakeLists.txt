@@ -357,9 +357,19 @@ if(VOXEL_BUILD_BENCH)
   add_test(NAME hyperslice COMMAND hyperslice_tests)
 
   add_executable(hyperslice src/bench/hyperslice.cpp src/world/noise4d.cpp
-                            src/world/terrain_gen4d.cpp)
+                            src/world/terrain_gen4d.cpp
+                            src/world/terrain_gen.cpp
+                            src/world/prism_mesh.cpp
+                            src/world/chunk_mesh.cpp
+                            src/world/chunk_light.cpp
+                            src/gfx/mesh.cpp)
   target_include_directories(hyperslice PRIVATE src)
-  target_link_libraries(hyperslice PRIVATE stb fastnoise)
+  target_link_libraries(hyperslice PRIVATE stb fastnoise glm::glm glad)
+  if(APPLE)
+    target_link_libraries(hyperslice PRIVATE
+      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
+    )
+  endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(hyperslice PRIVATE -Wall -Wextra -Wpedantic -O2)
   endif()

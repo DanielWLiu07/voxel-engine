@@ -347,6 +347,7 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         std::optional<PrismChunk> cells;
         if (prisms && slice_gen) {
             cells = build_prism_chunk(*slice_gen, c, slice);
+            last_prism_cells_.store(static_cast<int>(cells->cells.size()));
             rasterize_to_chunk(*cells, fc.chunk);
         } else if (slice_gen) {
             slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);

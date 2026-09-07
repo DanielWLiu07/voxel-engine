@@ -2351,11 +2351,63 @@ int main(int argc, char** argv) {
             // entirely current.
             const float held_geometry  = wrld.near_meshed_w() - held_w0;
             // Two seconds of walking must move the player and must move
-            // the geometry with them. Geometry may lag by up to one
-            // rebuild, so it is checked as a fraction rather than exactly.
+            // the geometry with them, and once the walking stops the
+            // geometry must arrive exactly.
+            //
+            // The second half is the gate; the first half used to be, and
+            // it should not have been. It was `held_geometry > half the
+            // distance travelled`, which is a claim about WORKER
+            // THROUGHPUT at 60 Hz - it measures how many chunks nine
+            // threads can rebuild in two seconds of wall clock. On an idle
+            // machine that fraction is 0.96; at load average 34 the same
+            // binary produced 0.77, 0.77 and 0.43 on three consecutive
+            // runs, so the audit failed on machine load rather than on
+            // anything about the engine.
+            //
+            // What is actually worth gating is load-independent: the
+            // geometry follows w while the key is held (any progress at
+            // all, plus rebuilds actually happening), and it converges to
+            // the player's w once they stop. A throttle refusing every
+            // rebuild - the bug this check exists to catch - fails both,
+            // at any load.
+            //
+            // The fraction is still measured and printed, because how far
+            // the world lags while you walk is worth knowing. It is a
+            // timing figure and it is reported as one.
+            // Drained here rather than through settle_slice(), on
+            // purpose. settle_slice sets the shared settle_timed_out flag,
+            // which tilt_ok has already been computed from and which the
+            // `settled` field reports - calling it again from down here
+            // would rewrite the verdict of a check that already ran.
+            bool held_converged = false;
+            {
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(30);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    wrld.drain_finished(256);
+                    wrld.flush_pending_remeshes(pool, 16);
+                    const int more = wrld.stream_slice(terrain, pool, 64);
+                    if (more == 0 && wrld.pending_async() == 0 &&
+                        wrld.pending_remesh() == 0) {
+                        held_converged = true;
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+            }
+            // Convergence means "no chunk is stale", not "every chunk was
+            // rebuilt at exactly this w". Streaming re-requests a chunk
+            // only once its own w has drifted past kSliceRemeshStep, so a
+            // settled world legitimately holds geometry up to one rebuild
+            // step behind the player - demanding equality would fail on
+            // the design rather than on a defect. This is the same
+            // definition `converges` uses after a rotation.
+            const int held_stale = wrld.slice_lag().stale;
+            const bool held_settled = held_converged && held_stale == 0;
             const bool held_ok = rebuilds > 0 &&
                                  held_travelled > 0.5f &&
-                                 held_geometry > held_travelled * 0.5f;
+                                 held_geometry > 0.0f &&
+                                 held_settled;
 
             // Building across the fourth dimension: an edit made on one
             // slice must survive travelling away and coming back, and must
@@ -2394,6 +2446,7 @@ int main(int argc, char** argv) {
             std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
                         "changed=%d returned=%d "
                         "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
+                        "held_keepup=%.2f held_settled=%d held_stale=%d "
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
                         "pivot=%d ground_fixed=%d tilt_survives_travel=%d "
@@ -2406,6 +2459,8 @@ int main(int argc, char** argv) {
                         hash_w1 != hash_w0 ? 1 : 0,
                         hash_back == hash_w0 ? 1 : 0,
                         rebuilds, held_travelled, held_geometry,
+                        held_travelled > 0.0f ? held_geometry / held_travelled : 0.0f,
+                        held_settled ? 1 : 0, held_stale,
                         edit_ok ? 1 : 0,
                         hash_tilt != hash_w0 ? 1 : 0,
                         (hash_untilt == hash_w0 && bad_tilt == 0
@@ -2921,6 +2976,8 @@ int main(int argc, char** argv) {
         pf.slice_w         = wrld.slice_w();
         pf.slice_theta     = wrld.slice_theta();
         pf.slice_phi       = wrld.slice_phi();
+        pf.prisms          = wrld.prism_meshing();
+        pf.prism_cells_per_column = wrld.prism_cells_per_column();
         pf.meshed_w        = wrld.near_meshed_w();
         pf.edit_count      = wrld.edit_count();
         pf.edit_last_ms    = wrld.edit_last_ms();

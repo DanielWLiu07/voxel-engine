@@ -79,6 +79,12 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         // so geometry trails position by up to one rebuild threshold.
         ImGui::Text("w %.2f (geom %.2f)   cut  zw %+.3f  xw %+.3f rad",
                     f.slice_w, f.meshed_w, f.slice_theta, f.slice_phi);
+        if (f.prisms) {
+            ImGui::Text("blocks  : 4D cross-sections, %.2fx cells per column"
+                        " (P for cubes)", f.prism_cells_per_column);
+        } else {
+            ImGui::Text("blocks  : cubes (P draws their 4D cross-section)");
+        }
     }
         if (f.chunks_total > 0) {
             float cull_ratio = static_cast<float>(f.chunks_total) /

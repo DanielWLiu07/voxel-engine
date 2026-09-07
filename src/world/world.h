@@ -692,6 +692,19 @@ public:
     void set_prism_meshing(bool on) { prisms_ = on && slice_gen_ != nullptr; }
     bool prism_meshing() const { return prisms_; }
 
+    // Cells the prism tiling produced for the most recent chunk built,
+    // against the 256 voxel columns a flat cut gives. 1.0 flat, and it
+    // rises with tilt because a turned hyperplane passes through more
+    // cells per unit of area.
+    //
+    // Read off the last chunk rather than averaged, because it is a HUD
+    // number whose job is to move while the player turns the wheel; an
+    // average over a streaming window lags the thing it is describing.
+    float prism_cells_per_column() const {
+        return static_cast<float>(last_prism_cells_.load()) /
+               static_cast<float>(kChunkSizeX * kChunkSizeZ);
+    }
+
     // How many resident chunks hold each mesh encoding.
     //
     // Exists so the validator can prove it is looking at a genuinely
@@ -867,6 +880,10 @@ private:
 
     MesherKind mesher_kind_ = MesherKind::Greedy;
     bool  prisms_ = false;
+    // Written by whichever worker finished a prism chunk last, read by the
+    // HUD. Atomic because those are different threads and it is a
+    // statistic, not state - a torn read would misreport one frame.
+    std::atomic<int> last_prism_cells_{0};
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
     // The one element buffer every chunk mesh shares (all quads use the
     // same index pattern); grown to the largest chunk seen, uploaded once.
