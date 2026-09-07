@@ -176,6 +176,71 @@ placing a point inside a cell never involve y. A cell's preimage is a
 convex polygon extruded through a unit interval - a prism - and six
 half-planes bound at most six sides.
 
+### Drawing the cross-section instead of a cube
+
+Knowing the shape is one thing; the renderer emitting it is another.
+`--slice-prisms`, or `P` at runtime, draws every block as the polygon its
+4D cell presents rather than as a box. Same terrain, same cut, same pose:
+
+<table>
+<tr>
+<td><img src="docs/media/blocks_cube.jpg" width="380"><br><sub><b>cubes</b> - every corner a right angle</sub></td>
+<td><img src="docs/media/blocks_prism.jpg" width="380"><br><sub><b>cross-sections</b> - the same blocks, cut at the angle you are looking through</sub></td>
+</tr>
+</table>
+
+    ./build/voxel_engine --slice-prisms --slice-tilt 0.45 --slice-tilt-xw 0.45 \
+        --pose-at 22,44,26,-125,-14 --time-of-day 0.7 --screenshot-after 110
+
+The mesher asks the inverted question: not "what is at this voxel" but
+"which cells of the 4D lattice does this chunk's footprint pass through,
+and what does each look like from here". The answer tiles the footprint
+with convex polygons, each extruded through the y axis the rotation never
+touches. The voxel grid is then rasterised **from** that tiling, which is
+what keeps collision, lighting and the culler working unchanged and
+keeps them agreeing with what is drawn - the block you walk into is the
+block whose prism you can see.
+
+A cell's contents are a function of `(i, k, l)` and of nothing else, so a
+4D block keeps its material while the cut turns through it and only its
+shape changes. That is the difference between slicing a world and
+re-rolling one, and it is checked: rotate the cut and every cell present
+in both tilings must hold the same 256 blocks.
+
+    ./build/hyperslice --mesh          # against the greedy cube mesher, seed 1337
+
+| cut | cells/chunk | prism quads | greedy quads | ratio | prism ms | cube ms |
+|---|---|---|---|---|---|---|
+| flat | 256 | 37,511 | 15,200 | 2.47x | 2.64 | 2.94 |
+| ZW only | 346 | 45,626 | 12,965 | 3.52x | 3.17 | 2.51 |
+| both planes | 448 | 76,402 | 14,917 | 5.12x | 4.27 | 2.51 |
+| hard tilt | 481 | 88,029 | 17,085 | 5.15x | 4.88 | 2.55 |
+
+256 cells at a flat cut is the voxel grid exactly, and it is gated in the
+audit: an untilted 4D cut has to reduce to the cube world block for block,
+which is why a cell is sampled at its low corner and not its centre. The
+count rises with tilt because a turned hyperplane passes through more
+cells per unit of area. The `ms` columns are the whole cost of a chunk on
+both paths (terrain plus mesh) on one loaded M4, and they are timings -
+the ratios above them are what reproduces elsewhere.
+
+The quad ratio is the honest price of the look, and the reason is
+structural rather than a missing optimisation: **caps cannot merge.**
+Neighbouring cells present their own polygons at their own angles, so no
+two horizontal faces are coplanar-and-adjacent in the way the greedy
+mesher needs. What does merge is vertical - y is untouched by the
+rotation, so every cell in a column shares one polygon and runs of the
+same block collapse into a single prism exactly. That recovers most of
+greedy's win: at a flat cut the prism mesh is 2.47x the greedy quad
+count where the naive mesher is 5.33x. In the running engine at radius
+12, `--validate` reports 36.9 MB against the cube path's 10.99 MB.
+
+None of the engine's published figures move. This is a separate mesher the
+3D engine never enters, and the switch is per chunk rather than per world,
+so a window part-way through a toggle draws both kinds correctly - which
+`--slice-prisms --validate` checks by flipping the mesher, draining part
+of the way, and validating the mixed window it finds.
+
 The cut turns in **two planes**, which is how 4D Miner does it and what
 one plane cannot cover: the wheel and vertical mouse turn it in ZW,
 horizontal mouse in XW. Hold `M` or the middle mouse button and the mouse
@@ -395,6 +460,8 @@ single pass. Inside a cave, occlusion culling alone cuts drawn sections
 
 Reproduce:
 ```
+./build/voxel_engine --slice-prisms        # blocks drawn as 4D cross-sections
+./build/hyperslice --mesh                  # what that costs against the cube mesher
 ./build/voxel_engine --bench               # mesher + cull bench, CI-gated
 ./build/voxel_engine --bench-frame 300     # 300-frame timing bench, center pose
 ./build/voxel_engine --bench-frame 720 --orbit  # timing over a moving camera path
@@ -1035,6 +1102,7 @@ In a 4D world (`--4d`) two more move you through the fourth axis:
 | E / Q | Travel along w (forward / back) |
 | Mouse wheel | Turn the cut in the ZW plane |
 | Hold M or middle mouse | The mouse turns the cut: vertical ZW, horizontal XW |
+| P | Draw blocks as their 4D cross-section instead of as cubes |
 
 Walking does **not** change the world, and that is deliberate rather than
 a gap. A hyperplane is fixed; you move within it, so walking reveals more
