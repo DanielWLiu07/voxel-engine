@@ -41,6 +41,21 @@ inline float hash2d_f(int x, int z, std::uint32_t seed) {
     return (hash2d(x, z, seed) & 0x00FFFFFFu) / 16777216.0f;
 }
 
+// The same, over a site of the 4D lattice rather than a column.
+//
+// Structures are placed on a coarse grid in (x4, z4, w4), so they need a
+// draw that depends on all three. Folding w in through its own multiplier
+// before the avalanche keeps neighbouring w slabs uncorrelated - without
+// that, a structure would repeat identically down the fourth axis, which
+// is the one place a player would notice it immediately.
+inline std::uint32_t hash4d(int x, int z, int w, std::uint32_t seed) {
+    return hash2d(x, z, seed ^ (static_cast<std::uint32_t>(w) * 0x27D4EB2Du));
+}
+
+inline float hash4d_f(int x, int z, int w, std::uint32_t seed) {
+    return (hash4d(x, z, w, seed) & 0x00FFFFFFu) / 16777216.0f;
+}
+
 // The three stamps are templates on what they write into, and the two
 // sinks are not interchangeable geometry: the cube generator stamps into
 // a Chunk addressed by voxel, the prism generator into a set of 4D

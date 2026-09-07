@@ -21,7 +21,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -938,10 +940,100 @@ void test_height_at_is_to_4d_then_height_at_4d() {
     EXPECT(mismatched == 0, "height_at is to_4d composed with height_at_4d");
 }
 
+
+void test_a_boulder_swells_and_vanishes_along_w() {
+    // The property that makes a structure four-dimensional rather than
+    // decoration: a boulder is a 4-BALL, so the slice cuts a sphere out
+    // of it whose radius is sqrt(r^2 - d^2) in the fourth axis. Travel
+    // along w and it swells smoothly, peaks, and tapers away.
+    //
+    // Asked of structure_footprint, which answers the geometric question
+    // with no terrain in it. Four earlier versions of this check measured
+    // the world instead - differencing against a world generated without
+    // structures - and ALL FOUR passed with an extruded-sphere fault
+    // injected, each for its own reason:
+    //
+    //   "rises and falls"     - so does anything with finite extent
+    //   "many distinct sizes" - the terrain under a fixed footprint
+    //                           varies with w all by itself
+    //   "one contiguous run"  - two monoliths with overlapping w extents
+    //                           make one run
+    //   "unimodal taper"      - a buried block writes no difference, so
+    //                           even the column count moves with terrain
+    //
+    // The lesson is the seam, not the criterion: a measurement taken
+    // through the world could not separate the shapes, and one taken of
+    // the geometry separates them immediately.
+    world::TerrainGen4D gen(1337);
+
+    // Find a ball by sweeping w at a column and looking for a footprint
+    // that grows and shrinks. A box's footprint is constant across its
+    // whole extent, so only a ball produces this.
+    int best_up = 0, best_down = 0, searched = 0;
+    for (float cx = -140.0f; cx <= 140.0f && best_up < 3; cx += 7.0f) {
+        for (float cz = -140.0f; cz <= 140.0f && best_up < 3; cz += 7.0f) {
+            ++searched;
+            std::vector<int> prof;
+            for (int w = -30; w <= 30; ++w) {
+                int n = 0;
+                for (int di = -8; di <= 8; ++di)
+                    for (int dk = -8; dk <= 8; ++dk)
+                        if (gen.structure_footprint(cx + di, cz + dk,
+                                                    static_cast<float>(w))) ++n;
+                prof.push_back(n);
+            }
+            int up = 0, down = 0, run_up = 0, run_down = 0;
+            for (std::size_t n = 1; n < prof.size(); ++n) {
+                if (prof[n] > prof[n - 1] && prof[n - 1] > 0) { ++run_up; run_down = 0; }
+                else if (prof[n] < prof[n - 1] && prof[n] > 0) { ++run_down; run_up = 0; }
+                else { run_up = 0; run_down = 0; }
+                up   = std::max(up, run_up);
+                down = std::max(down, run_down);
+            }
+            if (up >= 3 && down >= 3) { best_up = up; best_down = down; }
+        }
+    }
+
+    // No separate "did the search run" guard: the loop exits as soon as
+    // it finds a ball, so a low count means it found one early, and a
+    // search that finds nothing fails the assertion below anyway.
+    (void)searched;
+    EXPECT(best_up >= 3 && best_down >= 3,
+           "a boulder's footprint grows smoothly to a peak and shrinks away "
+           "along w, which an extruded 3D sphere would not");
+}
+
+void test_structures_can_be_turned_off() {
+    // The generator has to be able to produce the world without them, or
+    // every figure measured before they existed becomes unreproducible.
+    world::TerrainGen4D with(1337);
+    world::TerrainGen4D without(1337);
+    without.set_structures_enabled(false);
+    EXPECT(with.structures_enabled(), "structures are on by default");
+    EXPECT(!without.structures_enabled(), "and can be turned off");
+
+    // Swept over several w slabs rather than one: sites sit on a 40-unit
+    // 4D grid, so a single slab of a 40x40 patch can easily contain none
+    // and the first version of this check failed for that reason alone -
+    // a sparse feature needs a search wide enough to find one.
+    world::TerrainGen4D::Column4D a, b;
+    long differing = 0;
+    for (int w = -40; w <= 40 && differing == 0; w += 8)
+        for (int i = -40; i <= 40; i += 2)
+            for (int k = -40; k <= 40; k += 2) {
+                with.fill_cell_column(i, k, w, a);
+                without.fill_cell_column(i, k, w, b);
+                if (a.blocks != b.blocks) ++differing;
+            }
+    EXPECT(differing > 0, "structures actually change the world");
+}
+
 }  // namespace
 
 int main() {
     std::printf("terrain4d_tests: running...\n\n");
+    test_a_boulder_swells_and_vanishes_along_w();
+    test_structures_can_be_turned_off();
     test_a_column_matches_the_chunk_it_came_from();
     test_a_cell_column_is_a_pure_function_of_the_cell();
     test_height_at_is_to_4d_then_height_at_4d();

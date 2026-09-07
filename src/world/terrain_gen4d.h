@@ -231,10 +231,43 @@ public:
         *out_w4 = dz * st + w1 * ct;
     }
 
+    // Structures: rock formations that are genuinely four-dimensional.
+    //
+    // A boulder here is a 4-BALL, not a sphere, so the slice cuts a
+    // sphere out of it whose radius is sqrt(r^2 - d^2) in the fourth
+    // axis: travel along w and a boulder swells, peaks and vanishes. A
+    // monolith is a 4-box, so rotating the cut turns its footprint from a
+    // rectangle into a hexagon exactly as a single block's does, only
+    // eight times the size and impossible to miss.
+    //
+    // They are defined in 4D and evaluated inside fill_column, which is
+    // what makes them work on BOTH paths for free - the cube mesher and
+    // the cross-section mesher ask the same generator the same question,
+    // and neither has to know structures exist.
+    void set_structures_enabled(bool e) { structures_enabled_ = e; }
+    bool structures_enabled() const { return structures_enabled_; }
+
     void set_caves_enabled(bool e) { caves_enabled_ = e; }
     bool caves_enabled() const { return caves_enabled_; }
 
 private:
+    // One formation, resolved from its grid site. Shared by the stamping
+    // pass and the footprint predicate so the two cannot describe
+    // different worlds - the placement rule lives in exactly one place.
+    struct StructureSite {
+        float cx, cz, cw;      // centre in 4D
+        bool  is_ball;
+        float r;               // ball radius
+        float hx, hz, hw;      // box half-extents
+        int   base;            // terrain height under the centre, -1 if unused
+    };
+
+    // Visits every grid site whose formation could reach this 4D column.
+    // The callback is only invoked for sites that exist and pass the
+    // shoreline rule.
+    template <typename Fn>
+    void for_each_site(float x4, float z4, float w4, Fn&& fn) const;
+
     Noise4D continents_, hills_, detail_, warp_;
     // biome_ drives tree density, and it is 4D like everything else - so
     // forests thicken and thin as you travel along w rather than being
@@ -251,6 +284,34 @@ private:
     // from, and which a heightfield cannot produce at any tilt.
     Noise4D density_;
     bool caves_enabled_ = true;
+    bool structures_enabled_ = true;
+    std::uint32_t seed_ = 1337;
+
+    // Writes any structure covering this column into `out`. Called from
+    // fill_column with the column's own 4D address.
+    void stamp_structures(float x4, float z4, float w4, int column_height,
+                          Column4D& out) const;
+
+public:
+    // Whether any structure's footprint covers this 4D column, ignoring
+    // terrain entirely.
+    //
+    // A testability seam, and it earns its place: the natural way to
+    // observe a structure is to difference the world against one
+    // generated without them, and that measurement is contaminated by
+    // terrain - a block written where stone already stands shows no
+    // difference, and the terrain under a fixed footprint varies with w
+    // on its own. Four successive versions of the boulder test were
+    // fooled by exactly that, each passing with an extruded-sphere fault
+    // injected.
+    //
+    // This answers the geometric question directly: is (x4, z4, w4)
+    // inside a formation. A 4-ball's footprint shrinks as the slice moves
+    // off its centre; an extruded sphere's does not. Nothing about the
+    // landscape can blur that.
+    bool structure_footprint(float x4, float z4, float w4) const;
+
+private:
 };
 
 

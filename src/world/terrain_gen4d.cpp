@@ -44,7 +44,164 @@ constexpr float kDensityStrength = 1.10f;
 TerrainGen4D::TerrainGen4D(std::uint32_t seed)
     : continents_(seed), hills_(seed + 1), detail_(seed + 2), warp_(seed + 3),
       biome_(seed + 4), temp_(seed + 5),
-      cave_a_(seed + 6), cave_b_(seed + 7), density_(seed + 8) {}
+      cave_a_(seed + 6), cave_b_(seed + 7), density_(seed + 8) {
+    seed_ = seed;
+}
+
+// Structures, and the reason they live in fill_column rather than in a
+// chunk pass like the trees.
+//
+// A tree is a 3D object: it spreads sideways across cells at one w, so it
+// needs a set of columns to stamp into and belongs to whatever owns that
+// set. A structure here is a 4D object - a ball or a box with an extent
+// along w - so every column can decide on its own whether it is inside
+// one, from its own 4D address and nothing else. That is what makes it
+// work identically for the cube mesher and the cross-section mesher
+// without either of them knowing structures exist.
+//
+// Sites sit on a coarse 4D grid. A column only ever examines the eight
+// grid corners around it, rejects almost all of them on a distance test
+// that costs three subtractions, and evaluates terrain height only for a
+// site it is actually inside - so the whole pass is free on the ~99% of
+// columns that are nowhere near one.
+template <typename Fn>
+void TerrainGen4D::for_each_site(float x4, float z4, float w4, Fn&& fn) const {
+    // 18 units between sites, 45% of them occupied.
+    //
+    // Tuned by measuring, because reasoning about it went wrong twice.
+    // The first attempt used 40 and 30% and thought of it as a 3D grid,
+    // which is off by an axis: sites are spaced in x4, z4 AND w4, and a
+    // slice only sees the ones whose w falls inside a structure's extent.
+    // That measured one formation per roughly 150x150 blocks - invisible.
+    // The second derived the in-slice density as
+    //
+    //     (1 / grid^2) * exists * (2 * extent / grid)
+    //
+    // and predicted one per 55x55 at 24 units; measured, it was one per
+    // ~120x120, because the shoreline rule rejects a large share of sites
+    // and the formula does not know about it.
+    //
+    // So: measured. Structure blocks cover 0.74% of the ground at w = 0
+    // and 1.4% a few slabs along - a formation every 60-70 blocks of
+    // walking, enough that a walk passes several and not so many that the
+    // world reads as rubble.
+    constexpr float kGrid      = 18.0f;
+    constexpr float kExists    = 0.45f;
+    constexpr int   kMaxExtent = 7;
+
+    const int gx = static_cast<int>(std::floor(x4 / kGrid));
+    const int gz = static_cast<int>(std::floor(z4 / kGrid));
+    const int gw = static_cast<int>(std::floor(w4 / kGrid));
+
+    for (int dx = 0; dx <= 1; ++dx)
+    for (int dz = 0; dz <= 1; ++dz)
+    for (int dw = 0; dw <= 1; ++dw) {
+        const int sx = gx + dx, sz = gz + dz, sw = gw + dw;
+        if (hash4d_f(sx, sz, sw, 0x5C0FFEE1u ^ seed_) > kExists) continue;
+
+        StructureSite s{};
+        // Jitter off the grid, or every formation sits on a lattice and
+        // the world looks surveyed.
+        s.cx = (static_cast<float>(sx) +
+                hash4d_f(sx, sz, sw, 0x11u ^ seed_)) * kGrid;
+        s.cz = (static_cast<float>(sz) +
+                hash4d_f(sx, sz, sw, 0x22u ^ seed_)) * kGrid;
+        s.cw = (static_cast<float>(sw) +
+                hash4d_f(sx, sz, sw, 0x33u ^ seed_)) * kGrid;
+
+        if (std::fabs(x4 - s.cx) > kMaxExtent ||
+            std::fabs(z4 - s.cz) > kMaxExtent ||
+            std::fabs(w4 - s.cw) > kMaxExtent) continue;
+
+        // Only now is a terrain sample worth paying for.
+        s.base = height_at_4d(s.cx, s.cz, s.cw);
+        // Nothing rooted in the surf: a boulder standing in the water
+        // looks wrong even where it breaks no invariant.
+        if (s.base <= kSeaLevel + kSandBand + 1) continue;
+
+        const float pick = hash4d_f(sx, sz, sw, 0x44u ^ seed_);
+        s.is_ball = (pick < 0.62f);
+        if (s.is_ball) {
+            s.r = 3.0f + hash4d_f(sx, sz, sw, 0x55u ^ seed_) * 3.0f;
+        } else {
+            s.hx = 2.0f + hash4d_f(sx, sz, sw, 0x66u ^ seed_) * 2.5f;
+            s.hz = 2.0f + hash4d_f(sx, sz, sw, 0x77u ^ seed_) * 2.5f;
+            s.hw = 2.0f + hash4d_f(sx, sz, sw, 0x88u ^ seed_) * 2.5f;
+            s.r  = 7.0f + hash4d_f(sx, sz, sw, 0x99u ^ seed_) * 8.0f;  // height
+        }
+        fn(s);
+    }
+}
+
+bool TerrainGen4D::structure_footprint(float x4, float z4, float w4) const {
+    if (!structures_enabled_) return false;
+    bool inside = false;
+    for_each_site(x4, z4, w4, [&](const StructureSite& s) {
+        if (inside) return;
+        const float ddx = x4 - s.cx, ddz = z4 - s.cz, ddw = w4 - s.cw;
+        if (s.is_ball) {
+            if (ddx * ddx + ddz * ddz + ddw * ddw < s.r * s.r) inside = true;
+        } else {
+            if (std::fabs(ddx) < s.hx && std::fabs(ddz) < s.hz &&
+                std::fabs(ddw) < s.hw) inside = true;
+        }
+    });
+    return inside;
+}
+
+void TerrainGen4D::stamp_structures(float x4, float z4, float w4,
+                                    int column_height, Column4D& out) const {
+    if (!structures_enabled_) return;
+    // Nothing on the shoreline, tested on THIS column rather than on the
+    // structure's centre.
+    //
+    // The centre test came first and was not enough: a formation is up to
+    // seven blocks across, so a site on high ground can still overhang a
+    // column whose own surface is at the waterline. The generator
+    // guarantees every waterline column is sand-topped, and a stone
+    // overhang breaks it - which it did, twice, the second time only
+    // after the density went up enough to make the overlap likely.
+    if (column_height <= kSeaLevel + kSandBand + 1) return;
+
+    for_each_site(x4, z4, w4, [&](const StructureSite& s) {
+        const float ddx = x4 - s.cx, ddz = z4 - s.cz, ddw = w4 - s.cw;
+        if (s.is_ball) {
+            // A 4-BALL. Its intersection with the slice is a sphere of
+            // radius sqrt(r^2 - ddw^2), so travelling along w makes a
+            // boulder swell, peak and vanish - the clearest demonstration
+            // in the world that the fourth axis is real, and it costs one
+            // extra term in a distance check.
+            const float rr = s.r * s.r;
+            const float flat = ddx * ddx + ddz * ddz + ddw * ddw;
+            if (flat >= rr) return;
+            const float cy = static_cast<float>(s.base) + s.r * 0.45f;
+            const int y_lo = std::max(1, static_cast<int>(cy - s.r));
+            const int y_hi = std::min(kChunkSizeY - 1, static_cast<int>(cy + s.r));
+            for (int y = y_lo; y <= y_hi; ++y) {
+                const float ddy = static_cast<float>(y) - cy;
+                if (flat + ddy * ddy < rr) {
+                    out.blocks[static_cast<std::size_t>(y)] =
+                        static_cast<std::uint8_t>(BlockId::Stone);
+                }
+            }
+        } else {
+            // A 4-BOX. Rotating the cut turns its footprint from a
+            // rectangle into a hexagon exactly as one block's does, at
+            // eight times the size - the same geometry the hyperslice
+            // kernel proves, standing in the world where it can be walked
+            // around.
+            if (std::fabs(ddx) >= s.hx || std::fabs(ddz) >= s.hz ||
+                std::fabs(ddw) >= s.hw) return;
+            const int y_lo = std::max(1, s.base - 2);
+            const int y_hi = std::min(kChunkSizeY - 1,
+                                      s.base + static_cast<int>(s.r));
+            for (int y = y_lo; y <= y_hi; ++y) {
+                out.blocks[static_cast<std::size_t>(y)] =
+                    static_cast<std::uint8_t>(BlockId::Stone);
+            }
+        }
+    });
+}
 
 int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
     // Both slice axes map into the 4D axes once the cut is rotated: z
@@ -192,7 +349,17 @@ void TerrainGen4D::fill_column(float x4, float z4, float fw,
     // The construction carries over from the 3D generator; the iso width
     // does not, because those fields are OpenSimplex2 and these are
     // Perlin. See kCaveIsoWidth.
-    if (!caves_enabled_) return;
+    // Structures before the caves-disabled early return, not after it.
+    // Putting them at the bottom of this function made them a silent
+    // casualty of --no-caves, which is a flag that has nothing to do with
+    // them.
+    //
+    // A formation is a solid object, so it is stamped AFTER the cave pass
+    // when there is one - a cave should not be carved through a boulder.
+    if (!caves_enabled_) {
+        stamp_structures(x4, z4, fw, height, out);
+        return;
+    }
     constexpr int   kCaveCeiling  = 5;
     constexpr int   kCaveFloor    = 1;
     // 0.025, not the 3D generator's 0.05, and the reason is that the 3D
@@ -222,6 +389,8 @@ void TerrainGen4D::fill_column(float x4, float z4, float fw,
             put(y, BlockId::Air);
         }
     }
+
+    stamp_structures(x4, z4, fw, height, out);
 }
 
 void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const {
