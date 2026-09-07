@@ -318,9 +318,20 @@ int main(int argc, char** argv) {
     // while the context is still current. That ordering is why this is a
     // named local at the top of main rather than something tucked inside a
     // setup helper.
+    // Every mode that exists to produce a file or a number rather than to
+    // be played, captures included.
+    //
+    // The image modes used to open a VISIBLE window, which meant taking a
+    // screenshot stole focus from whatever the person was actually doing
+    // and left a game window on top of their work for the duration. The
+    // frame is read back off the GPU either way - --bench and --validate
+    // have always rendered into an invisible window - so visibility was
+    // never doing anything for them except getting in the way.
     const bool headless = bench_frames > 0 || bench_io || bench_edit > 0 ||
                           validate_mode || verify_edit_persistence ||
-                          verify_4d ||
+                          verify_4d || opt.bench_4d ||
+                          shot_after > 0 || orbit_frames > 0 ||
+                          cycle_frames > 0 || tilt_frames > 0 ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
