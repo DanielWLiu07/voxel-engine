@@ -316,6 +316,13 @@ if(VOXEL_BUILD_BENCH)
     target_compile_options(wcost PRIVATE -Wall -Wextra -Wpedantic -O2)
   endif()
 
+  # What 4D Miner's cross-section look would cost, in geometry rather
+  # than in opinion. Pure math: no GL, no engine, no world.
+  add_executable(hyperslice src/bench/hyperslice.cpp)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(hyperslice PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
   add_executable(queue_bench src/bench/queue_bench.cpp)
   target_include_directories(queue_bench PRIVATE src)
   find_package(Threads REQUIRED)
