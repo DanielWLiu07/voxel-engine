@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
@@ -496,6 +497,97 @@ void greedy_merge_lattice(std::vector<std::pair<std::int32_t, std::int32_t>>& ce
     }
 }
 
+
+// A vertical face waiting to be merged.
+//
+// The lattice face it lies on - which axis, which coordinate, which side -
+// plus everything that has to match for two of them to become one wall:
+// the block, its light and AO, and the exact y range the wall spans.
+//
+// The y range is in the key rather than merged over, and that is what
+// keeps this honest. A wall is emitted for the y where its cell is solid
+// and the cell across is not, so two neighbouring cells only share a wall
+// where they share that whole run. Merging across differing runs would
+// paper over the gap between them.
+struct WallKey {
+    std::int8_t  axis, side;      // 0=i 1=k 2=l ; 0=low face 1=high face
+    std::int32_t face;            // the lattice coordinate of that face
+    std::int32_t y0, y1;          // inclusive run the wall spans
+    std::uint8_t block, light;
+    bool operator==(const WallKey& o) const {
+        return axis == o.axis && side == o.side && face == o.face &&
+               y0 == o.y0 && y1 == o.y1 && block == o.block &&
+               light == o.light;
+    }
+};
+
+// One cell's contribution to a wall bucket: where it sits in the two
+// lattice axes the face does not span, and the segment it would emit on
+// its own.
+//
+// The segment is carried rather than recomputed because it is the
+// fallback: a merged box normally yields one edge on the face, but a face
+// that lies exactly along the chunk boundary can clip away, and then the
+// members have to go out individually. Dropping them instead would be a
+// hole in the world.
+struct WallEntry {
+    std::int32_t a, b;
+    float ax, az, bx, bz;
+};
+
+struct WallKeyHash {
+    std::size_t operator()(const WallKey& w) const noexcept {
+        std::uint64_t h = static_cast<std::uint32_t>(w.face) * 0x9E3779B97F4A7C15ull;
+        h ^= static_cast<std::uint32_t>(w.y0) * 0xBF58476D1CE4E5B9ull;
+        h ^= static_cast<std::uint32_t>(w.y1) * 0x94D049BB133111EBull;
+        h ^= (static_cast<std::uint64_t>(w.axis)  << 40) ^
+             (static_cast<std::uint64_t>(w.side)  << 32) ^
+             (static_cast<std::uint64_t>(w.block) <<  8) ^
+              static_cast<std::uint64_t>(w.light);
+        h ^= h >> 29; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 32;
+        return static_cast<std::size_t>(h);
+    }
+};
+
+// Which lattice face a polygon edge lies on, if any.
+//
+// The mesher never tagged its edges - the clipper produces a polygon and
+// nothing records which half-plane cut which side - so the face is
+// recovered from the geometry: an edge lies on a face when BOTH of its
+// endpoints satisfy that face's plane equation. Cheap (six dot products
+// per endpoint) and it cannot disagree with the clipper, because it asks
+// the same linear forms the clipper was built from.
+//
+// Returns false for an edge on the chunk's own boundary, which lies on no
+// lattice face and is emitted unmerged.
+inline bool edge_face(const SliceBasis& b, int i, int k, int l,
+                      float ax, float az, float bx, float bz,
+                      float x0, float z0,
+                      std::int8_t* axis, std::int8_t* side, std::int32_t* face) {
+    const float fx[3] = {b.x4_sx, b.z4_sx, b.w4_sx};
+    const float fz[3] = {b.x4_sz, b.z4_sz, b.w4_sz};
+    const float fc[3] = {b.x4_c,  b.z4_c,  b.w4_c};
+    const int lo[3] = {i, k, l};
+    // Chunk-local in, patch coordinates out: the forms are defined on the
+    // patch and the polygon was stored relative to the chunk origin.
+    const float pax = ax + x0, paz = az + z0;
+    const float pbx = bx + x0, pbz = bz + z0;
+    for (int a = 0; a < 3; ++a) {
+        const float va = fx[a] * pax + fz[a] * paz + fc[a];
+        const float vb = fx[a] * pbx + fz[a] * pbz + fc[a];
+        for (int sd = 0; sd < 2; ++sd) {
+            const float plane = static_cast<float>(lo[a]) + (sd ? 1.0f : 0.0f);
+            if (std::fabs(va - plane) < 1e-3f && std::fabs(vb - plane) < 1e-3f) {
+                *axis = static_cast<std::int8_t>(a);
+                *side = static_cast<std::int8_t>(sd);
+                *face = lo[a];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 struct PrismVertex {
     float x, y, z;
     float u, v;
@@ -579,6 +671,11 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
 
     std::unordered_map<CapKey, std::vector<std::pair<std::int32_t, std::int32_t>>,
                        CapKeyHash> caps;
+    std::unordered_map<WallKey, std::vector<WallEntry>, WallKeyHash> walls;
+
+    const SliceBasis basis = SliceBasis::from(pc.slice);
+    const float px = static_cast<float>(pc.coord.x * kChunkSizeX);
+    const float pz = static_cast<float>(pc.coord.z * kChunkSizeZ);
 
     PrismVertex q[4];
     for (const auto& cell : pc.cells) {
@@ -696,11 +793,44 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
                     const int lz = other ? other->vz : vz;
                     const std::uint8_t lt =
                         sample_light(light, lx, (wy + wy1) / 2, lz);
-                    q[0] = {ax, lo, az, 0.0f,  lo};
-                    q[1] = {ax, hi, az, 0.0f,  hi};
-                    q[2] = {bx, hi, bz, len,   hi};
-                    q[3] = {bx, lo, bz, len,   lo};
-                    push_quad(out, q, nrm, id, lt, 3);
+                    // Which lattice face this edge lies on.
+                    //
+                    // Taken from the NEIGHBOUR when there is one, because
+                    // that is exact: the cell across an edge differs by
+                    // exactly one on exactly one axis, and that names the
+                    // face outright. Deriving it from the geometry
+                    // instead was the first attempt and it silently did
+                    // almost nothing at a tilt - the polygon has been
+                    // snapped to the vertex grid by then, which moves a
+                    // plane equation by up to half a quantisation step,
+                    // thirty times the tolerance the test used. Flat cuts
+                    // snap exactly, so it worked there and only there.
+                    std::int8_t axis = -1, side = 0;
+                    std::int32_t face = 0;
+                    const std::int32_t lat[3] = {cell.i, cell.k, cell.l};
+                    if (other != nullptr) {
+                        const std::int32_t d[3] = {other->i - cell.i,
+                                                   other->k - cell.k,
+                                                   other->l - cell.l};
+                        for (int a2 = 0; a2 < 3; ++a2) {
+                            if (d[a2] == 1)      { axis = static_cast<std::int8_t>(a2); side = 1; }
+                            else if (d[a2] == -1){ axis = static_cast<std::int8_t>(a2); side = 0; }
+                        }
+                    }
+                    if (axis >= 0) {
+                        face = lat[axis];
+                        const int other0 = (axis == 0) ? 1 : 0;
+                        const int other1 = (axis == 2) ? 1 : 2;
+                        walls[WallKey{axis, side, face, wy, wy1, id, lt}]
+                            .push_back(WallEntry{lat[other0], lat[other1],
+                                                 ax, az, bx, bz});
+                    } else {
+                        q[0] = {ax, lo, az, 0.0f,  lo};
+                        q[1] = {ax, hi, az, 0.0f,  hi};
+                        q[2] = {bx, hi, bz, len,   hi};
+                        q[3] = {bx, lo, bz, len,   lo};
+                        push_quad(out, q, nrm, id, lt, 3);
+                    }
                     wy = wy1 + 1;
                 }
             }
@@ -718,9 +848,6 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
     // merged cap's edge has to land exactly where the wall hanging off it
     // does. Both are the same coordinate; the same coordinate snaps the
     // same way.
-    const SliceBasis basis = SliceBasis::from(pc.slice);
-    const float px = static_cast<float>(pc.coord.x * kChunkSizeX);
-    const float pz = static_cast<float>(pc.coord.z * kChunkSizeZ);
     for (auto& bucket : caps) {
         const CapKey& k = bucket.first;
         greedy_merge_lattice(bucket.second,
@@ -758,6 +885,91 @@ ChunkMeshData build_prism_mesh(const PrismChunk& pc,
                 }
                 push_quad(out, q, top ? kUp : kDown, k.block, k.light, k.ao);
             });
+        });
+    }
+
+    // The wall merge. Each bucket is one lattice face, one block, one
+    // light, one y run; its members are the cells along that face in the
+    // two lattice axes the face does not span.
+    //
+    // The merged wall's footprint is an EDGE of the merged box's polygon -
+    // the one lying on the face - which is why this can reuse box_polygon
+    // rather than clip a line by hand. The edge is found the same way the
+    // bucket key was: an edge lies on a face when both endpoints satisfy
+    // that face's plane.
+    for (auto& bucket : walls) {
+        const WallKey& w = bucket.first;
+        const int other0 = (w.axis == 0) ? 1 : 0;
+        const int other1 = (w.axis == 2) ? 1 : 2;
+
+        // Emits one wall quad from a segment already in chunk-local,
+        // snapped coordinates.
+        auto emit_wall = [&](float sax, float saz, float sbx, float sbz) {
+            const float dx = sbx - sax, dz = sbz - saz;
+            const float len = std::sqrt(dx * dx + dz * dz);
+            if (len < 1e-4f) return;
+            const float lo = static_cast<float>(w.y0);
+            const float hi = static_cast<float>(w.y1 + 1);
+            q[0] = {sax, lo, saz, 0.0f, lo};
+            q[1] = {sax, hi, saz, 0.0f, hi};
+            q[2] = {sbx, hi, sbz, len,  hi};
+            q[3] = {sbx, lo, sbz, len,  lo};
+            push_quad(out, q, gfx::encode_horizontal_normal(dz, -dx),
+                      w.block, w.light, 3);
+        };
+
+        std::vector<std::pair<std::int32_t, std::int32_t>> coords;
+        coords.reserve(bucket.second.size());
+        for (const auto& e : bucket.second) coords.emplace_back(e.a, e.b);
+
+        greedy_merge_lattice(coords, [&](std::int32_t a0, std::int32_t a1,
+                                         std::int32_t b0, std::int32_t b1) {
+            std::int32_t lo3[3], hi3[3];
+            lo3[w.axis] = hi3[w.axis] = w.face;
+            lo3[other0] = a0; hi3[other0] = a1;
+            lo3[other1] = b0; hi3[other1] = b1;
+
+            const SlicePolygon poly =
+                box_polygon(lo3[0], hi3[0], lo3[1], hi3[1], lo3[2], hi3[2],
+                            basis, px, pz, static_cast<float>(kChunkSizeX));
+
+            // The merged wall is the edge of the merged box that lies on
+            // the face. Found on the UNSNAPPED box polygon, where the
+            // plane test is exact - the snap happens after.
+            if (!poly.empty()) {
+                for (int e = 0; e < poly.count; ++e) {
+                    const int f = (e + 1) % poly.count;
+                    std::int8_t ax2 = 0, sd2 = 0;
+                    std::int32_t fc2 = 0;
+                    if (!edge_face(basis, lo3[0], lo3[1], lo3[2],
+                                   poly.x[e] - px, poly.z[e] - pz,
+                                   poly.x[f] - px, poly.z[f] - pz,
+                                   px, pz, &ax2, &sd2, &fc2)) continue;
+                    if (ax2 != w.axis || sd2 != w.side) continue;
+                    emit_wall(snap_xz(poly.x[e] - px), snap_xz(poly.z[e] - pz),
+                              snap_xz(poly.x[f] - px), snap_xz(poly.z[f] - pz));
+                    return;
+                }
+            }
+
+            // No edge on the face. This should be unreachable, and the
+            // argument is short: every member of this bucket contributed
+            // an edge that lies on the face AND inside the patch, and the
+            // merged box contains every member, so the box's own
+            // intersection with the face plane is non-empty inside the
+            // patch and has to show up as an edge.
+            //
+            // Instrumented rather than assumed - it fired zero times
+            // across the whole test suite, including the sixty-case fuzz.
+            // So it is an assert in debug and the safe direction in
+            // release: emit the members individually rather than drop
+            // them, because a dropped wall is a hole in the world and a
+            // duplicated one is a wasted quad.
+            assert(false && "merged wall box has no edge on its own face");
+            for (const auto& e : bucket.second) {
+                if (e.a < a0 || e.a > a1 || e.b < b0 || e.b > b1) continue;
+                emit_wall(e.ax, e.az, e.bx, e.bz);
+            }
         });
     }
 

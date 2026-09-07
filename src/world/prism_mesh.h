@@ -49,8 +49,18 @@ namespace world {
 //     in LATTICE space, over (i, k), rather than in slice space, where
 //     the faces are not axis-aligned and the sweep has nothing to grip.
 //     At a flat cut the lattice IS the voxel grid, so it reduces to the
-//     cube mesher's greedy pass. Measured: 2.47x -> 1.60x the greedy quad
-//     count flat, 4.97x -> 3.32x with both planes turned.
+//     cube mesher's greedy pass over the same mask. Walls merge the
+//     same way: a wall's footprint is the edge of the merged box that
+//     lies on the lattice face it sits on. Measured: 2.47x -> 1.41x the
+//     greedy quad count flat, 4.97x -> 3.05x with both planes turned.
+//
+//     It does not reach parity at a flat cut, and the reason belongs
+//     here rather than in a changelog: a merged wall spans one uniform
+//     y range, so two cells whose exposed heights differ never share a
+//     quad. The cube mesher's sweep works over (y, z) of the face plane
+//     and splits them, merging what overlaps. Closing that needs a 3D
+//     box decomposition over (two lattice axes, y); this is the 2D
+//     sweep, and 1.41x is what it gets.
 //
 //     None of the engine's published greedy figures are touched by any of
 //     this: it is a separate path the 3D engine never enters.

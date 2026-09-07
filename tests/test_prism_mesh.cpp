@@ -534,6 +534,67 @@ void test_merging_caps_covers_the_same_area() {
     }
 }
 
+void test_merging_walls_covers_the_same_area() {
+    // The wall half of the area oracle, and the one that caught a merge
+    // that was dropping geometry: an earlier version reported 0.75x the
+    // greedy quad count at a flat cut, which was not a triumph, it was
+    // walls going missing.
+    //
+    // Expected area is derived from the tiling directly - for every cell
+    // edge, every y where that cell is solid and the cell across is not
+    // contributes edge_length x 1. Compared against the area of the quads
+    // with a horizontal normal that actually came out.
+    for (const auto s : {slice_of(0.0f, 0.0f, 0.0f), slice_of(0.0f, 0.45f, 0.45f),
+                         slice_of(2.0f, 0.9f, -0.7f)}) {
+        world::TerrainGen4D gen(1337);
+        const auto pc = world::build_prism_chunk(gen, {1, 1}, s);
+
+        double want = 0.0;
+        for (const auto& cell : pc.cells) {
+            const int n = cell.poly.count;
+            for (int e = 0; e < n; ++e) {
+                const int f = (e + 1) % n;
+                const float dx = cell.poly.x[f] - cell.poly.x[e];
+                const float dz = cell.poly.z[f] - cell.poly.z[e];
+                const double len = std::sqrt(static_cast<double>(dx) * dx +
+                                             static_cast<double>(dz) * dz);
+                if (len < 1e-4) continue;
+                const world::PrismCell* across =
+                    (cell.across[e] >= 0) ? &pc.cells[static_cast<std::size_t>(cell.across[e])]
+                                          : nullptr;
+                for (int y = 0; y < world::kChunkSizeY; ++y) {
+                    if (!world::is_solid(static_cast<world::BlockId>(
+                            cell.blocks[static_cast<std::size_t>(y)]))) continue;
+                    const bool hidden = across != nullptr &&
+                        world::is_solid(static_cast<world::BlockId>(
+                            across->blocks[static_cast<std::size_t>(y)]));
+                    if (!hidden) want += len;
+                }
+            }
+        }
+
+        const auto mesh = world::build_prism_mesh(pc);
+        const float xs = mesh.xz_scale;
+        double got = 0.0;
+        for (std::size_t q = 0; q * 4 + 3 < mesh.vertices.size(); ++q) {
+            const int n = mesh.vertices[4 * q].normal;
+            if (n == 2 || n == 3) continue;   // vertical faces only
+            const auto& a = mesh.vertices[4 * q + 0];
+            const auto& b = mesh.vertices[4 * q + 1];
+            const auto& c = mesh.vertices[4 * q + 3];
+            const double h  = std::fabs(static_cast<double>(b.y) - a.y);
+            const double dx = (static_cast<double>(c.x) - a.x) * xs;
+            const double dz = (static_cast<double>(c.z) - a.z) * xs;
+            got += h * std::sqrt(dx * dx + dz * dz);
+        }
+
+        EXPECT(want > 100.0, "there were walls to compare");
+        EXPECT(std::fabs(got - want) < want * 0.02,
+               "merged vertical faces cover the same area the unmerged "
+               "ones did");
+    }
+}
+
 void test_merging_is_a_real_reduction() {
     // The merge has to actually merge. A pass that quietly did nothing
     // would satisfy the area check above perfectly, which is exactly the
@@ -691,6 +752,7 @@ int main() {
     test_winding_matches_the_normal_it_carries();
     test_reading_columns_back_out_of_voxels_is_lossy();
     test_merging_caps_covers_the_same_area();
+    test_merging_walls_covers_the_same_area();
     test_merging_is_a_real_reduction();
     test_fuzz_random_cuts_and_chunks();
     test_a_cell_keeps_its_block_when_the_cut_turns();

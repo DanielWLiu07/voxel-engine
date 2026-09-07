@@ -211,10 +211,10 @@ in both tilings must hold the same 256 blocks.
 
 | cut | cells/chunk | prism quads | greedy quads | ratio | prism ms | cube ms |
 |---|---|---|---|---|---|---|
-| flat | 256 | 24,278 | 15,200 | 1.60x | 2.68 | 2.90 |
-| ZW only | 346 | 28,370 | 12,965 | 2.19x | 3.24 | 2.48 |
-| both planes | 448 | 49,491 | 14,917 | 3.32x | 4.40 | 2.47 |
-| hard tilt | 481 | 66,179 | 17,085 | 3.87x | 5.08 | 2.52 |
+| flat | 256 | 21,382 | 15,200 | 1.41x | 2.90 | 3.06 |
+| ZW only | 346 | 25,335 | 12,965 | 1.95x | 3.40 | 2.52 |
+| both planes | 448 | 45,482 | 14,917 | 3.05x | 4.64 | 2.53 |
+| hard tilt | 481 | 61,338 | 17,085 | 3.59x | 5.36 | 2.55 |
 
 256 cells at a flat cut is the voxel grid exactly, and it is gated in the
 audit: an untilted 4D cut has to reduce to the cube world block for block,
@@ -235,31 +235,45 @@ of the 4D lattice instead of `(x, z)` of the chunk. At a flat cut the
 lattice IS the voxel grid and it reduces to the cube mesher's greedy pass
 exactly.
 
-Merging horizontal faces that way took the cost down by a third:
+Both horizontal and vertical faces merge that way - a wall's footprint is
+just the edge of the merged box that lies on the lattice face it sits on:
 
-| cut | before | after |
+| cut | before merging | after |
 |---|---|---|
-| flat | 2.47x greedy | **1.60x** |
-| ZW only | 3.45x | **2.19x** |
-| both planes | 4.97x | **3.32x** |
-| hard tilt | 4.98x | **3.87x** |
+| flat | 2.47x greedy | **1.41x** |
+| ZW only | 3.45x | **1.95x** |
+| both planes | 4.97x | **3.05x** |
+| hard tilt | 4.98x | **3.59x** |
 
 Vertical runs merge for free on top of that - y is the one axis the
 rotation never touches, so every cell in a column shares one polygon and
 runs of the same block collapse into a single prism exactly.
 
+It does not reach parity with greedy at a flat cut, and the reason is
+worth stating rather than rounding off: a merged wall has to span one
+uniform y range, so two cells whose exposed heights differ never share a
+quad, where the cube mesher's sweep splits them into two rectangles and
+merges what overlaps. Closing that needs a 3D box decomposition over
+(two lattice axes, y) rather than the 2D sweep here. 1.41x is what the 2D
+sweep gets.
+
 In the running engine at radius 12, on an M4:
 
 | | GPU mesh | frame | fps | triangles drawn |
 |---|---|---|---|---|
-| cubes (3D engine) | 10.99 MB | 4.69 ms | 213 | 145,418 |
-| cross-sections, flat cut | 22.25 MB | 5.28 ms | 189 | 317,450 |
-| cross-sections, both planes at 0.45 | 48.65 MB | 6.53 ms | 153 | 676,886 |
+| cubes (3D engine) | 10.99 MB | 4.70 ms | 213 | 145,418 |
+| cross-sections, flat cut | 19.05 MB | 5.19 ms | 193 | 272,672 |
+| cross-sections, both planes at 0.45 | 44.38 MB | 6.53 ms | 153 | 618,630 |
+
+The frame column is the median of three runs each (3D 4.69/4.70/4.82,
+flat 5.19/6.46/5.07, tilted 6.42/7.07/6.53) - it is a timing and it moves
+with machine load, which is why the spread is printed rather than hidden.
+The byte and triangle counts do not move.
 
     ./build/voxel_engine --bench-frame 240 --slice-prisms \
         --slice-tilt 0.45 --slice-tilt-xw 0.45
 
-So the mode costs 4.7x the triangles and 1.4x the frame at a compound
+So the mode costs 4.3x the triangles and 1.4x the frame at a compound
 tilt, and still lands 2.6x inside a 60 Hz budget. Those three rows are
 timings on one loaded machine; the byte counts and triangle counts above
 them are not.

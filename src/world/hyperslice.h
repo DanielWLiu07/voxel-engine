@@ -148,19 +148,20 @@ inline void clip_half_plane(SlicePolygon& p, float a, float b, float c) {
 //
 // At a flat cut the lattice IS the voxel grid, so this reduces to the
 // engine's existing greedy mesher exactly.
-inline SlicePolygon box_polygon(int i0, int i1, int k0, int k1, int l,
+inline SlicePolygon box_polygon(int i0, int i1, int k0, int k1,
+                                int l0, int l1,
                                 const SliceBasis& b,
                                 float x0, float z0, float span) {
     SlicePolygon p;
     p.count = 4;
-    p.x = {x0, x0 + span, x0 + span, x0, 0, 0, 0, 0};
-    p.z = {z0, z0, z0 + span, z0 + span, 0, 0, 0, 0};
+    p.x = {x0, x0 + span, x0 + span, x0};
+    p.z = {z0, z0, z0 + span, z0 + span};
 
     const float lo[3] = {static_cast<float>(i0), static_cast<float>(k0),
-                         static_cast<float>(l)};
+                         static_cast<float>(l0)};
     const float hi[3] = {static_cast<float>(i1) + 1.0f,
                          static_cast<float>(k1) + 1.0f,
-                         static_cast<float>(l) + 1.0f};
+                         static_cast<float>(l1) + 1.0f};
     const float ax[3] = {b.x4_sx, b.z4_sx, b.w4_sx};
     const float az[3] = {b.x4_sz, b.z4_sz, b.w4_sz};
     const float ac[3] = {b.x4_c,  b.z4_c,  b.w4_c};
@@ -172,12 +173,19 @@ inline SlicePolygon box_polygon(int i0, int i1, int k0, int k1, int l,
     return p;
 }
 
+// A box one w-slab deep, which is what a merged horizontal face is.
+inline SlicePolygon box_polygon(int i0, int i1, int k0, int k1, int l,
+                                const SliceBasis& b,
+                                float x0, float z0, float span) {
+    return box_polygon(i0, i1, k0, k1, l, l, b, x0, z0, span);
+}
+
 inline SlicePolygon cell_polygon(int i, int k, int l, const SliceBasis& b,
                                  float x0, float z0, float span) {
     SlicePolygon p;
     p.count = 4;
-    p.x = {x0, x0 + span, x0 + span, x0, 0, 0, 0, 0};
-    p.z = {z0, z0, z0 + span, z0 + span, 0, 0, 0, 0};
+    p.x = {x0, x0 + span, x0 + span, x0};
+    p.z = {z0, z0, z0 + span, z0 + span};
 
     const float lo[3] = {static_cast<float>(i), static_cast<float>(k),
                          static_cast<float>(l)};
