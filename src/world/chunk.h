@@ -74,6 +74,14 @@ public:
         return static_cast<BlockId>(blocks_[chunk_index(x, y, z)]);
     }
 
+    // The stamp sink interface, which a Chunk satisfies as it stands.
+    // Named rather than left implicit because the prism generator's cell
+    // sink has to satisfy the same three calls and nothing writes them
+    // down anywhere else.
+    bool in_bounds(int x, int y, int z) const {
+        return in_chunk_bounds(x, y, z);
+    }
+
     BlockId get_or_air(int x, int y, int z) const {
         return in_chunk_bounds(x, y, z) ? get(x, y, z) : BlockId::Air;
     }

@@ -2,10 +2,14 @@
 
 #include "core/profiler.h"
 
+#include "world/terrain_gen.h"   // altitude band constants
+#include "world/tree_stamps.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace world {
 
@@ -138,6 +142,72 @@ PrismChunk tile_footprint(ChunkCoord coord, TerrainGen4D::Slice s) {
 
 }  // namespace
 
+namespace {
+
+using CellIndex = std::unordered_map<CellKey, std::int32_t, CellKeyHash>;
+
+CellIndex index_of(PrismChunk& pc) {
+    CellIndex ix;
+    ix.reserve(pc.cells.size() * 2);
+    for (std::size_t n = 0; n < pc.cells.size(); ++n) {
+        ix.emplace(CellKey{pc.cells[n].i, pc.cells[n].k, pc.cells[n].l},
+                   static_cast<std::int32_t>(n));
+    }
+    return ix;
+}
+
+// Where a tree writes, in the lattice.
+//
+// A tree is the one feature of this generator that spills sideways, and
+// that makes it the one that has to know which space it is spilling in. A
+// cube-path tree spreads across voxel columns; here it spreads across
+// lattice cells at a fixed w, so it stays one 4D object - a tree occupies
+// a slab of the fourth dimension exactly as a placed block does, and
+// turning the cut cuts through it rather than deleting it.
+//
+// Out of bounds means "no such cell in this chunk's tiling", which is the
+// chunk boundary. Stamps clip there exactly as the cube path's clip at
+// in_chunk_bounds.
+struct CellSink {
+    std::vector<PrismCell>* cells;
+    const CellIndex*        index;
+    std::int32_t            l;
+
+    std::int32_t find(int i, int k) const {
+        const auto it = index->find(CellKey{i, k, l});
+        return (it == index->end()) ? -1 : it->second;
+    }
+    bool in_bounds(int i, int y, int k) const {
+        return y >= 0 && y < kChunkSizeY && find(i, k) >= 0;
+    }
+    BlockId get(int i, int y, int k) const {
+        const std::int32_t n = find(i, k);
+        if (n < 0) return BlockId::Air;
+        return static_cast<BlockId>(
+            (*cells)[static_cast<std::size_t>(n)]
+                .blocks[static_cast<std::size_t>(y)]);
+    }
+    void set(int i, int y, int k, BlockId b) {
+        const std::int32_t n = find(i, k);
+        if (n < 0) return;
+        (*cells)[static_cast<std::size_t>(n)]
+            .blocks[static_cast<std::size_t>(y)] =
+            static_cast<std::uint8_t>(b);
+    }
+};
+
+// The largest density the tree rule can produce, so a cell can be
+// rejected on one hash before its column is generated.
+//
+// The rule is 0.012 + max(0, biome) * 0.025 and biome is bounded by 1, so
+// nothing above 0.037 can ever plant. That gate rejects about 96% of
+// candidates for the cost of a multiply, which is what makes it
+// affordable to consider every cell that could reach into this chunk
+// rather than only the ones inside it.
+constexpr float kMaxTreeDensity = 0.037f;
+
+}  // namespace
+
 PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
                              TerrainGen4D::Slice s) {
     ZoneScopedN("build_prism_chunk");
@@ -146,6 +216,56 @@ PrismChunk build_prism_chunk(const TerrainGen4D& gen, ChunkCoord coord,
     for (auto& cell : pc.cells) {
         gen.fill_cell_column(cell.i, cell.k, cell.l, col);
         cell.blocks = col.blocks;
+    }
+
+    // Trees.
+    //
+    // Pushed from every cell that could REACH one of ours, not only from
+    // the ones inside the chunk. A canopy is five cells across, so
+    // planting only from cells the chunk owns would leave a tree-free
+    // band around every chunk - the artifact the cube path has and the
+    // reason its trees stop two blocks short of each boundary.
+    //
+    // The dilation is in the lattice and at a fixed w, which is the same
+    // statement as "a tree belongs to one slab of the fourth dimension".
+    ZoneScopedN("prism_trees");
+    const CellIndex ix = index_of(pc);
+    constexpr int kReach = 2;
+    std::unordered_set<CellKey, CellKeyHash> sources;
+    sources.reserve(pc.cells.size() * 4);
+    for (const auto& cell : pc.cells) {
+        for (int di = -kReach; di <= kReach; ++di)
+            for (int dk = -kReach; dk <= kReach; ++dk)
+                sources.insert(CellKey{cell.i + di, cell.k + dk, cell.l});
+    }
+
+    for (const CellKey& src : sources) {
+        // Same draw the cube path makes, on the same two coordinates, so
+        // an untilted cut plants the same trees in the same places.
+        const float r = hash2d_f(src.i, src.k, 0x7B1E5A2D);
+        if (r > kMaxTreeDensity) continue;
+
+        gen.fill_cell_column(src.i, src.k, src.l, col);
+        if (col.is_desert) continue;
+        if (col.guide_height <= kSeaLevel + kSandBand) continue;
+        if (col.guide_height >= kStoneBand) continue;
+        const int h = col.top;
+        if (h + 8 >= kChunkSizeY) continue;
+        if (static_cast<BlockId>(col.blocks[static_cast<std::size_t>(h)])
+            != BlockId::Grass) continue;
+        const float density = 0.012f + std::max(0.0f, col.biome) * 0.025f;
+        if (r > density) continue;
+
+        CellSink sink{&pc.cells, &ix, src.l};
+        const float pick = hash2d_f(src.i + 17, src.k + 41, 0x55AA00FF);
+        if (h > kStoneBand - 4 || col.biome > 0.25f) {
+            if (pick < 0.6f) stamp_conifer(sink, src.i, h + 1, src.k);
+            else             stamp_oak(sink, src.i, h + 1, src.k);
+        } else {
+            if (pick < 0.15f)      stamp_conifer(sink, src.i, h + 1, src.k);
+            else if (pick < 0.85f) stamp_oak(sink, src.i, h + 1, src.k);
+            else                   stamp_bush(sink, src.i, h + 1, src.k);
+        }
     }
     return pc;
 }

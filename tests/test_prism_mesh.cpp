@@ -95,6 +95,70 @@ void test_a_flat_cut_rasterises_to_the_cube_world() {
     EXPECT(mismatched == 0, "a flat cut rasterises to the cube world");
 }
 
+void test_a_flat_cut_grows_at_least_the_trees_the_cube_world_does() {
+    // Trees are the one thing the two paths cannot agree on exactly, and
+    // the difference is in the prism path's favour.
+    //
+    // The cube path plants only from columns 2..13 of each chunk, because
+    // a canopy is five wide and it has no way to reach across a chunk
+    // boundary - so a cube world has a tree-free band around every chunk.
+    // The prism path pushes from every lattice cell that can reach into
+    // this chunk, so it grows those too.
+    //
+    // What must hold is containment: wherever the cube world has a tree
+    // block, the prism world has one. A missing tree would mean the draw
+    // or the planting rule diverged; extra ones are the boundary band
+    // being filled in.
+    world::TerrainGen4D gen(1337);
+    const auto s = slice_of(0.0f, 0.0f, 0.0f);
+    world::Chunk cube;
+    gen.fill_chunk(2, -5, s, cube);
+    world::Chunk prism;
+    world::rasterize_to_chunk(world::build_prism_chunk(gen, {2, -5}, s), prism);
+
+    auto is_tree = [](world::BlockId b) {
+        return b == world::BlockId::Wood || b == world::BlockId::Leaves;
+    };
+    long cube_tree = 0, prism_tree = 0, missing = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z)
+        for (int x = 0; x < world::kChunkSizeX; ++x)
+            for (int y = 0; y < world::kChunkSizeY; ++y) {
+                const bool a = is_tree(cube.get(x, y, z));
+                const bool b = is_tree(prism.get(x, y, z));
+                if (a) ++cube_tree;
+                if (b) ++prism_tree;
+                if (a && !b) ++missing;
+            }
+    EXPECT(cube_tree > 0, "the cube world grew trees here to compare against");
+    EXPECT(missing == 0, "every cube-world tree block is in the prism world");
+    EXPECT(prism_tree >= cube_tree,
+           "and the prism world grows the boundary trees the cube world drops");
+}
+
+void test_a_tree_belongs_to_one_slab_of_the_fourth_dimension() {
+    // A tree spreads across lattice cells at a FIXED w, so it is one 4D
+    // object: turning the cut cuts through it rather than deleting it.
+    // Stamping across w instead would smear every tree through the fourth
+    // dimension, which is both wrong and unmistakable - the world would
+    // be nothing but forest.
+    world::TerrainGen4D gen(1337);
+    const auto pc = world::build_prism_chunk(gen, {2, -5},
+                                             slice_of(0.0f, 0.35f, 0.25f));
+    std::set<int> w_slabs_with_trees;
+    long tree_cells = 0;
+    for (const auto& c : pc.cells) {
+        bool has = false;
+        for (std::size_t y = 0; y < c.blocks.size(); ++y) {
+            const auto b = static_cast<world::BlockId>(c.blocks[y]);
+            if (b == world::BlockId::Wood || b == world::BlockId::Leaves) has = true;
+        }
+        if (has) { ++tree_cells; w_slabs_with_trees.insert(c.l); }
+    }
+    EXPECT(tree_cells > 0, "a tilted cut passes through trees");
+    EXPECT(w_slabs_with_trees.size() > 1,
+           "and through more than one slab of w, since the cut is tilted");
+}
+
 void test_the_tiling_covers_every_voxel_at_any_tilt() {
     // rasterize_to_chunk skips a voxel whose centre lands in no cell. If
     // that ever happens the player falls through a world they can see.
@@ -277,6 +341,8 @@ int main() {
     std::printf("prism_tests: running...\n");
     test_a_flat_cut_tiles_into_the_voxel_grid();
     test_a_flat_cut_rasterises_to_the_cube_world();
+    test_a_flat_cut_grows_at_least_the_trees_the_cube_world_does();
+    test_a_tree_belongs_to_one_slab_of_the_fourth_dimension();
     test_the_tiling_covers_every_voxel_at_any_tilt();
     test_a_compound_cut_produces_shapes_a_cube_cannot();
     test_one_prism_is_a_closed_surface();

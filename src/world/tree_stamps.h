@@ -41,10 +41,23 @@ inline float hash2d_f(int x, int z, std::uint32_t seed) {
     return (hash2d(x, z, seed) & 0x00FFFFFFu) / 16777216.0f;
 }
 
+// The three stamps are templates on what they write into, and the two
+// sinks are not interchangeable geometry: the cube generator stamps into
+// a Chunk addressed by voxel, the prism generator into a set of 4D
+// lattice cells addressed by (i, k) at a fixed w. A tree is the one
+// feature that spills sideways, so it is the one that has to know which
+// space it is spilling in.
+//
+// A sink provides get, set, and in_bounds - Chunk already has all three.
+// Nothing else about the stamps changes, which is the point: both worlds
+// keep growing identical trees, and the heights the tests pin (bush 1,
+// oak 5, conifer 7) stay pinned for both.
+
 // Small oak: 5-tall trunk under a 5-wide canopy layer with its four
 // corners knocked off, a 3x3 layer above it missing a random half of its
 // corners, and one leaf on top.
-inline void stamp_oak(Chunk& c, int lx, int base_y, int lz) {
+template <class Sink>
+inline void stamp_oak(Sink& c, int lx, int base_y, int lz) {
     constexpr int kTrunkH = 5;
     const int top = base_y + kTrunkH;
 
@@ -54,7 +67,7 @@ inline void stamp_oak(Chunk& c, int lx, int base_y, int lz) {
     }
 
     auto put_leaf = [&](int x, int y, int z) {
-        if (!in_chunk_bounds(x, y, z)) return;
+        if (!c.in_bounds(x, y, z)) return;
         if (is_solid(c.get(x, y, z))) return;
         c.set(x, y, z, BlockId::Leaves);
     };
@@ -76,7 +89,8 @@ inline void stamp_oak(Chunk& c, int lx, int base_y, int lz) {
 }
 
 // Tall conifer: 7-tall trunk, pointy stepped canopy.
-inline void stamp_conifer(Chunk& c, int lx, int base_y, int lz) {
+template <class Sink>
+inline void stamp_conifer(Sink& c, int lx, int base_y, int lz) {
     constexpr int kTrunkH = 7;
     const int top = base_y + kTrunkH;
 
@@ -86,7 +100,7 @@ inline void stamp_conifer(Chunk& c, int lx, int base_y, int lz) {
     }
 
     auto put_leaf = [&](int x, int y, int z) {
-        if (!in_chunk_bounds(x, y, z)) return;
+        if (!c.in_bounds(x, y, z)) return;
         if (is_solid(c.get(x, y, z))) return;
         c.set(x, y, z, BlockId::Leaves);
     };
@@ -106,11 +120,12 @@ inline void stamp_conifer(Chunk& c, int lx, int base_y, int lz) {
 }
 
 // Small bush: 1-tall stem, one 3x3 leaf layer, one leaf above its centre.
-inline void stamp_bush(Chunk& c, int lx, int base_y, int lz) {
-    if (in_chunk_bounds(lx, base_y, lz)) c.set(lx, base_y, lz, BlockId::Wood);
+template <class Sink>
+inline void stamp_bush(Sink& c, int lx, int base_y, int lz) {
+    if (c.in_bounds(lx, base_y, lz)) c.set(lx, base_y, lz, BlockId::Wood);
 
     auto put_leaf = [&](int x, int y, int z) {
-        if (!in_chunk_bounds(x, y, z)) return;
+        if (!c.in_bounds(x, y, z)) return;
         if (is_solid(c.get(x, y, z))) return;
         c.set(x, y, z, BlockId::Leaves);
     };
