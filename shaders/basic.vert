@@ -10,6 +10,18 @@ layout(location = 2) in uvec2 a_block_light;
 const vec3 kNormals[6] = vec3[6](
     vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0),
     vec3(0, -1, 0), vec3(0, 0, 1), vec3(0, 0, -1));
+
+// Indices 6..255 are 250 horizontal directions, for the walls of a 4D
+// block's cross-section - see gfx::decode_packed_normal, which this
+// mirrors exactly. A voxel face needs six normals; a hexagonal pillar's
+// sides face wherever the cut left them, and they are always horizontal
+// because y is the axis the slice rotation leaves alone.
+vec3 decode_normal(uint idx) {
+    if (idx < 6u) return kNormals[idx];
+    float a = float(idx - 6u) * (6.28318530717958648 / 250.0);
+    return vec3(cos(a), 0.0, sin(a));
+}
+
 // AO brightness per 0..3 occlusion level (was baked CPU-side pre-packing).
 const float kAoBrightness[4] = float[4](0.45, 0.65, 0.82, 1.00);
 
@@ -17,6 +29,9 @@ uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_proj;
 uniform mat4 u_light_vp[3];
+// 1.0 for the cube mesher, whose uv is a whole run length; 1/64 for
+// prism meshes, whose uv runs across a fraction of a block.
+uniform float u_uv_scale;
 
 out vec3  v_normal_ws;
 out vec2  v_uv;
@@ -29,8 +44,8 @@ flat out int v_block_id;
 
 void main() {
     vec3 a_position = vec3(float(a_xzna.x), float(a_yuv.x), float(a_xzna.y));
-    vec3 a_normal   = kNormals[a_xzna.z];
-    vec2 a_uv       = vec2(float(a_yuv.y), float(a_yuv.z));
+    vec3 a_normal   = decode_normal(a_xzna.z);
+    vec2 a_uv       = vec2(float(a_yuv.y), float(a_yuv.z)) * u_uv_scale;
     float a_ao      = kAoBrightness[a_xzna.w];
     vec4 world = u_model * vec4(a_position, 1.0);
     v_world_pos = world.xyz;

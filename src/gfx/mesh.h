@@ -3,6 +3,7 @@
 #include <glad/gl.h>
 #include <glm/glm.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -14,6 +15,86 @@ namespace gfx {
 // +X,-X,+Y,-Y,+Z,-Z order. The vertex shader carries the same table.
 inline constexpr glm::vec3 kPackedNormals[6] = {
     {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+
+// Indices 6..255 are horizontal directions, 250 of them evenly spaced.
+//
+// A voxel face points along an axis and six values cover it. A 4D block's
+// cross-section does not: turn the cut in both planes and a cell presents
+// a hexagonal pillar whose walls face whichever way the clip left them.
+// Those walls are always HORIZONTAL - y is the one axis the slice
+// rotation leaves alone, so a prism's sides are vertical and its caps are
+// flat - which is why a single angle describes them and a full normal
+// encoding is not needed.
+//
+// 250 directions is 1.44 degrees apart, so a wall's shading is off by at
+// most 0.72 degrees. Lambert over that error moves a face's brightness by
+// under 0.01%. The alternative was a wider vertex, and the 12-byte stride
+// is load-bearing for a published figure.
+//
+// The first six entries are untouched, so every vertex the cube mesher
+// has ever emitted decodes exactly as before.
+inline constexpr int kAxisNormalCount  = 6;
+inline constexpr int kHorizNormalCount = 250;
+static_assert(kAxisNormalCount + kHorizNormalCount <= 256,
+              "the normal index is one byte");
+
+inline constexpr float kTwoPi = 6.28318530717958647692f;
+
+inline glm::vec3 decode_packed_normal(unsigned idx) {
+    if (idx < static_cast<unsigned>(kAxisNormalCount))
+        return kPackedNormals[idx];
+    const float a = static_cast<float>(idx - kAxisNormalCount) *
+                    (kTwoPi / static_cast<float>(kHorizNormalCount));
+    return {std::cos(a), 0.0f, std::sin(a)};
+}
+
+// Nearest horizontal index for a direction in the XZ plane. The input
+// need not be normalized; only its angle is read.
+inline std::uint8_t encode_horizontal_normal(float nx, float nz) {
+    float a = std::atan2(nz, nx);
+    if (a < 0.0f) a += kTwoPi;
+    int q = static_cast<int>(std::lround(
+        a * (static_cast<float>(kHorizNormalCount) / kTwoPi)));
+    q %= kHorizNormalCount;
+    return static_cast<std::uint8_t>(kAxisNormalCount + q);
+}
+
+// Sub-block position quantisation, for meshes whose vertices do not land
+// on the voxel lattice.
+//
+// The cube mesher's x and z are integers in [0, 16] and go into the two
+// position bytes as themselves. A prism's corners are wherever the
+// hyperplane cut them, so they need a fraction, and the byte pair has to
+// carry [0, 16] in 255 steps rather than 16. The scale rides in u_model
+// as a non-uniform (s, 1, s), which is exact for these meshes: prism
+// normals are either straight up, straight down, or purely horizontal,
+// and a diagonal scale leaves all three pointing where they were once
+// the shader normalizes.
+//
+// 16/255 is 6.3 cm of quantisation. It cannot open a crack between two
+// cells: neighbours share a vertex COORDINATE, and the same float rounds
+// the same way, so a shared corner stays shared. A sliver thinner than
+// one step collapses to nothing, which is the correct outcome for a
+// face thinner than a twentieth of a block.
+inline constexpr float kSubUnitXZScale = 16.0f / 255.0f;
+
+// Texture coordinates in 1/64 of a block. The cube mesher emits whole-run
+// lengths and uses a scale of 1; a prism needs fractions of a block along
+// a wall, and 1/64 leaves room for a 256-block vertical run (16384) well
+// inside the u16.
+inline constexpr float kSubUnitUVScale = 1.0f / 64.0f;
+
+inline std::uint8_t quantize_sub_unit_xz(float v) {
+    const float q = v / kSubUnitXZScale;
+    return static_cast<std::uint8_t>(
+        std::lround(q < 0.0f ? 0.0f : (q > 255.0f ? 255.0f : q)));
+}
+
+inline std::uint16_t quantize_sub_unit_uv(float v) {
+    const float q = v / kSubUnitUVScale;
+    return static_cast<std::uint16_t>(
+        std::lround(q < 0.0f ? 0.0f : (q > 65535.0f ? 65535.0f : q)));
+}
 
 // Chunk-mesh vertex, packed to 12 bytes (the float layout it replaced was
 // 40). Every field is exactly representable: positions are mesh-local
@@ -39,7 +120,7 @@ struct VertexPacked {
         return {static_cast<float>(x), static_cast<float>(y),
                 static_cast<float>(z)};
     }
-    glm::vec3 nrm() const { return kPackedNormals[normal]; }
+    glm::vec3 nrm() const { return decode_packed_normal(normal); }
 };
 static_assert(sizeof(VertexPacked) == 12, "packed layout drifted");
 

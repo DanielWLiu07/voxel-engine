@@ -19,6 +19,15 @@ struct ChunkMeshData {
     std::vector<gfx::VertexPacked> vertices;
     int    quad_count = 0;
     double build_ms = 0.0;
+    // What one unit of the packed x/z bytes is worth in blocks, and what
+    // one unit of u/v is worth. Both 1 for the cube mesher, whose
+    // positions are already integers and whose uv is a whole run length.
+    // The prism mesher cuts corners wherever the hyperplane left them, so
+    // it quantises - see gfx::kSubUnitXZScale. Carried on the mesh rather
+    // than read from a global because the section bucketer needs it to
+    // turn vertices back into world-space AABBs, and it runs on a worker.
+    float  xz_scale = 1.0f;
+    float  uv_scale = 1.0f;
 };
 
 // The four horizontally adjacent chunks, when they are known.

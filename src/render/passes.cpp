@@ -114,6 +114,10 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     shadow_map.bind_depth_array(1);
     // u_atlas already bound to unit 0 by the caller; remind the shader.
     terrain_shader.set_int("u_atlas", 0);
+    // Whole run lengths for the cube mesher, fractions of a block for the
+    // prism mesher. An unset uniform is zero, which would collapse every
+    // texture coordinate to a single texel, so this is not optional.
+    terrain_shader.set_float("u_uv_scale", wrld.mesh_uv_scale());
 
     terrain_shader.set_mat4_array("u_light_vp", fv.light_vp, gfx::kNumCascades);
     terrain_shader.set_float_array("u_cascade_far", fv.cascade_far,

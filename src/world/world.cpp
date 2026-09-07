@@ -97,6 +97,11 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
     std::array<SectionBuild, kSectionsPerChunk> out;
     const float ox = static_cast<float>(coord.x * kChunkSizeX);
     const float oz = static_cast<float>(coord.z * kChunkSizeZ);
+    // Vertices are in mesh units, which are blocks only for the cube
+    // mesher. Culling AABBs are in world blocks, so the horizontal
+    // extents convert; y is in blocks either way, and the section a quad
+    // is bucketed into is chosen from y alone.
+    const float xs = src.xz_scale;
 
     const std::size_t quad_count = src.vertices.size() / 4;
     for (std::size_t q = 0; q < quad_count; ++q) {
@@ -127,8 +132,8 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
         s.vertices.push_back(src.vertices[4 * q + 3]);
         ++s.quad_count;
 
-        const glm::vec3 lo{xmin + ox, ymin, zmin + oz};
-        const glm::vec3 hi{xmax + ox, ymax, zmax + oz};
+        const glm::vec3 lo{xmin * xs + ox, ymin, zmin * xs + oz};
+        const glm::vec3 hi{xmax * xs + ox, ymax, zmax * xs + oz};
         if (!s.initialized) {
             s.aabb_min = lo;
             s.aabb_max = hi;
@@ -1359,6 +1364,14 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
         const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
         const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
         glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
+        // Sub-block meshes store x and z in units of mesh_xz_scale_. The
+        // scale is diagonal and leaves y alone, which is exact for every
+        // normal these meshes carry: prism walls are horizontal and its
+        // caps point straight up or down, and all three survive a
+        // (s, 1, s) scale once the shader normalizes.
+        if (mesh_xz_scale_ != 1.0f) {
+            model = glm::scale(model, {mesh_xz_scale_, 1.0f, mesh_xz_scale_});
+        }
         bool vao_bound = false;
         bool drew_any  = false;
         for (int i = 0; i < kSectionsPerChunk; ++i) {

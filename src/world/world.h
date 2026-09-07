@@ -684,6 +684,13 @@ public:
     void set_mesher(MesherKind kind) { mesher_kind_ = kind; }
     MesherKind mesher() const { return mesher_kind_; }
 
+    // What the meshes currently resident are encoded in. The draw path
+    // folds xz into u_model and hands uv to the shader; both are 1 unless
+    // the prism mesher is running, which keeps every cube-path draw call
+    // byte-for-byte what it was.
+    float mesh_xz_scale() const { return mesh_xz_scale_; }
+    float mesh_uv_scale() const { return mesh_uv_scale_; }
+
     std::size_t chunk_count() const { return chunks_.size(); }
     // Chunks still owed a re-mesh because a neighbour landed after them.
     // A world with a nonzero count draws correctly but is still carrying
@@ -842,6 +849,8 @@ private:
                         const std::function<void(const glm::mat4&)>& set_model) const;
 
     MesherKind mesher_kind_ = MesherKind::Greedy;
+    float mesh_xz_scale_ = 1.0f;
+    float mesh_uv_scale_ = 1.0f;
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
     // The one element buffer every chunk mesh shares (all quads use the
     // same index pattern); grown to the largest chunk seen, uploaded once.
