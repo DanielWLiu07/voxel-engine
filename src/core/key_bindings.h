@@ -25,6 +25,8 @@ enum class Bind {
     SliceForward, SliceBack,
     // Held: the mouse turns the 4D cut instead of the camera.
     SliceLook,
+    // Draw blocks as their 4D cross-section instead of as cubes.
+    SlicePrisms,
     Count,
 };
 
@@ -65,6 +67,12 @@ inline constexpr KeyBinding kBindings[static_cast<int>(Bind::Count)] = {
     // because one leaves an axis of 4D orientation unreachable - you can
     // lean the world away from you but never sideways.
     {GLFW_KEY_M,             "M",     "hold: mouse turns the 4D cut"},
+    // The one control that changes what a block IS rather than where the
+    // cut is. Worth a key rather than only a launch flag, because the
+    // difference between a cube and a hexagonal pillar is a thing to
+    // toggle back and forth while looking at one hillside, not a thing to
+    // compare across two launches.
+    {GLFW_KEY_P,             "P",     "toggle 4D cross-section blocks"},
 };
 
 constexpr int key_of(Bind b) { return kBindings[static_cast<int>(b)].key; }

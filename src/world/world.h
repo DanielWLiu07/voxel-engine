@@ -126,6 +126,11 @@ struct ChunkSlot {
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
     std::size_t gpu_bytes = 0;
+    // What one unit of this mesh's packed x/z bytes is worth in blocks.
+    // 1 for a cube mesh, gfx::kSubUnitXZScale for a prism one. Per chunk
+    // rather than per world so the two can be resident at once while a
+    // mesher switch works its way through the window.
+    float      mesh_xz_scale = 1.0f;
     // Which of the four horizontal neighbours were resident when this
     // slot's mesh was built, as kNeighbor* bits. A chunk meshed before a
     // neighbour arrived still carries the boundary faces that neighbour
@@ -669,29 +674,39 @@ public:
     void set_mesher(MesherKind kind) { mesher_kind_ = kind; }
     MesherKind mesher() const { return mesher_kind_; }
 
-    // What the meshes currently resident are encoded in. The draw path
-    // folds xz into u_model and hands uv to the shader; both are 1 unless
-    // the prism mesher is running, which keeps every cube-path draw call
-    // byte-for-byte what it was.
-    float mesh_xz_scale() const { return mesh_xz_scale_; }
-    float mesh_uv_scale() const { return mesh_uv_scale_; }
+    // What texture coordinates are encoded in. One value for every mesh
+    // the engine builds, which is what lets the cube and prism meshers
+    // coexist in one world: a per-chunk uv scale would need a uniform set
+    // per chunk, and the terrain pass sets uv once.
+    static constexpr float mesh_uv_scale() { return gfx::kSubUnitUVScale; }
 
     // Draw blocks as the cross-section of the 4D lattice rather than as
     // cubes. Requires a 4D generator; a 3D world has no lattice to cut
     // and set_prism_meshing is ignored there.
     //
-    // World-wide and not per chunk, because the mesh encoding rides in
-    // u_model and one uniform serves the whole terrain pass. That is also
-    // why every mesh built while it is on has to come from the prism
-    // path, including chunks restored from disk: a cube mesh drawn with
-    // the prism model matrix would be crushed into a sixteenth of its
-    // chunk.
-    void set_prism_meshing(bool on) {
-        prisms_ = on && slice_gen_ != nullptr;
-        mesh_xz_scale_ = prisms_ ? gfx::kSubUnitXZScale : 1.0f;
-        mesh_uv_scale_ = prisms_ ? gfx::kSubUnitUVScale : 1.0f;
-    }
+    // Takes effect on chunks built from here on. Position scale is
+    // per-chunk (ChunkSlot::mesh_xz_scale), so a world part-way through
+    // switching draws both kinds correctly rather than crushing the ones
+    // that have not caught up - which is what makes it a runtime toggle
+    // and not a launch flag.
+    void set_prism_meshing(bool on) { prisms_ = on && slice_gen_ != nullptr; }
     bool prism_meshing() const { return prisms_; }
+
+    // How many resident chunks hold each mesh encoding.
+    //
+    // Exists so the validator can prove it is looking at a genuinely
+    // MIXED window rather than at one that has not started switching yet.
+    // A check that only ever runs where the thing it guards is absent is
+    // not a check, and a mesher switch is a transient, so the only way to
+    // tell the two apart is to count.
+    void mesh_encoding_mix(int* cube, int* prism) const {
+        *cube = 0; *prism = 0;
+        for (const auto& kv : chunks_) {
+            if (!kv.second->any_section_has_mesh) continue;
+            if (kv.second->mesh_xz_scale == 1.0f) ++*cube;
+            else                                  ++*prism;
+        }
+    }
 
     std::size_t chunk_count() const { return chunks_.size(); }
     // Chunks still owed a re-mesh because a neighbour landed after them.
@@ -852,8 +867,6 @@ private:
 
     MesherKind mesher_kind_ = MesherKind::Greedy;
     bool  prisms_ = false;
-    float mesh_xz_scale_ = 1.0f;
-    float mesh_uv_scale_ = 1.0f;
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
     // The one element buffer every chunk mesh shares (all quads use the
     // same index pattern); grown to the largest chunk seen, uploaded once.

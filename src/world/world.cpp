@@ -154,7 +154,9 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
 // data is built or uploaded per chunk at all.
 void apply_sections(ChunkSlot& slot,
                     std::array<SectionBuild, kSectionsPerChunk>&& built,
-                    gfx::QuadIndexBuffer& quad_indices) {
+                    gfx::QuadIndexBuffer& quad_indices,
+                    float xz_scale) {
+    slot.mesh_xz_scale = xz_scale;
     slot.any_section_has_mesh = false;
     bool union_init = false;
 
@@ -233,7 +235,7 @@ std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk,
     slot->chunk = std::move(chunk);
     slot->section_visibility = visibility;
     auto built = bucket_quads_by_section(mesh_data, coord);
-    apply_sections(*slot, std::move(built), quad_indices);
+    apply_sections(*slot, std::move(built), quad_indices, mesh_data.xz_scale);
     return slot;
 }
 
@@ -1100,7 +1102,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // meshing on a 16x256x16 chunk is sub-millisecond, so doing it again
     // per edit is fine.
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
-    apply_sections(slot, std::move(built), quad_ibo_);
+    apply_sections(slot, std::move(built), quad_ibo_, mesh_data.xz_scale);
     slot.section_visibility = compute_section_visibility(slot.chunk);
     edit_last_ms_ = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - edit_t0).count();
@@ -1341,12 +1343,12 @@ int World::debug_validate_gpu_meshes() const {
     std::vector<gfx::VertexPacked> verts;
     std::vector<std::uint32_t> idx;
     int bad = 0;
-    const float xz = mesh_xz_scale_;
     for (const auto& kv : chunks_) {
         const ChunkSlot& slot = *kv.second;
         if (!slot.any_section_has_mesh) continue;
+        const float xz = slot.mesh_xz_scale;
         slot.chunk_mesh.debug_read_back(verts, idx);
-        if (prisms_) {
+        if (xz != 1.0f) {
             for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
                 const glm::vec3 p0 = vertex_blocks(verts[idx[t]], xz);
                 const glm::vec3 p1 = vertex_blocks(verts[idx[t + 1]], xz);
@@ -1452,13 +1454,14 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
         const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
         const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
         glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
-        // Sub-block meshes store x and z in units of mesh_xz_scale_. The
+        // Sub-block meshes store x and z in units of mesh_xz_scale. The
         // scale is diagonal and leaves y alone, which is exact for every
         // normal these meshes carry: prism walls are horizontal and its
         // caps point straight up or down, and all three survive a
         // (s, 1, s) scale once the shader normalizes.
-        if (mesh_xz_scale_ != 1.0f) {
-            model = glm::scale(model, {mesh_xz_scale_, 1.0f, mesh_xz_scale_});
+        if (slot.mesh_xz_scale != 1.0f) {
+            model = glm::scale(model,
+                               {slot.mesh_xz_scale, 1.0f, slot.mesh_xz_scale});
         }
         bool vao_bound = false;
         bool drew_any  = false;

@@ -873,6 +873,20 @@ int main(int argc, char** argv) {
             wireframe = !wireframe;
             std::printf("[gfx] wireframe %s\n", wireframe ? "on" : "off");
         }
+        if (opt.four_d && input.key_pressed(core::key_of(core::Bind::SlicePrisms))) {
+            wrld.set_prism_meshing(!wrld.prism_meshing());
+            // resample_slice re-requests the whole window at the current
+            // cut, which is exactly what a mesher change needs. The
+            // position scale lives on each chunk, so the window draws
+            // correctly while the new meshes are still arriving rather
+            // than crushing whichever half has not caught up.
+            wrld.resample_slice(terrain, pool);
+            std::printf("[world] blocks drawn as %s\n",
+                        wrld.prism_meshing()
+                            ? "4D cross-sections (hexagonal pillars at a "
+                              "compound tilt)"
+                            : "cubes");
+        }
         if (input.key_pressed(core::key_of(core::Bind::Save))) {
             save_world_to_disk(wrld, terrain_seed);
         }
@@ -1443,7 +1457,60 @@ int main(int argc, char** argv) {
         // before their neighbours arrived are still owed a re-mesh, and
         // validating mid-convergence reports the pre-culling footprint.
         if (validate_mode && world_settled) {
-            const int bad = wrld.debug_validate_gpu_meshes();
+            // Measured BEFORE the switch test below, which re-meshes the
+            // window twice and leaves more chunks with neighbours to cull
+            // against than a first load has. The reported figure has to
+            // describe the world the flags asked for, not the world the
+            // validator left behind.
+            const int    bad    = wrld.debug_validate_gpu_meshes();
+            const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
+                                  / (1024.0 * 1024.0);
+
+            // In prism mode, validate the SWITCH as well as the state.
+            //
+            // The mesher can be toggled at runtime (P), and the position
+            // encoding is per chunk precisely so a half-switched window
+            // draws correctly. That is a claim about a transient, and a
+            // transient is exactly what no screenshot catches: flip the
+            // mesher, let the window refill part of the way, and validate
+            // the world that exists while both kinds are resident. A chunk
+            // built the wrong way round is crushed into a sixteenth of its
+            // footprint, which the range check sees.
+            if (wrld.prism_meshing()) {
+                wrld.set_prism_meshing(false);
+                wrld.resample_slice(terrain, pool);
+                // Drain part of the way, not all of it. A fully drained
+                // window is not mixed, and validating one would prove
+                // nothing - the counts below are what says this ran
+                // against a window that really did hold both encodings.
+                //
+                // Drained to a CONDITION rather than for a fixed number of
+                // rounds. A fixed count makes the mix a function of how
+                // fast the workers happen to be, which is a gate that
+                // passes on this machine and fails on a slower one for no
+                // reason anybody could act on.
+                int cube = 0, prism = 0;
+                for (int i = 0; i < 20000 && cube < 8; ++i) {
+                    wrld.drain_finished(8);
+                    wrld.mesh_encoding_mix(&cube, &prism);
+                    if (cube == 0) std::this_thread::yield();
+                }
+                const int mixed_bad = wrld.debug_validate_gpu_meshes();
+                std::printf("[validate] mid-switch: %d cube + %d prism "
+                            "meshes resident, %d flagged\n",
+                            cube, prism, mixed_bad);
+                wrld.set_prism_meshing(true);
+                wrld.resample_slice(terrain, pool);
+                for (int i = 0; i < 64; ++i) wrld.drain_finished(256);
+                if (mixed_bad > 0 || cube == 0 || prism == 0) {
+                    std::printf("\nVALIDATE prism switch FAILED (%s)\n",
+                                mixed_bad > 0
+                                    ? "flagged triangles"
+                                    : "the window never held both encodings, "
+                                      "so nothing was checked");
+                    return EXIT_FAILURE;
+                }
+            }
             // The engine's own resident mesh footprint, printed here
             // because this is the only headless mode that builds a real
             // world on a real GPU. --bench computes the same figure from
@@ -1465,8 +1532,6 @@ int main(int argc, char** argv) {
             // The figure the CI gate actually bounds is world_mesh_mb from
             // --bench, which check_invariance proves byte-identical across
             // runs; this one corroborates it from the running engine.
-            const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
-                                  / (1024.0 * 1024.0);
             std::printf("\nVALIDATE chunks=%zu bad_triangles=%d "
                         "gpu_mesh_mb=%.2f %s\n",
                         wrld.chunk_count(), bad, gpu_mb,
