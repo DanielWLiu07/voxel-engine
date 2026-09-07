@@ -28,9 +28,20 @@ namespace world {
 // do not involve sy at all. The preimage of a cell is therefore a convex
 // POLYGON in (sx, sz) extruded through a unit interval in y - a prism.
 // Six half-planes bound a convex polygon of at most six sides, so the
-// shape a block presents is at most a hexagonal pillar. That is the
-// phrase the 4D Miner wiki uses, and it falls out of the algebra rather
-// than needing to be aimed at.
+// shape a block presents is at most a hexagonal pillar.
+//
+// "Hexagonal pillar" was attributed to the 4D Miner wiki here, and that
+// was not checked. The wiki says "uniquely-shaped slices of 4D blocks"
+// and does not name a shape, so the attribution is withdrawn - the
+// result stands on the algebra above, which is where it came from.
+//
+// What the wiki DOES confirm is the premise the prism argument rests on:
+// its slice rotates in the ZW plane (mouse wheel, or vertical mouse with
+// M held) and the XW plane (horizontal mouse with M held), and in no
+// other. y is never mixed with w in either game. That is not a
+// simplification on this engine's part - it is what makes a cell's
+// cross-section a prism rather than a general polytope, and it is why
+// vertical runs of blocks merge exactly.
 struct SlicePolygon {
     // Six half-planes can produce at most six vertices; the extra slot
     // lets the clipper carry an intermediate result without a branch.

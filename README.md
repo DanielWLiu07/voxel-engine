@@ -263,6 +263,38 @@ turns the world instead of the camera. One plane alone leaves an axis of
 4D orientation unreachable - you can lean the world away from you but
 never sideways, and the row you turn about never moves at all.
 
+### Does walking around move you through 4D?
+
+On a flat cut, no - and that is not a limitation, it is what a hyperplane
+is. The slice is `w = constant`, so every point of it sits at the same w
+and walking reveals more of the same cross-section.
+
+On a **tilted** cut, yes, and unavoidably: the slice's own z axis leans
+into w, so a step forward is a step along the fourth axis whether you
+asked for one or not.
+
+| cut (ZW, XW) | player-w per block walked | blocks per 4D cell crossed |
+|---|---|---|
+| flat | 0 | never |
+| 0.15, 0 (one wheel notch) | 0.025 | 6.7 |
+| 0.45, 0 | 0.081 | 2.3 |
+| 0.45, 0.45 | 0.089 | 2.3 |
+| 0.90, 0.70 | 0.275 | 1.3 |
+
+At a 0.45 rad tilt, walking one chunk (16 blocks) carries you 1.4 units
+along w - further than three and a half seconds of holding the travel
+key. That is why the tilt, not the travel key, is the control that makes
+the world feel four-dimensional, and it is pinned as a test: on a flat
+cut walking the whole chunk must never leave the w cell you started in,
+and on a tilted one it must leave within a few blocks - bounded from
+above, because "eventually" would pass on a cut so nearly flat that
+nothing the player does reads as 4D.
+
+What does NOT happen in either case is the world warping *while* you
+walk. The cut is fixed; you move within it. `--warp-walk R` turns the cut
+as you move and gives you that anyway, off by default and honest about
+being a feel rather than the geometry.
+
 That distinction is the whole design, and it took a wrong turn to find.
 The first version only **translated** along w, so every slice was the
 hyperplane `w = constant`. That is axis-aligned to the 4D lattice, which

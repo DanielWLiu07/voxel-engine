@@ -178,6 +178,64 @@ void test_enumerated_polygons_tile_the_patch() {
            "the enumerated polygons tile the patch exactly");
 }
 
+
+void test_walking_on_a_tilted_cut_is_travel_along_w() {
+    // The property behind "when I walk around, am I moving in 4D?".
+    //
+    // On a FLAT cut, no: the slice is the hyperplane w = constant, so
+    // every point of it sits at the same w and walking only reveals more
+    // of the same cross-section. On a TILTED cut, yes and unavoidably so:
+    // the slice's own z axis leans into w, so a step forward is a step
+    // along the fourth axis whether the player asked for one or not.
+    //
+    // This is not a feature that could be switched off. It is what a
+    // tilted hyperplane IS, and it is why the tilt is the control that
+    // makes the world feel four-dimensional rather than the travel keys.
+    struct Case { float theta, phi; int max_blocks; };
+    const Case cases[] = {
+        {0.00f, 0.00f, 0},      // flat: never
+        {0.15f, 0.00f, 8},      // one notch of wheel: a cell every ~7 blocks
+        {0.45f, 0.45f, 3},      // both planes: every ~2.3
+        {0.90f, 0.70f, 2},      // hard tilt: almost every block
+    };
+    for (const Case& c : cases) {
+        world::TerrainGen4D::Slice s{};
+        s.theta = c.theta;
+        s.phi   = c.phi;
+        const auto b = world::SliceBasis::from(s);
+
+        auto w_cell_at = [&](float sx, float sz) {
+            return static_cast<int>(std::floor(
+                b.w4_sx * sx + b.w4_sz * sz + b.w4_c));
+        };
+        const int start = w_cell_at(0.5f, 0.5f);
+
+        if (c.max_blocks == 0) {
+            // Flat: walk the whole chunk in both directions and never
+            // leave the w cell you started in.
+            bool moved = false;
+            for (int t = 0; t < 16; ++t) {
+                if (w_cell_at(static_cast<float>(t) + 0.5f, 0.5f) != start) moved = true;
+                if (w_cell_at(0.5f, static_cast<float>(t) + 0.5f) != start) moved = true;
+            }
+            EXPECT(!moved, "walking a flat cut never moves you along w");
+            continue;
+        }
+
+        // Tilted: crossing into a different w cell must happen within a
+        // few blocks of walking. Bounding it from ABOVE is the point -
+        // "eventually" would pass on a cut so nearly flat that nothing
+        // the player does reads as four-dimensional.
+        int crossed_at = -1;
+        for (int t = 1; t <= 32 && crossed_at < 0; ++t) {
+            if (w_cell_at(0.5f, static_cast<float>(t) + 0.5f) != start) crossed_at = t;
+        }
+        EXPECT(crossed_at > 0, "walking a tilted cut moves you along w");
+        EXPECT(crossed_at > 0 && crossed_at <= c.max_blocks,
+               "and it does so within a few blocks, not eventually");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -186,6 +244,7 @@ int main() {
     test_a_compound_cut_presents_hexagons();
     test_a_cell_far_from_the_cut_presents_nothing();
     test_the_cells_tile_the_patch_without_gaps_or_overlap();
+    test_walking_on_a_tilted_cut_is_travel_along_w();
     test_enumeration_finds_every_cell_the_hand_search_does();
     test_an_untilted_patch_enumerates_one_cell_per_column();
     test_enumerated_polygons_tile_the_patch();
