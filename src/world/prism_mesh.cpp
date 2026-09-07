@@ -2,6 +2,8 @@
 
 #include "core/profiler.h"
 
+#include "gfx/mesh.h"
+
 #include "world/terrain_gen.h"   // altitude band constants
 #include "world/tree_stamps.h"
 
@@ -135,6 +137,67 @@ PrismChunk tile_footprint(ChunkCoord coord, TerrainGen4D::Slice s) {
             const auto it = index.find(cell_at(basis, mx, mz));
             if (it != index.end()) cell.across[e] = it->second;
         }
+    }
+
+    // Snap every corner to the grid the packed vertex can actually
+    // address, and drop any edge that collapses.
+    //
+    // Done HERE, once, rather than at emit time, and that is the whole
+    // point. A wall shorter than one quantisation step has its direction
+    // rotated by rounding - measured at 78 degrees on a real chunk, from
+    // an edge running nearly along +x whose two ends both landed on the
+    // same x byte - so the triangle the GPU receives faces somewhere the
+    // stored normal does not. With backface culling that is a hole, and
+    // it is a hole nothing upstream can see, because every part of the
+    // mesher was reasoning about a polygon the GPU never gets.
+    //
+    // Snapping first means the polygon in hand IS the polygon uploaded:
+    // normals, winding, uv lengths and cap areas are all computed from
+    // the same coordinates, so they cannot disagree. Sub-step edges do
+    // not become badly-facing slivers, they cease to exist, which is the
+    // correct answer for a face 6 cm wide.
+    //
+    // It also cannot open a crack: two cells name a shared corner with
+    // the same float, and the same float snaps the same way, so a corner
+    // that survives survives on both sides and one that collapses
+    // collapses on both.
+    //
+    // The neighbour probe above runs on the exact polygon on purpose. It
+    // steps a hair past an edge midpoint to ask which cell is over there,
+    // and a snapped midpoint can be 3 cm off the real one - enough to
+    // land in the wrong cell where the tiling is fine.
+    for (auto& cell : pc.cells) {
+        SlicePolygon snapped;
+        std::array<std::int32_t, SlicePolygon::kMaxVerts> across{};
+        across.fill(-1);
+        for (int v = 0; v < cell.poly.count; ++v) {
+            const float sx = static_cast<float>(
+                gfx::quantize_sub_unit_xz(cell.poly.x[v])) * gfx::kSubUnitXZScale;
+            const float sz = static_cast<float>(
+                gfx::quantize_sub_unit_xz(cell.poly.z[v])) * gfx::kSubUnitXZScale;
+            if (snapped.count > 0 &&
+                snapped.x[snapped.count - 1] == sx &&
+                snapped.z[snapped.count - 1] == sz) {
+                // This corner merged with the previous one. The edge
+                // between them is gone; the edge LEAVING this corner is
+                // the one that survives, so it takes the slot.
+                across[snapped.count - 1] = cell.across[v];
+                continue;
+            }
+            snapped.x[snapped.count] = sx;
+            snapped.z[snapped.count] = sz;
+            across[snapped.count] = cell.across[v];
+            ++snapped.count;
+        }
+        // The wrap-around pair, which the loop above cannot see.
+        while (snapped.count > 1 &&
+               snapped.x[0] == snapped.x[snapped.count - 1] &&
+               snapped.z[0] == snapped.z[snapped.count - 1]) {
+            --snapped.count;
+        }
+        if (snapped.count < 3) snapped.count = 0;
+        cell.poly = snapped;
+        cell.across = across;
     }
     return pc;
 }

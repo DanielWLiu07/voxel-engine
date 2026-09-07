@@ -211,10 +211,10 @@ in both tilings must hold the same 256 blocks.
 
 | cut | cells/chunk | prism quads | greedy quads | ratio | prism ms | cube ms |
 |---|---|---|---|---|---|---|
-| flat | 256 | 37,511 | 15,200 | 2.47x | 2.64 | 2.94 |
-| ZW only | 346 | 45,626 | 12,965 | 3.52x | 3.17 | 2.51 |
-| both planes | 448 | 76,402 | 14,917 | 5.12x | 4.27 | 2.51 |
-| hard tilt | 481 | 88,029 | 17,085 | 5.15x | 4.88 | 2.55 |
+| flat | 256 | 37,511 | 15,200 | 2.47x | 2.80 | 3.06 |
+| ZW only | 346 | 44,705 | 12,965 | 3.45x | 3.03 | 2.40 |
+| both planes | 448 | 74,112 | 14,917 | 4.97x | 4.10 | 2.41 |
+| hard tilt | 481 | 85,109 | 17,085 | 4.98x | 4.79 | 2.49 |
 
 256 cells at a flat cut is the voxel grid exactly, and it is gated in the
 audit: an untilted 4D cut has to reduce to the cube world block for block,
@@ -232,8 +232,23 @@ mesher needs. What does merge is vertical - y is untouched by the
 rotation, so every cell in a column shares one polygon and runs of the
 same block collapse into a single prism exactly. That recovers most of
 greedy's win: at a flat cut the prism mesh is 2.47x the greedy quad
-count where the naive mesher is 5.33x. In the running engine at radius
-12, `--validate` reports 36.9 MB against the cube path's 10.99 MB.
+count where the naive mesher is 5.33x.
+
+In the running engine at radius 12, on an M4:
+
+| | GPU mesh | frame | fps | triangles drawn |
+|---|---|---|---|---|
+| cubes (3D engine) | 10.99 MB | 4.69 ms | 213 | 145,418 |
+| cross-sections, flat cut | 37.35 MB | 5.96 ms | 168 | 529,090 |
+| cross-sections, both planes at 0.45 | 77.82 MB | 7.46 ms | 134 | 1,079,646 |
+
+    ./build/voxel_engine --bench-frame 240 --slice-prisms \
+        --slice-tilt 0.45 --slice-tilt-xw 0.45
+
+So the mode costs 7.6x the triangles and 1.6x the frame at a compound
+tilt, and still lands 8x inside a 60 Hz budget. Those three rows are
+timings on one loaded machine; the byte counts and triangle counts above
+them are not.
 
 None of the engine's published figures move. This is a separate mesher the
 3D engine never enters, and the switch is per chunk rather than per world,

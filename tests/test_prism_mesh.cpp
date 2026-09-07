@@ -387,24 +387,41 @@ void test_winding_matches_the_normal_it_carries() {
     // disagrees with its own normal is invisible from the side it is
     // meant to be seen from and solid from the side it is not. Measured
     // rather than assumed: this convention was read wrong once already.
-    world::TerrainGen4D gen(31);
-    const auto pc = world::build_prism_chunk(gen, {1, 1}, slice_of(0.5f, 0.35f, 0.25f));
-    const auto mesh = world::build_prism_mesh(pc);
-    EXPECT(mesh.quad_count > 100, "there is a mesh to check");
-
-    const float xs = mesh.xz_scale;
-    int backwards = 0;
-    for (std::size_t q = 0; q * 4 + 3 < mesh.vertices.size(); ++q) {
-        const auto& a = mesh.vertices[4 * q + 0];
-        const auto& b = mesh.vertices[4 * q + 1];
-        const auto& c = mesh.vertices[4 * q + 2];
-        const glm::vec3 p0{a.x * xs, static_cast<float>(a.y), a.z * xs};
-        const glm::vec3 p1{b.x * xs, static_cast<float>(b.y), b.z * xs};
-        const glm::vec3 p2{c.x * xs, static_cast<float>(c.y), c.z * xs};
-        const glm::vec3 g = glm::cross(p1 - p0, p2 - p0);
-        if (glm::length(g) < 1e-7f) continue;  // quantised away
-        if (glm::dot(glm::normalize(g), a.nrm()) < 0.5f) ++backwards;
+    // Several cuts, because the first version of this checked one and
+    // passed while the engine flagged 610 triangles at a different pair
+    // of angles. A winding rule that holds at one orientation says
+    // nothing about the next.
+    // Several cuts AND several chunks. The first version checked one of
+    // each and passed while the engine flagged 610 triangles; the
+    // offending walls were in chunk (-9, +12) at theta = phi = 0.45, and
+    // there is nothing special about that chunk except that it is where
+    // a sub-quantisation-step edge happened to fall. Chunk (-9, +12) is
+    // in the list by name for exactly that reason.
+    world::TerrainGen4D gen(1337);
+    int backwards = 0, checked = 0;
+    const world::ChunkCoord chunks[] = {{1, 1}, {-9, 12}, {-8, 11}, {0, 0}};
+    for (const auto s : {slice_of(0.5f, 0.35f, 0.25f), slice_of(0.0f, 0.45f, 0.45f),
+                         slice_of(0.0f, 0.9f, 0.7f),   slice_of(2.0f, -0.6f, 0.8f),
+                         slice_of(-1.0f, 0.2f, -0.5f)}) {
+      for (const auto coord : chunks) {
+        const auto pc = world::build_prism_chunk(gen, coord, s);
+        const auto mesh = world::build_prism_mesh(pc);
+        const float xs = mesh.xz_scale;
+        for (std::size_t q = 0; q * 4 + 3 < mesh.vertices.size(); ++q) {
+            const auto& a = mesh.vertices[4 * q + 0];
+            const auto& b = mesh.vertices[4 * q + 1];
+            const auto& c = mesh.vertices[4 * q + 2];
+            const glm::vec3 p0{a.x * xs, static_cast<float>(a.y), a.z * xs};
+            const glm::vec3 p1{b.x * xs, static_cast<float>(b.y), b.z * xs};
+            const glm::vec3 p2{c.x * xs, static_cast<float>(c.y), c.z * xs};
+            const glm::vec3 g = glm::cross(p1 - p0, p2 - p0);
+            if (glm::length(g) < 1e-7f) continue;  // quantised away
+            ++checked;
+            if (glm::dot(glm::normalize(g), a.nrm()) < 0.5f) ++backwards;
+        }
+      }
     }
+    EXPECT(checked > 1000, "there is a mesh to check");
     EXPECT(backwards == 0, "every quad winds the way its normal points");
 }
 
