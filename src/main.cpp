@@ -1644,7 +1644,8 @@ int main(int argc, char** argv) {
                              "%d of %d chunks stale, %d jobs in flight, "
                              "%d re-meshes pending\n",
                              wrld.slice_lag().stale, wrld.slice_lag().resident,
-                             wrld.pending_async(), wrld.pending_remesh());
+                             wrld.pending_async(),
+                             static_cast<int>(wrld.pending_remesh()));
             };
             // 0.25 rad, about 14 degrees. Far past the 0.003 a scroll notch
             // gives, so this is many notches of turning, and far short of
@@ -1903,10 +1904,32 @@ int main(int argc, char** argv) {
             // -1 and strand every edit in the world; the check would have
             // passed while it happened. edit_slice() reads travel_w_ now,
             // and edit_ns_stable pins that separately.
-            const bool reversible_away =
+            const bool zw_reversible =
                 std::fabs(wrld.slice_w() - rev_w0) < 1e-4f &&
                 std::fabs(wrld.slice().z_shift - rev_shift0) < 1e-3f &&
                 std::fabs(wrld.slice_theta() - theta0) < 1e-4f;
+            // The same round trip in the other plane. Both planes fold
+            // the pivot into slice_w_, so both can lose it the same way -
+            // and a check that only ever ran on one of them would be the
+            // "only runs where the quantity is zero" mistake again, one
+            // plane over.
+            const float rev_phi0 = wrld.slice_phi();
+            const float rev_xshift0 = wrld.slice().x_shift;
+            const float rev_w1 = wrld.slice_w();
+            for (int i = 0; i < 40; ++i)
+                wrld.rotate_slice_xw(kNotch, kRevPlayerZ);
+            for (int i = 0; i < 40; ++i)
+                wrld.rotate_slice_xw(-kNotch, kRevPlayerZ);
+            const bool xw_reversible =
+                std::fabs(wrld.slice_w() - rev_w1) < 1e-4f &&
+                std::fabs(wrld.slice().x_shift - rev_xshift0) < 1e-3f &&
+                std::fabs(wrld.slice_phi() - rev_phi0) < 1e-4f;
+            const bool reversible_away = zw_reversible && xw_reversible;
+            if (!reversible_away) {
+                std::fprintf(stderr, "[verify-4d] reversibility away from the "
+                             "origin: zw=%d xw=%d\n",
+                             zw_reversible ? 1 : 0, xw_reversible ? 1 : 0);
+            }
             settle_slice();
 
             // An edit made WHILE a rebuild is in flight must survive.
@@ -1951,6 +1974,50 @@ int main(int argc, char** argv) {
                 wrld.set_block(rx, ry, rz, world::BlockId::Air);
                 for (int i = 0; i < 8; ++i) wrld.rotate_slice(-kNotch, 0.0f);
                 settle_slice();
+            }
+
+            // The XW plane, through World rather than the generator.
+            //
+            // The generator tests prove a phi-tilted slice samples a
+            // different field. They say nothing about whether World
+            // notices - staleness, the pivot and the shift are separate
+            // machinery with their own bugs, and that is exactly how
+            // z_shift shipped with no coverage: its generator half was
+            // tested and its engine half was not.
+            //
+            // Same three claims the ZW plane gets: it changes the world,
+            // it is exactly reversible, and the ground under the player
+            // does not move when the world turns about them.
+            bool xw_ok = false;
+            {
+                const float phi0 = wrld.slice_phi();
+                const std::uint64_t before = world_hash();
+                // About x = 0, for the same reason the ZW hash checks
+                // rotate about z = 0: away from the origin the pivot
+                // folds a large offset into slice_w_ and thirty float
+                // rotations of it do not return bit-identically, so a
+                // hash comparison would be measuring rounding. Exactness
+                // away from the origin is reversible_away's job, with a
+                // tolerance; this one is about content.
+                constexpr float kXwPlayer = 0.0f;
+                for (int i = 0; i < 30; ++i)
+                    wrld.rotate_slice_xw(kNotch, kXwPlayer);
+                settle_slice();
+                const std::uint64_t turned = world_hash();
+                const int bad_xw = wrld.debug_validate_gpu_meshes();
+                for (int i = 0; i < 30; ++i)
+                    wrld.rotate_slice_xw(-kNotch, kXwPlayer);
+                settle_slice();
+                const std::uint64_t back = world_hash();
+                xw_ok = turned != before && back == before && bad_xw == 0 &&
+                        std::fabs(wrld.slice_phi() - phi0) < 1e-4f;
+                if (!xw_ok) {
+                    std::fprintf(stderr, "[verify-4d] XW plane: changed=%d "
+                                 "returned=%d bad_tris=%d phi=%.6f\n",
+                                 turned != before ? 1 : 0,
+                                 back == before ? 1 : 0, bad_xw,
+                                 wrld.slice_phi());
+                }
             }
 
             // A tilt must survive travelling along w.
@@ -2117,7 +2184,7 @@ int main(int argc, char** argv) {
             const bool tilt_ok = !settle_timed_out &&
                                  edit_survives_scroll && converges &&
                                  pivot_ok && player_ground_fixed &&
-                                 tilt_survives_travel &&
+                                 tilt_survives_travel && xw_ok &&
                                  edit_survives_inflight &&
                                  reversible_away &&
                                  edit_rotates && namespace_stable &&
@@ -2223,7 +2290,7 @@ int main(int argc, char** argv) {
                         "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
                         "notch=%d edit_survives_scroll=%d converges=%d "
                         "pivot=%d ground_fixed=%d tilt_survives_travel=%d "
-                        "edit_survives_inflight=%d "
+                        "xw=%d edit_survives_inflight=%d "
                         "reversible_away=%d "
                         "edit_rotates=%d settled=%d "
                         "edit_ns_stable=%d "
@@ -2242,6 +2309,7 @@ int main(int argc, char** argv) {
                         pivot_ok ? 1 : 0,
                         player_ground_fixed ? 1 : 0,
                         tilt_survives_travel ? 1 : 0,
+                        xw_ok ? 1 : 0,
                         edit_survives_inflight ? 1 : 0,
                         reversible_away ? 1 : 0,
                         edit_rotates ? 1 : 0,
@@ -2450,7 +2518,8 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[settle] %s did not converge: "
                                  "stale=%d/%d async=%d remesh=%d issued=%d\n",
                                  ph.name, l.stale, l.resident,
-                                 wrld.pending_async(), wrld.pending_remesh(),
+                                 wrld.pending_async(),
+                                 static_cast<int>(wrld.pending_remesh()),
                                  wrld.stream_slice(terrain, pool));
                 }
                 const double settle_ms =

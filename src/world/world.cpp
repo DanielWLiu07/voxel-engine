@@ -326,6 +326,8 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.slice_w = slice.w;
         fc.slice_theta = slice.theta;
         fc.slice_z_shift = slice.z_shift;
+        fc.slice_phi = slice.phi;
+        fc.slice_x_shift = slice.x_shift;
         // The one branch that makes the engine four-dimensional. Null in
         // the 3D engine, which is every existing path.
         if (slice_gen) slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
@@ -573,7 +575,9 @@ World::SliceLag World::slice_lag() const {
         const float drift = slice_drift(kv.first,
                                         {kv.second->slice_w,
                                          kv.second->slice_theta,
-                                         kv.second->slice_z_shift});
+                                         kv.second->slice_z_shift,
+                                         kv.second->slice_phi,
+                                         kv.second->slice_x_shift});
         if (drift >= kSliceDriftMin) ++out.stale;
     }
     return out;
@@ -602,7 +606,9 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
         const float drift = slice_drift(kv.first,
                                         {kv.second->slice_w,
                                          kv.second->slice_theta,
-                                         kv.second->slice_z_shift});
+                                         kv.second->slice_z_shift,
+                                         kv.second->slice_phi,
+                                         kv.second->slice_x_shift});
         if (drift < kSliceDriftMin) continue;
         if (requested_.count(kv.first)) continue;   // already on its way
         const long dx = kv.first.x - last_center_.x;
@@ -795,6 +801,8 @@ int World::drain_finished(int max_per_frame) {
         slot_it->second->slice_w = fc.slice_w;
         slot_it->second->slice_theta = fc.slice_theta;
         slot_it->second->slice_z_shift = fc.slice_z_shift;
+        slot_it->second->slice_phi = fc.slice_phi;
+        slot_it->second->slice_x_shift = fc.slice_x_shift;
         slot_it->second->light = fc.light;
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.
@@ -933,6 +941,8 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         fc.slice_w = stamp.w;
         fc.slice_theta = stamp.theta;
         fc.slice_z_shift = stamp.z_shift;
+        fc.slice_phi = stamp.phi;
+        fc.slice_x_shift = stamp.x_shift;
         fc.chunk = std::move(chunk);
         fc.preserve_on_evict = preserve_on_evict;
         fc.from_disk = from_disk;

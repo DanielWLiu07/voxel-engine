@@ -127,6 +127,11 @@ struct ChunkSlot {
     // slice's identity like w and theta, so drift cannot be computed
     // without it.
     float      slice_z_shift = 0.0f;
+    // The second rotation plane, stamped like the first. Without these a
+    // chunk compares against a phi of 0 forever, so any XW turn leaves
+    // the whole window permanently stale and the world never converges.
+    float      slice_phi = 0.0f;
+    float      slice_x_shift = 0.0f;
     // True only for chunks that came off disk. The terrain generator
     // cannot reproduce those, so they are the one case that still has to
     // be stashed whole; everything else is regenerated and has its edits
@@ -786,6 +791,8 @@ private:
         float           slice_w = 0.0f;
         float           slice_theta = 0.0f;
         float           slice_z_shift = 0.0f;
+        float           slice_phi = 0.0f;
+        float           slice_x_shift = 0.0f;
         bool            from_disk = false;
         // True when the chunk must never be regenerated from terrain
         // (player edits, stash restores, or disk chunks the active seed
