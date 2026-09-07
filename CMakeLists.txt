@@ -318,6 +318,14 @@ if(VOXEL_BUILD_BENCH)
 
   # What 4D Miner's cross-section look would cost, in geometry rather
   # than in opinion. Pure math: no GL, no engine, no world.
+  add_executable(hyperslice_tests tests/test_hyperslice.cpp
+                                  src/world/noise4d.cpp
+                                  src/world/terrain_gen4d.cpp
+                                  src/world/terrain_gen.cpp)
+  target_include_directories(hyperslice_tests PRIVATE src)
+  target_link_libraries(hyperslice_tests PRIVATE fastnoise)
+  add_test(NAME hyperslice COMMAND hyperslice_tests)
+
   add_executable(hyperslice src/bench/hyperslice.cpp)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(hyperslice PRIVATE -Wall -Wextra -Wpedantic -O2)
