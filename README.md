@@ -1005,3 +1005,14 @@ In a 4D world (`--4d`) two more move you through the fourth axis:
 | E / Q | Travel along w (forward / back) |
 | Mouse wheel | Turn the cut in the ZW plane |
 | Hold M or middle mouse | The mouse turns the cut: vertical ZW, horizontal XW |
+
+Walking does **not** change the world, and that is deliberate rather than
+a gap. A hyperplane is fixed; you move within it, so walking reveals more
+of the same cut. The generator does not take the player's position at
+all - `height_at(x, z, slice)` returns the same value however you got
+there - so it could not warp under you even by accident.
+
+If you want the world to move as you move, `--warp-walk R` turns the cut
+R radians for every block travelled, so a walk of twenty blocks at 0.01
+arrives on a genuinely different slice. Driven by distance moved rather
+than by time, so standing still is still.

@@ -121,6 +121,18 @@ struct CliOptions {
     // still or clip could show it and nothing about it was reproducible -
     // the same reason --slice-tilt exists for the first plane.
     float slice_tilt_xw = 0.0f;
+    // --warp-walk R: the cut turns as you walk, R radians per block moved.
+    //
+    // Off by default, and that default is the physically honest one: a
+    // hyperplane is fixed, you move within it, so walking reveals more of
+    // the same cut rather than changing it. The generator does not even
+    // take the player's position.
+    //
+    // But "everything warps while I walk" is the feel people remember
+    // from a 4D game, and it is reachable without lying about the
+    // geometry: turn the cut a little for every block travelled and the
+    // world genuinely is a different slice by the time you arrive.
+    float warp_walk = 0.0f;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;

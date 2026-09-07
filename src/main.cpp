@@ -904,6 +904,25 @@ int main(int argc, char** argv) {
         if (wrld.is_4d()) wrld.stream_slice(terrain, pool);
 
         capture.shot_after = shot_after;  // counts down as the shot settles
+        // --warp-walk: the cut turns a little for every block walked, so
+        // the world is a different slice by the time you get there.
+        //
+        // Driven by distance MOVED rather than by time, so standing still
+        // is still: a timer would keep morphing the world while the
+        // player was reading the HUD, which is disorienting rather than
+        // four-dimensional. Horizontal distance only - jumping is not
+        // travel through the fourth dimension.
+        if (opt.warp_walk > 0.0f && wrld.is_4d() && !capture.scripted_camera()) {
+            static glm::vec3 warp_last = cam.position();
+            const glm::vec3 now = cam.position();
+            const float moved = std::hypot(now.x - warp_last.x,
+                                           now.z - warp_last.z);
+            warp_last = now;
+            if (moved > 0.0f) {
+                wrld.rotate_slice(opt.warp_walk * moved, now.z);
+            }
+        }
+
         // Held M, or the middle mouse button, turns the 4D cut with the
         // mouse instead of turning the camera - vertical in the ZW plane,
         // horizontal in XW. The wheel remains a ZW-only shortcut.

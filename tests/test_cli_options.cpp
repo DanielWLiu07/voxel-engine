@@ -136,6 +136,7 @@ constexpr ValueFlag kValueFlags[] = {
     {"--slice-w",           "3",               true},
     {"--slice-tilt",        "0.25",            true},
     {"--slice-tilt-xw",     "0.25",            true},
+    {"--warp-walk",         "0.01",            true},
     {"--monitor",           "0",               true},
 };
 
@@ -311,9 +312,17 @@ void test_the_slice_flags_imply_four_dimensions() {
     // Asking for a slice is asking for the 4D engine. Without this a
     // capture with --slice-tilt would render the 3D world and silently
     // ignore the tilt, which looks like the tilt doing nothing.
-    for (const char* flag : {"--slice-w", "--slice-tilt",
-                             "--slice-tilt-xw"}) {
-        const auto r = parse({flag, "1"});
+    // A value each flag actually accepts. "1" is fine for a slice index
+    // or an angle and out of range for a per-block rate, and a shared
+    // literal would have made this test fail on the flag's bound rather
+    // than on the thing it is checking.
+    struct Case { const char* flag; const char* value; };
+    for (const Case& c : {Case{"--slice-w", "1"},
+                          Case{"--slice-tilt", "1"},
+                          Case{"--slice-tilt-xw", "1"},
+                          Case{"--warp-walk", "0.01"}}) {
+        const char* flag = c.flag;
+        const auto r = parse({flag, c.value});
         EXPECT(r.opts.has_value(), flag);
         if (r.opts.has_value()) EXPECT(r.opts->four_d, flag);
     }
@@ -339,6 +348,17 @@ void test_the_tilt_is_bounded_to_about_a_half_turn() {
     EXPECT(rejected_naming(parse({"--slice-tilt-xw", "3.3"}),
                            "--slice-tilt-xw"),
            "and just outside it is rejected, by name");
+
+    // --warp-walk is bounded much tighter than the tilt flags, and the
+    // bound is the point rather than a formality: it is radians per BLOCK
+    // walked, so 0.05 already turns the cut a full radian over twenty
+    // blocks. A value that reads as small for an angle is enormous here.
+    EXPECT(parse({"--warp-walk", "0.05"}).opts.has_value(),
+           "the warp bound is accepted");
+    EXPECT(rejected_naming(parse({"--warp-walk", "0.9"}), "--warp-walk"),
+           "an angle-sized value is rejected as a per-block rate");
+    EXPECT(parse({"--warp-walk", "0.0"}).opts.has_value(),
+           "and zero is legal - it is the default and means off");
 }
 
 void test_a_negative_slice_is_a_place_not_an_error() {

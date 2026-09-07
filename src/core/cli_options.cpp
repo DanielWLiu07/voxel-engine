@@ -144,6 +144,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
                 "  voxel_engine --slice-tilt R           start with the cut turned R radians in ZW\n"
                 "  voxel_engine --slice-tilt-xw R        the same in the XW plane\n"
+                "  voxel_engine --warp-walk R            the cut turns R rad per block walked\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -188,6 +189,15 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, -3.2f, 3.2f, "--slice-tilt",
                                    &o.slice_tilt, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--warp-walk") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 0.05f, "--warp-walk",
+                                   &o.warp_walk, exit_code)) {
                 return std::nullopt;
             }
             o.four_d = true;
