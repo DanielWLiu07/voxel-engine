@@ -23,8 +23,15 @@ void print_bindings() {
     // even though the table is where its bindings live.
     std::printf("[input] E / Q = travel along w, the fourth axis "
                 "(hold; Shift sprints)\n");
-    std::printf("[input] SCROLL WHEEL = rotate your 3D slice through 4D "
-                "(this is the one that reshapes the world)\n");
+    // The two rotation planes, spelled out because the second one is
+    // invisible otherwise: a player who only ever scrolls will never
+    // discover that the world can also turn sideways.
+    std::printf("[input] SCROLL WHEEL = turn your 3D slice through 4D, "
+                "ZW plane (this is the one that reshapes the world)\n");
+    std::printf("[input] HOLD M or MIDDLE MOUSE = the mouse turns the cut "
+                "instead of the camera:\n");
+    std::printf("[input]     up/down = ZW (same as the wheel), "
+                "left/right = XW (the plane the wheel cannot reach)\n");
 
     // Four to a line, so the list stays scannable as bindings are added.
     // The separator is written before each entry rather than after, which

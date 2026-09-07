@@ -40,7 +40,12 @@ struct PerfFrame {
     bool  four_d = false;
     float slice_w = 0.0f;    // where the player is along w
     float meshed_w = 0.0f;   // where the geometry is; lags while moving
-    float slice_theta = 0.0f;  // tilt of the 3D slice within 4D
+    // The 3D slice's orientation within 4D, one angle per rotation
+    // plane. Both are shown because one alone does not say where you are
+    // looking: a player who has turned only in XW would read theta as 0
+    // and conclude the wheel had done nothing.
+    float slice_theta = 0.0f;  // ZW plane: the wheel, and vertical mouse
+    float slice_phi   = 0.0f;  // XW plane: horizontal mouse
 };
 
 class DebugHud {

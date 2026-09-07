@@ -2744,6 +2744,7 @@ int main(int argc, char** argv) {
         pf.four_d          = wrld.is_4d();
         pf.slice_w         = wrld.slice_w();
         pf.slice_theta     = wrld.slice_theta();
+        pf.slice_phi       = wrld.slice_phi();
         pf.meshed_w        = wrld.near_meshed_w();
         pf.edit_count      = wrld.edit_count();
         pf.edit_last_ms    = wrld.edit_last_ms();
