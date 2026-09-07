@@ -167,7 +167,59 @@ int tilt_table(std::uint32_t seed) {
     return 0;
 }
 
+// Is the world a 3D SLICE of a 4D solid, or a heightfield PARAMETERISED
+// by a fourth number?
+//
+// The distinction is the one visible difference from the games that do
+// this, and it is decided by a count rather than a timing: a heightfield
+// has exactly one solid run per column, at every orientation, so it can
+// never produce an overhang. Tilting it gives a different plausible
+// landscape; slicing a 4D solid at an angle gives an implausible one -
+// arches, roofs over air, ground that floats.
+//
+// Reported as a fraction of columns so it means the same thing on any
+// machine, unlike the cost of changing it.
+int shape_report(std::uint32_t seed) {
+    const world::TerrainGen4D t(seed);
+    std::printf("terrain shape, seed %u, 5x5 chunks per row\n\n", seed);
+    std::printf("  %8s  %14s  %16s\n", "tilt", "columns", "with an overhang");
+    for (const float theta : {0.0f, 0.05f, 0.15f, 0.5f}) {
+        int cols = 0, overhung = 0;
+        for (int cx = -2; cx <= 2; ++cx) {
+            for (int cz = -2; cz <= 2; ++cz) {
+                world::Chunk c;
+                t.fill_chunk(cx, cz, {0.0f, theta}, c);
+                for (int z = 0; z < world::kChunkSizeZ; ++z) {
+                    for (int x = 0; x < world::kChunkSizeX; ++x) {
+                        ++cols;
+                        int top = -1;
+                        for (int y = world::kChunkSizeY - 1; y >= 0; --y)
+                            if (c.get(x, y, z) != world::BlockId::Air) { top = y; break; }
+                        for (int y = 1; y <= top; ++y) {
+                            if (c.get(x, y, z) != world::BlockId::Air &&
+                                c.get(x, y - 1, z) == world::BlockId::Air) {
+                                ++overhung; break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::printf("  %8.2f  %14d  %13d (%.1f%%)\n", theta, cols, overhung,
+                    100.0 * overhung / cols);
+    }
+    std::printf("\nOverhangs here are carved by the cave pass, not produced "
+                "by the cut.\nThe surface is a heightfield at every tilt: see "
+                "docs/4d.md.\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--shape") {
+        return shape_report(argc > 2
+            ? static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10))
+            : 1337u);
+    }
     if (argc > 1 && (std::string(argv[1]) == "--help" ||
                      std::string(argv[1]) == "-h")) {
         std::printf(
@@ -178,6 +230,9 @@ int main(int argc, char** argv) {
             "  slice4d --tilt [seed]\n"
             "      table of how far a ROTATED slice diverges from a flat\n"
             "      one, and how that compares with translating along w\n\n"
+            "  slice4d --shape [seed]\n"
+            "      how much of the world is not a heightfield: the one\n"
+            "      visible difference from a true 4D-solid slicer\n\n"
             "  slice4d --help\n");
         return 0;
     }
