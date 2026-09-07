@@ -261,10 +261,10 @@ in both tilings must hold the same 256 blocks.
 
 | cut | cells/chunk | prism quads | greedy quads | ratio | prism ms | cube ms |
 |---|---|---|---|---|---|---|
-| flat | 256 | 21,382 | 15,200 | 1.41x | 2.90 | 3.06 |
-| ZW only | 346 | 25,335 | 12,965 | 1.95x | 3.40 | 2.52 |
-| both planes | 448 | 45,482 | 14,917 | 3.05x | 4.64 | 2.53 |
-| hard tilt | 481 | 61,338 | 17,085 | 3.59x | 5.36 | 2.55 |
+| flat | 256 | 21,400 | 15,229 | 1.41x | 2.34 | 2.46 |
+| ZW only | 346 | 25,346 | 12,951 | 1.96x | 3.31 | 2.44 |
+| both planes | 448 | 45,373 | 14,856 | 3.05x | 4.48 | 2.44 |
+| hard tilt | 481 | 61,234 | 17,097 | 3.58x | 5.27 | 2.51 |
 
 256 cells at a flat cut is the voxel grid exactly, and it is gated in the
 audit: an untilted 4D cut has to reduce to the cube world block for block,
@@ -291,9 +291,9 @@ just the edge of the merged box that lies on the lattice face it sits on:
 | cut | before merging | after |
 |---|---|---|
 | flat | 2.47x greedy | **1.41x** |
-| ZW only | 3.45x | **1.95x** |
+| ZW only | 3.45x | **1.96x** |
 | both planes | 4.97x | **3.05x** |
-| hard tilt | 4.98x | **3.59x** |
+| hard tilt | 4.98x | **3.58x** |
 
 Vertical runs merge for free on top of that - y is the one axis the
 rotation never touches, so every cell in a column shares one polygon and
@@ -311,20 +311,20 @@ In the running engine at radius 12, on an M4:
 
 | | GPU mesh | frame | fps | triangles drawn |
 |---|---|---|---|---|
-| cubes (3D engine) | 10.99 MB | 4.70 ms | 213 | 145,418 |
-| cross-sections, flat cut | 19.05 MB | 5.19 ms | 193 | 272,672 |
-| cross-sections, both planes at 0.45 | 44.38 MB | 6.53 ms | 153 | 618,630 |
+| cubes (3D engine) | 10.99 MB | 4.58 ms | 218 | 145,418 |
+| cross-sections, flat cut | 19.10 MB | 4.94 ms | 202 | 272,802 |
+| cross-sections, both planes at 0.45 | 44.54 MB | 6.04 ms | 166 | 620,856 |
 
-The frame column is the median of three runs each (3D 4.69/4.70/4.82,
-flat 5.19/6.46/5.07, tilted 6.42/7.07/6.53) - it is a timing and it moves
+The frame column is the median of three runs each (3D 4.58/4.75/4.57,
+flat 4.94/4.92/6.33, tilted 5.97/6.72/6.04) - it is a timing and it moves
 with machine load, which is why the spread is printed rather than hidden.
-The byte and triangle counts do not move.
+The byte and triangle counts do not.
 
     ./build/voxel_engine --bench-frame 240 --slice-prisms \
         --slice-tilt 0.45 --slice-tilt-xw 0.45
 
-So the mode costs 4.3x the triangles and 1.4x the frame at a compound
-tilt, and still lands 2.6x inside a 60 Hz budget. Those three rows are
+So the mode costs 4.3x the triangles and 1.3x the frame at a compound
+tilt, and still lands 2.8x inside a 60 Hz budget. Those three rows are
 timings on one loaded machine; the byte counts and triangle counts above
 them are not.
 
@@ -581,20 +581,20 @@ budget rather than as a bare frame rate, because a budget is a fixed
 target and the headroom against it carries meaning across hardware in a
 way that "229 fps" does not.
 
-**Radius 12, the default gameplay setting, vsync off:** 4.4 ms per frame
-against a 16.7 ms 60 Hz budget, **3.8x inside budget** (229 fps), 38 M
-triangles/sec, 188 MB peak RSS, across a **40-million-voxel** resident
+**Radius 12, the default gameplay setting, vsync off:** 4.6 ms per frame
+against a 16.7 ms 60 Hz budget, **3.6x inside budget** (218 fps), 32 M
+triangles/sec, 289 MB peak RSS, across a **41-million-voxel** resident
 world of 625 chunks.
 
 **Largest configuration tested, radius 16:** a **71-million-voxel** world
-(1,089 chunks) at 4.7 ms, **3.6x inside the same budget** (215 fps), 64 M
-triangles/sec, 251 MB peak RSS, 22.1 MB of GPU mesh. A 1.7x larger world
-costs 6% of the frame rate, which is the scaling claim the sweep table
-below exists to support. Radius 16 needs the full 300-frame window to
+(1,089 chunks) at 4.8 ms, **3.5x inside the same budget** (208 fps), 54 M
+triangles/sec, 429 MB peak RSS, 18.9 MB of GPU mesh, and **zero frames
+over budget** across 300. A 1.7x larger world costs 5% of the frame rate,
+which is the scaling claim the sweep table below exists to support. Radius 16 needs the full 300-frame window to
 reach steady state; a shorter bench reports a lower RSS because the world
 has not finished streaming in.
-Chunk pipeline hits **2200 chunks/sec** on 9 workers, at a parallel
-efficiency that ranges roughly **6.3x to 8.5x** run to run - the spread is
+Chunk pipeline hits **3300 chunks/sec** on 9 workers at radius 16, at a
+parallel efficiency that ranges roughly **5.8x to 6.3x** run to run - the spread is
 scheduler placement across the M4's P/E cores and thermal state, not
 anything the engine varies. Quote the range or quote a median from a
 sweep; a single figure here is a snapshot of one machine's mood. Per-frame work: 396 of 5000 loaded sub-chunks drawn (12.6x
@@ -784,17 +784,25 @@ the old number.
 
 ### Scaling with world size
 
-Frame time scaling, vsync off, `center` pose, 30-frame settle, M4
-(section/triangle counts are exact at current HEAD; the ms columns are
-the idle-machine measure and reproduce when the box is quiet):
+Frame time scaling, vsync off, `center` pose, 30-frame settle, M4. The
+section and triangle counts are exact at current HEAD and reproduce
+anywhere; the ms and RSS columns are timings on one machine, taken in a
+single pass at load average 6.9, so treat them as a shape rather than as
+figures to quote.
+
+Re-measured after cross-chunk culling and block light landed, both of
+which moved a column: culling cut triangles drawn at radius 12 from
+167,200 to 145,418, and block light raised peak RSS from 188 MB to
+289 MB. The old row had been sitting here describing an engine that no
+longer existed, which is the exact failure this repo audits for:
 
 | Radius | Chunks | Sections drawn | Tris drawn | Avg ms | p50 ms | p99 ms | Avg fps | Tris/sec | Peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-|  8 |   289 | 180 |  78,224 | 4.79 | 4.23 | 19.06 | 208.8 | 16.3M | 144 MB |
-| 10 |   441 | 280 | 117,626 | 4.24 | 4.14 |  9.59 | 235.7 | 27.7M | 158 MB |
-| 12 |   625 | 396 | 167,200 | 4.36 | 4.26 | 11.26 | 229.1 | 38.3M | 188 MB |
-| 14 |   841 | 531 | 230,560 | 4.75 | 4.55 | 10.13 | 210.4 | 48.5M | 218 MB |
-| 16 | 1,089 | 687 | 299,170 | 4.65 | 4.53 | 10.32 | 215.2 | 64.4M | 251 MB |
+|  8 |   289 | 180 |  68,520 | 4.41 | 4.28 | 10.06 | 226.8 | 15.5M | 189 MB |
+| 10 |   441 | 280 | 102,278 | 4.47 | 4.32 |  9.30 | 223.6 | 22.9M | 237 MB |
+| 12 |   625 | 396 | 145,418 | 4.58 | 4.45 |  8.92 | 218.3 | 31.7M | 289 MB |
+| 14 |   841 | 531 | 200,886 | 4.88 | 4.61 |  9.92 | 204.9 | 41.2M | 363 MB |
+| 16 | 1,089 | 687 | 260,018 | 4.81 | 4.64 |  9.37 | 208.0 | 54.1M | 429 MB |
 
 `BENCH_FRAME` also reports the numbers an average hides: `low1_fps` is
 the mean of the worst 1% of frames expressed as fps, and `over_budget`
