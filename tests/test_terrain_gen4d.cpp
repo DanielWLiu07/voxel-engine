@@ -829,10 +829,121 @@ void test_a_tilted_slice_is_still_the_same_kind_of_world() {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The column generator, and what a 4D cell owns
+// ---------------------------------------------------------------------------
+
+void test_a_column_matches_the_chunk_it_came_from() {
+    // fill_chunk is a grid of fill_column calls. If they ever disagree,
+    // the thing the player collides with stops matching the thing they
+    // can see - the chunk is what physics reads and the columns are what
+    // the prism mesher draws.
+    //
+    // Trees are excluded because they are stamped after the columns and
+    // spill sideways into neighbours: a column cannot know about a tree
+    // rooted two cells away. Every y where either side holds wood or
+    // leaves is skipped, and everything else has to agree exactly.
+    world::TerrainGen4D gen(4242);
+    const world::TerrainGen4D::Slice s{1.25f, 0.3f, 0.0f, 0.2f, 0.0f};
+    world::Chunk chunk;
+    gen.fill_chunk(3, -2, s, chunk);
+
+    world::TerrainGen4D::Column4D col;
+    long compared = 0, mismatched = 0;
+    for (int z = 0; z < world::kChunkSizeZ; ++z) {
+        for (int x = 0; x < world::kChunkSizeX; ++x) {
+            const int wx = 3 * world::kChunkSizeX + x;
+            const int wz = -2 * world::kChunkSizeZ + z;
+            float x4 = 0.0f, z4 = 0.0f, w4 = 0.0f;
+            world::TerrainGen4D::to_4d(static_cast<float>(wx),
+                                       static_cast<float>(wz), s,
+                                       &x4, &z4, &w4);
+            gen.fill_column(x4, z4, w4, col);
+            for (int y = 0; y < world::kChunkSizeY; ++y) {
+                const auto a = chunk.get(x, y, z);
+                const auto b = static_cast<world::BlockId>(
+                    col.blocks[static_cast<std::size_t>(y)]);
+                if (a == world::BlockId::Wood || a == world::BlockId::Leaves ||
+                    b == world::BlockId::Wood || b == world::BlockId::Leaves)
+                    continue;
+                ++compared;
+                if (a != b) ++mismatched;
+            }
+        }
+    }
+    EXPECT(compared > 60000, "the comparison covered the chunk");
+    EXPECT(mismatched == 0, "every non-tree block matches the column generator");
+}
+
+void test_a_cell_column_is_a_pure_function_of_the_cell() {
+    // fill_cell_column takes no Slice, and that absence is the point.
+    //
+    // It is what separates a world SLICED from four dimensions from one
+    // PARAMETERISED by a fourth. Sampling the cell's CENTRE means a 4D
+    // block keeps its material as the cut turns through it and only the
+    // shape it presents changes; sampling a point of the slice would make
+    // the same block quietly become a different one as the player
+    // scrolls, which is the world being re-rolled underneath them.
+    //
+    // What can be checked here is the half that lives in the generator:
+    // the answer depends on (i, k, l) and on nothing else. That the
+    // renderer then honours it - that a cell drawn at one angle holds the
+    // same block when drawn at another - is checked against the prism
+    // mesher, which is the only place both halves meet.
+    world::TerrainGen4D gen(77);
+    world::TerrainGen4D::Column4D a, b;
+    gen.fill_cell_column(12, -30, 4, a);
+    gen.fill_cell_column(12, -30, 4, b);
+    EXPECT(a.blocks == b.blocks, "a cell's column is a pure function of the cell");
+    EXPECT(a.top == b.top && a.guide_height == b.guide_height,
+           "and so is everything the tree pass reads off it");
+
+    // The centre, not a corner. Off-by-half here would put every column
+    // of a 4D world on a cell boundary, where the field is shared with
+    // the neighbour and the tessellation is ambiguous.
+    world::TerrainGen4D::Column4D centre;
+    gen.fill_column(12.5f, -29.5f, 4.5f, centre);
+    EXPECT(a.blocks == centre.blocks, "the cell is sampled at its centre");
+
+    // And neighbouring cells along w are different worlds' worth of
+    // different, or the fourth axis is decorative.
+    world::TerrainGen4D::Column4D next;
+    gen.fill_cell_column(12, -30, 5, next);
+    int differ = 0;
+    for (std::size_t y = 0; y < a.blocks.size(); ++y)
+        if (a.blocks[y] != next.blocks[y]) ++differ;
+    EXPECT(differ > 0, "the next cell along w is not the same column");
+}
+
+void test_height_at_is_to_4d_then_height_at_4d() {
+    // The two entry points have to agree exactly, because physics
+    // raycasts go through one and the prism mesher through the other.
+    world::TerrainGen4D gen(9);
+    const world::TerrainGen4D::Slice s{-2.0f, 0.45f, 3.0f, -0.3f, 1.0f};
+    int mismatched = 0, checked = 0;
+    for (int wx = -40; wx <= 40; wx += 7) {
+        for (int wz = -40; wz <= 40; wz += 7) {
+            float x4 = 0.0f, z4 = 0.0f, w4 = 0.0f;
+            world::TerrainGen4D::to_4d(static_cast<float>(wx),
+                                       static_cast<float>(wz), s,
+                                       &x4, &z4, &w4);
+            ++checked;
+            if (gen.height_at(wx, wz, s) != gen.height_at_4d(x4, z4, w4))
+                ++mismatched;
+        }
+    }
+    EXPECT(checked > 100, "the sweep covered a patch");
+    EXPECT(mismatched == 0, "height_at is to_4d composed with height_at_4d");
+}
+
 }  // namespace
 
 int main() {
     std::printf("terrain4d_tests: running...\n\n");
+    test_a_column_matches_the_chunk_it_came_from();
+    test_a_cell_column_is_a_pure_function_of_the_cell();
+    test_height_at_is_to_4d_then_height_at_4d();
     test_w_actually_changes_the_world();
     test_rotating_the_slice_changes_the_cross_section();
     test_w_is_continuous_not_a_staircase_of_worlds();

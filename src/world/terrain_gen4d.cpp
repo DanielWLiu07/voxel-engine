@@ -56,7 +56,10 @@ int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
     // because scaling after the rotation shears rather than rotates.
     float x = 0.0f, z = 0.0f, fw = 0.0f;
     to_4d(static_cast<float>(wx), static_cast<float>(wz), s, &x, &z, &fw);
+    return height_at_4d(x, z, fw);
+}
 
+int TerrainGen4D::height_at_4d(float x, float z, float fw) const {
     // Domain warp, then three octave stacks over a 3D slice of the 4D
     // field: world x, world z and w, with the noise's remaining axis
     // pinned at 0.
@@ -84,113 +87,99 @@ int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
         1, kChunkSizeY - 1);
 }
 
-void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const {
-    const int origin_x = chunk_x * kChunkSizeX;
-    const int origin_z = chunk_z * kChunkSizeZ;
+// One column of the world, everything except its trees.
+//
+// This is fill_chunk's inner loop, lifted out unchanged and addressed by
+// a 4D point instead of by a slice coordinate that then gets carried to
+// one. Two callers want it: fill_chunk, which walks a 16x16 grid of slice
+// columns, and the prism mesher, which walks the lattice cells a tilted
+// cut passes through. Neither is a special case of the other, and both
+// have to produce the same world or the thing the player collides with
+// stops matching the thing they can see.
+void TerrainGen4D::fill_column(float x4, float z4, float fw,
+                               Column4D& out) const {
+    out.blocks.fill(static_cast<std::uint8_t>(BlockId::Air));
 
-    int  surface[kChunkSizeZ][kChunkSizeX];
-    // The topmost solid block, which is not the guide height once the
-    // density band can put ground above it or carve it away.
-    int  top[kChunkSizeZ][kChunkSizeX];
-    bool is_desert[kChunkSizeZ][kChunkSizeX];
-    float biome_val[kChunkSizeZ][kChunkSizeX];
+    const int height = height_at_4d(x4, z4, fw);
+    out.guide_height = height;
 
-    for (int z = 0; z < kChunkSizeZ; ++z) {
-        for (int x = 0; x < kChunkSizeX; ++x) {
-            const int wx = origin_x + x;
-            const int wz = origin_z + z;
-            // Single source of truth for surface height, exactly as in the
-            // 3D generator: a divergent inline copy here would desync
-            // physics raycasts and the chunk contents from each other.
-            const int height = height_at(wx, wz, s);
-            // The rotated 4D coordinates for this column, shared by
-            // the biome and temperature fields below.
-            float x4 = 0.0f, z4 = 0.0f, w4 = 0.0f;
-            to_4d(static_cast<float>(wx), static_cast<float>(wz), s,
-                  &x4, &z4, &w4);
-            const float fw = w4;
-            surface[z][x] = height;
+    const float temp = temp_.sample(x4 * kTempFreq, z4 * kTempFreq,
+                                    0.0f, fw * kTempFreq);
+    // 0.24, not the 3D generator's 0.35.
+    //
+    // Same class of mistake as the height amplitude, in a place nobody
+    // thought to look: a threshold copied across a change of noise.
+    // FastNoiseLite's Perlin at this frequency has stddev 0.310; this
+    // noise has 0.215. The same 0.35 therefore fires on 5.22% of columns
+    // here against 14.05% there, making deserts about 2.7x rarer - a
+    // quiet biome change, not a bug anything would report.
+    //
+    // Matched by QUANTILE, not by scaling the threshold by the ratio of
+    // standard deviations. That first attempt gave 0.24, which fires on
+    // 10.3% against the 3D generator's 13.25% - Perlin's distribution is
+    // not Gaussian, so a stddev ratio is only an approximation of the
+    // tail. Measuring the value with the same tail mass gives 0.2114.
+    out.is_desert = (temp > 0.21f) && (height < kSnowBand);
+    out.biome = biome_.sample(x4 * kBiomeFreq, z4 * kBiomeFreq,
+                              0.0f, fw * kBiomeFreq);
 
-            const float temp = temp_.sample(x4 * kTempFreq,
-                                            z4 * kTempFreq,
-                                            0.0f, fw * kTempFreq);
-            // 0.24, not the 3D generator's 0.35.
-            //
-            // Same class of mistake as the height amplitude, in a place
-            // nobody thought to look: a threshold copied across a change
-            // of noise. FastNoiseLite's Perlin at this frequency has
-            // stddev 0.310; this noise has 0.215. The same 0.35 therefore
-            // fires on 5.22% of columns here against 14.05% there, making
-            // deserts about 2.7x rarer - a quiet biome change, not a bug
-            // anything would report.
-            //
-            // Matched by QUANTILE, not by scaling the threshold by the
-            // ratio of standard deviations. That first attempt gave 0.24,
-            // which fires on 10.3% against the 3D generator's 13.25% -
-            // Perlin's distribution is not Gaussian, so a stddev ratio is
-            // only an approximation of the tail. Measuring the value with
-            // the same tail mass gives 0.2114.
-            is_desert[z][x] = (temp > 0.21f) && (height < kSnowBand);
-            biome_val[z][x] = biome_.sample(x4 * kBiomeFreq,
-                                            z4 * kBiomeFreq,
-                                            0.0f, fw * kBiomeFreq);
+    auto put = [&out](int y, BlockId b) {
+        out.blocks[static_cast<std::size_t>(y)] = static_cast<std::uint8_t>(b);
+    };
 
-            // Solidity first, block type second: with a density band a
-            // column can hold several solid runs, so "depth below the
-            // surface" is no longer "height minus y".
-            const int lo = std::max(1, height - kDensityBand);
-            const int hi = std::min(kChunkSizeY - 1, height + kDensityBand);
-            bool band[2 * kDensityBand + 2];
-            for (int y = lo; y <= hi; ++y) {
-                const float ramp = static_cast<float>(y - height)
-                                 / static_cast<float>(kDensityBand);
-                const float d = density_.fbm(
-                    x4, static_cast<float>(y) * kDensityYSquash,
-                    z4, fw, kDensityOctaves, kDensityFreq);
-                band[y - lo] = (d * kDensityStrength - ramp) > 0.0f;
-            }
-            // Everything under the band is stone: deeper than any surface
-            // rule cares about, and a tight fill rather than a scan.
-            for (int y = 0; y < lo; ++y) out.set(x, y, z, BlockId::Stone);
+    // Solidity first, block type second: with a density band a column can
+    // hold several solid runs, so "depth below the surface" is no longer
+    // "height minus y".
+    const int lo = std::max(1, height - kDensityBand);
+    const int hi = std::min(kChunkSizeY - 1, height + kDensityBand);
+    bool band[2 * kDensityBand + 2];
+    for (int y = lo; y <= hi; ++y) {
+        const float ramp = static_cast<float>(y - height)
+                         / static_cast<float>(kDensityBand);
+        const float d = density_.fbm(
+            x4, static_cast<float>(y) * kDensityYSquash,
+            z4, fw, kDensityOctaves, kDensityFreq);
+        band[y - lo] = (d * kDensityStrength - ramp) > 0.0f;
+    }
+    // Everything under the band is stone: deeper than any surface rule
+    // cares about, and a tight fill rather than a scan.
+    for (int y = 0; y < lo; ++y) put(y, BlockId::Stone);
 
-            int t_top = lo - 1;
-            bool band_has_ground = false;
-            for (int y = hi; y >= lo; --y)
-                if (band[y - lo]) { t_top = y; band_has_ground = true; break; }
-            top[z][x] = t_top;
+    int t_top = lo - 1;
+    bool band_has_ground = false;
+    for (int y = hi; y >= lo; --y)
+        if (band[y - lo]) { t_top = y; band_has_ground = true; break; }
+    out.top = t_top;
 
-            // Where the density carved the whole band away, the topmost
-            // solid block is the unconditional stone below it - and it
-            // would keep the stone it was filled with, so a shallow
-            // column came out stone-topped where every rule says sand.
-            // Give the exposed block the surface material it would have
-            // had. Only reachable when the band is entirely air, so it
-            // costs one write on a small minority of columns.
-            if (!band_has_ground && t_top >= 1) {
-                BlockId b;
-                if      (height <= kSeaLevel + kSandBand) b = BlockId::Sand;
-                else if (height >= kSnowBand)             b = BlockId::Snow;
-                else if (is_desert[z][x])                 b = BlockId::Sand;
-                else if (height >= kStoneBand)            b = BlockId::Stone;
-                else                                      b = BlockId::Grass;
-                out.set(x, t_top, z, b);
-            }
+    // Where the density carved the whole band away, the topmost solid
+    // block is the unconditional stone below it - and it would keep the
+    // stone it was filled with, so a shallow column came out stone-topped
+    // where every rule says sand. Give the exposed block the surface
+    // material it would have had. Only reachable when the band is
+    // entirely air, so it costs one write on a small minority of columns.
+    if (!band_has_ground && t_top >= 1) {
+        BlockId b;
+        if      (height <= kSeaLevel + kSandBand) b = BlockId::Sand;
+        else if (height >= kSnowBand)             b = BlockId::Snow;
+        else if (out.is_desert)                   b = BlockId::Sand;
+        else if (height >= kStoneBand)            b = BlockId::Stone;
+        else                                      b = BlockId::Grass;
+        put(t_top, b);
+    }
 
-            int depth = 0;
-            for (int y = hi; y >= lo; --y) {
-                if (!band[y - lo]) { depth = 0; continue; }
-                BlockId b;
-                if      (height <= kSeaLevel + kSandBand && depth <= 1) b = BlockId::Sand;
-                else if (depth == 0 && height >= kSnowBand)             b = BlockId::Snow;
-                else if (is_desert[z][x] && depth <= 2)                 b = BlockId::Sand;
-                else if (height >= kStoneBand && depth == 0)            b = BlockId::Stone;
-                else if (depth == 0)                                    b = BlockId::Grass;
-                else if (depth <= 3)                                    b = BlockId::Dirt;
-                else                                                    b = BlockId::Stone;
-                out.set(x, y, z, b);
-                ++depth;
-            }
-        }
+    int depth = 0;
+    for (int y = hi; y >= lo; --y) {
+        if (!band[y - lo]) { depth = 0; continue; }
+        BlockId b;
+        if      (height <= kSeaLevel + kSandBand && depth <= 1) b = BlockId::Sand;
+        else if (depth == 0 && height >= kSnowBand)             b = BlockId::Snow;
+        else if (out.is_desert && depth <= 2)                   b = BlockId::Sand;
+        else if (height >= kStoneBand && depth == 0)            b = BlockId::Stone;
+        else if (depth == 0)                                    b = BlockId::Grass;
+        else if (depth <= 3)                                    b = BlockId::Dirt;
+        else                                                    b = BlockId::Stone;
+        put(y, b);
+        ++depth;
     }
 
     // Caves: the intersection of two 4D iso-surfaces. In 3D this traces
@@ -203,42 +192,71 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
     // The construction carries over from the 3D generator; the iso width
     // does not, because those fields are OpenSimplex2 and these are
     // Perlin. See kCaveIsoWidth.
-    if (caves_enabled_) {
-        constexpr int   kCaveCeiling  = 5;
-        constexpr int   kCaveFloor    = 1;
-        // 0.025, not the 3D generator's 0.05, and the reason is that the
-        // 3D cave fields are OpenSimplex2 while these are Perlin. The
-        // comment below calls this "the same construction"; the
-        // construction is the same and the DISTRIBUTION is not.
-        // OpenSimplex2 at this frequency has stddev 0.435 against this
-        // noise's 0.219, so |n| < 0.05 catches 17.2% of cells here
-        // against 7.9% there - more than twice the carving, which reads
-        // as a cavier world rather than as anything wrong.
-        //
-        // Matched by quantile for the same reason as the desert
-        // threshold: scaling by the stddev ratio gives 0.0252, which
-        // catches 9.1% of cells against the 3D generator's 7.9%. The
-        // width with the same central mass is 0.0218.
-        constexpr float kCaveIsoWidth = 0.022f;
-        for (int z = 0; z < kChunkSizeZ; ++z) {
-            for (int x = 0; x < kChunkSizeX; ++x) {
-                float cx4 = 0.0f, cz4 = 0.0f, cw4 = 0.0f;
-                to_4d(static_cast<float>(origin_x + x),
-                      static_cast<float>(origin_z + z), s, &cx4, &cz4, &cw4);
-                const float cfw = cw4;
-                const int y_max = surface[z][x] - kCaveCeiling;
-                for (int y = kCaveFloor; y <= y_max; ++y) {
-                    // y * 1.6 matches the 3D generator's vertical squash,
-                    // which keeps passages wider than they are tall.
-                    const float fy = static_cast<float>(y) * 1.6f;
-                    const float na = cave_a_.sample(cx4 * kCaveFreq, fy * kCaveFreq,
-                                                    cz4 * kCaveFreq, cfw * kCaveFreq);
-                    const float nb = cave_b_.sample(cx4 * kCaveFreq, fy * kCaveFreq,
-                                                    cz4 * kCaveFreq, cfw * kCaveFreq);
-                    if (std::abs(na) < kCaveIsoWidth && std::abs(nb) < kCaveIsoWidth) {
-                        out.set(x, y, z, BlockId::Air);
-                    }
-                }
+    if (!caves_enabled_) return;
+    constexpr int   kCaveCeiling  = 5;
+    constexpr int   kCaveFloor    = 1;
+    // 0.025, not the 3D generator's 0.05, and the reason is that the 3D
+    // cave fields are OpenSimplex2 while these are Perlin. The comment
+    // above calls this "the same construction"; the construction is the
+    // same and the DISTRIBUTION is not. OpenSimplex2 at this frequency
+    // has stddev 0.435 against this noise's 0.219, so |n| < 0.05 catches
+    // 17.2% of cells here against 7.9% there - more than twice the
+    // carving, which reads as a cavier world rather than as anything
+    // wrong.
+    //
+    // Matched by quantile for the same reason as the desert threshold:
+    // scaling by the stddev ratio gives 0.0252, which catches 9.1% of
+    // cells against the 3D generator's 7.9%. The width with the same
+    // central mass is 0.0218.
+    constexpr float kCaveIsoWidth = 0.022f;
+    const int y_max = height - kCaveCeiling;
+    for (int y = kCaveFloor; y <= y_max; ++y) {
+        // y * 1.6 matches the 3D generator's vertical squash, which keeps
+        // passages wider than they are tall.
+        const float fy = static_cast<float>(y) * 1.6f;
+        const float na = cave_a_.sample(x4 * kCaveFreq, fy * kCaveFreq,
+                                        z4 * kCaveFreq, fw * kCaveFreq);
+        const float nb = cave_b_.sample(x4 * kCaveFreq, fy * kCaveFreq,
+                                        z4 * kCaveFreq, fw * kCaveFreq);
+        if (std::abs(na) < kCaveIsoWidth && std::abs(nb) < kCaveIsoWidth) {
+            put(y, BlockId::Air);
+        }
+    }
+}
+
+void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const {
+    const int origin_x = chunk_x * kChunkSizeX;
+    const int origin_z = chunk_z * kChunkSizeZ;
+
+    int  surface[kChunkSizeZ][kChunkSizeX];
+    // The topmost solid block, which is not the guide height once the
+    // density band can put ground above it or carve it away.
+    int  top[kChunkSizeZ][kChunkSizeX];
+    bool is_desert[kChunkSizeZ][kChunkSizeX];
+    float biome_val[kChunkSizeZ][kChunkSizeX];
+
+    Column4D col;
+    for (int z = 0; z < kChunkSizeZ; ++z) {
+        for (int x = 0; x < kChunkSizeX; ++x) {
+            const int wx = origin_x + x;
+            const int wz = origin_z + z;
+            // Carry the slice point into 4D once, then let fill_column do
+            // the rest. Everything this loop used to inline - height,
+            // biome, the density band, block typing, caves - lives there
+            // now, so a chunk of voxels and a tiling of 4D cells cannot
+            // drift apart.
+            float x4 = 0.0f, z4 = 0.0f, w4 = 0.0f;
+            to_4d(static_cast<float>(wx), static_cast<float>(wz), s,
+                  &x4, &z4, &w4);
+            fill_column(x4, z4, w4, col);
+
+            surface[z][x]   = col.guide_height;
+            top[z][x]       = col.top;
+            is_desert[z][x] = col.is_desert;
+            biome_val[z][x] = col.biome;
+            for (int y = 0; y < kChunkSizeY; ++y) {
+                out.set(x, y, z, static_cast<BlockId>(col.blocks[
+                    static_cast<std::size_t>(y)]));
             }
         }
     }

@@ -3,6 +3,7 @@
 #include "world/chunk.h"
 #include "world/noise4d.h"
 
+#include <array>
 #include <cmath>    // to_4d is inline and calls std::cos/std::sin
 #include <cstdint>
 
@@ -126,6 +127,52 @@ public:
 
     // Surface height for a world column at (wx, wz) on the given slice.
     int height_at(int wx, int wz, Slice s) const;
+
+    // The same, addressed by where the column already sits in 4D rather
+    // than by a slice point that has to be carried there. height_at is
+    // this composed with to_4d.
+    int height_at_4d(float x4, float z4, float w4) const;
+
+    // Everything one column of the world holds, plus the four facts the
+    // chunk-level tree pass needs about it.
+    //
+    // A column is the natural unit here and not an implementation
+    // convenience: y is the one axis a slice rotation leaves alone, so a
+    // point of the 4D lattice picks out a full 256-tall stack of blocks
+    // however the cut is turned. That is what lets the same generator
+    // serve a chunk of voxels and a tiling of 4D cells - only the
+    // question "which columns" differs between them.
+    struct Column4D {
+        std::array<std::uint8_t, kChunkSizeY> blocks{};
+        // The guide height. Not the surface: the density band can put
+        // ground above it or carve it away.
+        int   guide_height = 0;
+        // The topmost solid block the band produced.
+        int   top          = 0;
+        bool  is_desert    = false;
+        float biome        = 0.0f;
+    };
+
+    // Generates the column standing at 4D point (x4, z4, w4). Terrain,
+    // block types and caves; trees are not here because a tree spills
+    // into its neighbours and so belongs to whatever owns the set of
+    // columns.
+    void fill_column(float x4, float z4, float w4, Column4D& out) const;
+
+    // The column of the 4D lattice cell (i, k, l), sampled at the cell's
+    // centre.
+    //
+    // Sampling the CENTRE rather than a point of the slice is what makes
+    // a block's material independent of how the world is being looked at.
+    // A cell keeps its contents as the cut turns through it; only the
+    // shape it presents changes. Sample the slice instead and the same
+    // block quietly becomes a different one as you scroll, which is a
+    // world being re-rolled rather than a world being cut.
+    void fill_cell_column(int i, int k, int l, Column4D& out) const {
+        fill_column(static_cast<float>(i) + 0.5f,
+                    static_cast<float>(k) + 0.5f,
+                    static_cast<float>(l) + 0.5f, out);
+    }
 
     // Fills `out` with the chunk at (chunk_x, chunk_z) on the given slice.
     void fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) const;
