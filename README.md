@@ -131,6 +131,13 @@ rather than as teleporting.
 
     CLIP_TIME_OF_DAY=0.62 scripts/capture_clip.sh tilt
 
+The cut turns in **two planes**, which is how 4D Miner does it and what
+one plane cannot cover: the wheel and vertical mouse turn it in ZW,
+horizontal mouse in XW. Hold `M` or the middle mouse button and the mouse
+turns the world instead of the camera. One plane alone leaves an axis of
+4D orientation unreachable - you can lean the world away from you but
+never sideways, and the row you turn about never moves at all.
+
 That distinction is the whole design, and it took a wrong turn to find.
 The first version only **translated** along w, so every slice was the
 hyperplane `w = constant`. That is axis-aligned to the 4D lattice, which
@@ -981,4 +988,5 @@ In a 4D world (`--4d`) two more move you through the fourth axis:
 | Key | Action |
 | --- | --- |
 | E / Q | Travel along w (forward / back) |
-| Mouse wheel | Rotate the slice - the one that looks four-dimensional |
+| Mouse wheel | Turn the cut in the ZW plane |
+| Hold M or middle mouse | The mouse turns the cut: vertical ZW, horizontal XW |

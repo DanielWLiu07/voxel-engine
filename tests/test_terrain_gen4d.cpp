@@ -727,6 +727,55 @@ void test_scrolling_is_a_sweep_not_a_sequence_of_jumps() {
     EXPECT(ten.second > 2, "and by more than any single notch did");
 }
 
+void test_the_second_rotation_plane_reaches_what_the_first_cannot() {
+    // 4D Miner turns the cut in two planes: the wheel and vertical mouse
+    // in ZW, horizontal mouse in XW. One plane alone leaves a whole axis
+    // of 4D orientation unreachable - you can lean the world away from
+    // you but never sideways - so this pins that the second plane exists,
+    // does something, and does something DIFFERENT from the first.
+    const world::TerrainGen4D t(1337);
+    auto changed = [&](world::TerrainGen4D::Slice a,
+                       world::TerrainGen4D::Slice b) {
+        int diff = 0, n = 0;
+        for (int z = -96; z < 96; z += 2)
+            for (int x = -96; x < 96; x += 2) {
+                if (t.height_at(x, z, a) != t.height_at(x, z, b)) ++diff;
+                ++n;
+            }
+        return 100.0 * diff / n;
+    };
+    const world::TerrainGen4D::Slice flat{};
+
+    // It does something.
+    world::TerrainGen4D::Slice xw{}; xw.phi = 0.05f;
+    EXPECT(changed(flat, xw) > 20.0, "turning in XW changes the world");
+
+    // And something a ZW turn cannot reproduce. Both planes move a
+    // similar TOTAL, so a totals comparison would prove nothing; what
+    // separates them is direction. A ZW turn leaves the x axis alone, an
+    // XW turn leaves z alone, so each has a row the other cannot touch.
+    world::TerrainGen4D::Slice zw{}; zw.theta = 0.05f;
+    int zw_moved_on_x_axis = 0, xw_moved_on_x_axis = 0;
+    for (int x = -96; x < 96; x += 2) {
+        // The row z = 0: a ZW rotation about the origin cannot move it,
+        // because every point on it has slice-z zero.
+        if (t.height_at(x, 0, flat) != t.height_at(x, 0, zw)) ++zw_moved_on_x_axis;
+        if (t.height_at(x, 0, flat) != t.height_at(x, 0, xw)) ++xw_moved_on_x_axis;
+    }
+    EXPECT(zw_moved_on_x_axis == 0,
+           "a ZW turn cannot move the row it turns about");
+    EXPECT(xw_moved_on_x_axis > 0,
+           "an XW turn moves exactly that row, which is why it is needed");
+
+    // Reversible, like every other motion through this world.
+    world::TerrainGen4D::Slice back{}; back.phi = 0.05f;
+    EXPECT(changed(xw, back) == 0.0, "an XW tilt is a place, not a mutation");
+
+    // The two planes compose rather than cancelling.
+    world::TerrainGen4D::Slice both{}; both.theta = 0.05f; both.phi = 0.05f;
+    EXPECT(changed(zw, both) > 10.0, "the planes are independent");
+}
+
 void test_a_tilted_slice_is_still_the_same_kind_of_world() {
     // Rotating the cut must change WHICH world you see, not what kind of
     // world it is. A slice at 45 degrees should be as walkable, as smooth
@@ -789,6 +838,7 @@ int main() {
     test_w_is_continuous_not_a_staircase_of_worlds();
     test_w_runs_both_ways_from_the_origin();
     test_scrolling_is_a_sweep_not_a_sequence_of_jumps();
+    test_the_second_rotation_plane_reaches_what_the_first_cannot();
     test_a_tilted_slice_is_still_the_same_kind_of_world();
     test_adjacent_slices_are_related_not_unrelated();
     test_a_slice_is_a_deterministic_pure_function();

@@ -23,6 +23,8 @@ enum class Bind {
     Occlusion, Wireframe, Vsync,
     Save, Load, WalkFly, CopyPerf,
     SliceForward, SliceBack,
+    // Held: the mouse turns the 4D cut instead of the camera.
+    SliceLook,
     Count,
 };
 
@@ -58,6 +60,11 @@ inline constexpr KeyBinding kBindings[static_cast<int>(Bind::Count)] = {
     // four-dimensional. The feature worked and was unreachable.
     {GLFW_KEY_E,             "E",     "hold: travel +w (the 4th axis)"},
     {GLFW_KEY_Q,             "Q",     "hold: travel -w (the 4th axis)"},
+    // Held, the mouse turns the CUT instead of the camera: vertical in
+    // the ZW plane (what the wheel does), horizontal in XW. Two planes,
+    // because one leaves an axis of 4D orientation unreachable - you can
+    // lean the world away from you but never sideways.
+    {GLFW_KEY_M,             "M",     "hold: mouse turns the 4D cut"},
 };
 
 constexpr int key_of(Bind b) { return kBindings[static_cast<int>(b)].key; }

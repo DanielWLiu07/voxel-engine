@@ -47,14 +47,15 @@ TerrainGen4D::TerrainGen4D(std::uint32_t seed)
       cave_a_(seed + 6), cave_b_(seed + 7), density_(seed + 8) {}
 
 int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
-    const float x = static_cast<float>(wx);
-    // The slice's z maps into BOTH the 4D z and w axes once the cut is
-    // rotated. At theta = 0 this reduces to z4 = wz, w4 = w, which is the
-    // axis-aligned slice everything started as.
-    float z = 0.0f, fw = 0.0f;
+    // Both slice axes map into the 4D axes once the cut is rotated: z
+    // into (z, w) by theta, x into (x, w) by phi. At theta = phi = 0 this
+    // reduces to x4 = wx, z4 = wz, w4 = w - the axis-aligned slice
+    // everything started as.
+    //
     // to_4d returns coordinates ready to sample: kWScale is inside it,
     // because scaling after the rotation shears rather than rotates.
-    to_4d(static_cast<float>(wz), s, &z, &fw);
+    float x = 0.0f, z = 0.0f, fw = 0.0f;
+    to_4d(static_cast<float>(wx), static_cast<float>(wz), s, &x, &z, &fw);
 
     // Domain warp, then three octave stacks over a 3D slice of the 4D
     // field: world x, world z and w, with the noise's remaining axis
@@ -104,12 +105,13 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
             const int height = height_at(wx, wz, s);
             // The rotated 4D coordinates for this column, shared by
             // the biome and temperature fields below.
-            float z4 = 0.0f, w4 = 0.0f;
-            to_4d(static_cast<float>(wz), s, &z4, &w4);
+            float x4 = 0.0f, z4 = 0.0f, w4 = 0.0f;
+            to_4d(static_cast<float>(wx), static_cast<float>(wz), s,
+                  &x4, &z4, &w4);
             const float fw = w4;
             surface[z][x] = height;
 
-            const float temp = temp_.sample(static_cast<float>(wx) * kTempFreq,
+            const float temp = temp_.sample(x4 * kTempFreq,
                                             z4 * kTempFreq,
                                             0.0f, fw * kTempFreq);
             // 0.24, not the 3D generator's 0.35.
@@ -129,7 +131,7 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
             // only an approximation of the tail. Measuring the value with
             // the same tail mass gives 0.2114.
             is_desert[z][x] = (temp > 0.21f) && (height < kSnowBand);
-            biome_val[z][x] = biome_.sample(static_cast<float>(wx) * kBiomeFreq,
+            biome_val[z][x] = biome_.sample(x4 * kBiomeFreq,
                                             z4 * kBiomeFreq,
                                             0.0f, fw * kBiomeFreq);
 
@@ -143,8 +145,7 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
                 const float ramp = static_cast<float>(y - height)
                                  / static_cast<float>(kDensityBand);
                 const float d = density_.fbm(
-                    static_cast<float>(wx),
-                    static_cast<float>(y) * kDensityYSquash,
+                    x4, static_cast<float>(y) * kDensityYSquash,
                     z4, fw, kDensityOctaves, kDensityFreq);
                 band[y - lo] = (d * kDensityStrength - ramp) > 0.0f;
             }
@@ -221,18 +222,18 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
         constexpr float kCaveIsoWidth = 0.022f;
         for (int z = 0; z < kChunkSizeZ; ++z) {
             for (int x = 0; x < kChunkSizeX; ++x) {
-                const float wx = static_cast<float>(origin_x + x);
-                float cz4 = 0.0f, cw4 = 0.0f;
-                to_4d(static_cast<float>(origin_z + z), s, &cz4, &cw4);
+                float cx4 = 0.0f, cz4 = 0.0f, cw4 = 0.0f;
+                to_4d(static_cast<float>(origin_x + x),
+                      static_cast<float>(origin_z + z), s, &cx4, &cz4, &cw4);
                 const float cfw = cw4;
                 const int y_max = surface[z][x] - kCaveCeiling;
                 for (int y = kCaveFloor; y <= y_max; ++y) {
                     // y * 1.6 matches the 3D generator's vertical squash,
                     // which keeps passages wider than they are tall.
                     const float fy = static_cast<float>(y) * 1.6f;
-                    const float na = cave_a_.sample(wx * kCaveFreq, fy * kCaveFreq,
+                    const float na = cave_a_.sample(cx4 * kCaveFreq, fy * kCaveFreq,
                                                     cz4 * kCaveFreq, cfw * kCaveFreq);
-                    const float nb = cave_b_.sample(wx * kCaveFreq, fy * kCaveFreq,
+                    const float nb = cave_b_.sample(cx4 * kCaveFreq, fy * kCaveFreq,
                                                     cz4 * kCaveFreq, cfw * kCaveFreq);
                     if (std::abs(na) < kCaveIsoWidth && std::abs(nb) < kCaveIsoWidth) {
                         out.set(x, y, z, BlockId::Air);

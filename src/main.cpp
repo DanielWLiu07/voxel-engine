@@ -191,8 +191,14 @@ const char* block_name(world::BlockId b) {
 
 void update_movement(core::Input& input, float dt,
                      gfx::FlyCamera& cam, game::Player& player,
-                     const world::World& wrld, bool walk_mode) {
-    cam.apply_mouse_delta(input.mouse_dx(), input.mouse_dy(), 0.12f);
+                     const world::World& wrld, bool walk_mode,
+                     bool slice_look) {
+    // While the 4D look modifier is held the mouse turns the CUT, not the
+    // camera, so the camera must not also consume the delta - otherwise
+    // the view swings while the world turns and neither reads clearly.
+    if (!slice_look) {
+        cam.apply_mouse_delta(input.mouse_dx(), input.mouse_dy(), 0.12f);
+    }
 
     if (walk_mode) {
         glm::vec3 fwd = cam.forward();   fwd.y = 0.0f;
@@ -884,9 +890,30 @@ int main(int argc, char** argv) {
         if (wrld.is_4d()) wrld.stream_slice(terrain, pool);
 
         capture.shot_after = shot_after;  // counts down as the shot settles
+        // Held M, or the middle mouse button, turns the 4D cut with the
+        // mouse instead of turning the camera - vertical in the ZW plane,
+        // horizontal in XW. The wheel remains a ZW-only shortcut.
+        const bool slice_look =
+            wrld.is_4d() && !capture.scripted_camera() &&
+            (input.key_down(core::key_of(core::Bind::SliceLook)) ||
+             input.mouse_button_down(GLFW_MOUSE_BUTTON_MIDDLE));
         if (input.cursor_captured() && !capture.scripted_camera()) {
-            update_movement(input, dt, cam, player, wrld, walk_mode);
-            handle_block_interaction(input, cam, player, walk_mode, wrld, place_id);
+            update_movement(input, dt, cam, player, wrld, walk_mode, slice_look);
+            // Block interaction is suppressed while turning the cut: a
+            // middle-drag that also placed a block would be a trap.
+            if (!slice_look) {
+                handle_block_interaction(input, cam, player, walk_mode, wrld,
+                                         place_id);
+            }
+        }
+        if (slice_look && input.cursor_captured()) {
+            // Same per-notch scale as the wheel, so a pixel of mouse and a
+            // notch of wheel move the world by comparable amounts.
+            constexpr float kSliceLookScale = 0.0016f;
+            const float dz = input.mouse_dy() * kSliceLookScale;
+            const float dx = input.mouse_dx() * kSliceLookScale;
+            if (dz != 0.0f) wrld.rotate_slice(dz, cam.position().z);
+            if (dx != 0.0f) wrld.rotate_slice_xw(dx, cam.position().x);
         }
 
         // Scripted captures drive the camera themselves. Both step by frame

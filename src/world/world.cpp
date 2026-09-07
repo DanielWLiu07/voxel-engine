@@ -550,12 +550,20 @@ float World::slice_drift(ChunkCoord c, TerrainGen4D::Slice from) const {
     // The chunk's centre column stands for the chunk. Its own corners
     // move by different amounts under a rotation - that is what a
     // rotation is - and the centre is the average of them.
+    const float sx = static_cast<float>(c.x * kChunkSizeX + kChunkSizeX / 2);
     const float sz = static_cast<float>(c.z * kChunkSizeZ + kChunkSizeZ / 2);
-    float z_now = 0.0f, w_now = 0.0f, z_then = 0.0f, w_then = 0.0f;
-    TerrainGen4D::to_4d(sz, slice(), &z_now, &w_now);
-    TerrainGen4D::to_4d(sz, from, &z_then, &w_then);
-    const float dz = z_now - z_then, dw = w_now - w_then;
-    return std::sqrt(dz * dz + dw * dw);
+    float x_now = 0.0f, z_now = 0.0f, w_now = 0.0f;
+    float x_then = 0.0f, z_then = 0.0f, w_then = 0.0f;
+    TerrainGen4D::to_4d(sx, sz, slice(), &x_now, &z_now, &w_now);
+    TerrainGen4D::to_4d(sx, sz, from, &x_then, &z_then, &w_then);
+    // All three axes: the cut turns in two planes now, and a rotation in
+    // XW displaces a chunk along x where a ZW one does not. Measuring
+    // only (z, w) would leave the second plane invisible to staleness -
+    // the world would stop rebuilding when you turned it sideways.
+    const float dx = x_now - x_then;
+    const float dz = z_now - z_then;
+    const float dw = w_now - w_then;
+    return std::sqrt(dx * dx + dz * dz + dw * dw);
 }
 
 World::SliceLag World::slice_lag() const {

@@ -317,6 +317,8 @@ public:
         meshed_w_ = w;
         slice_theta_ = 0.0f;
         slice_z_shift_ = 0.0f;
+        slice_phi_ = 0.0f;
+        slice_x_shift_ = 0.0f;
     }
     bool  is_4d() const { return slice_gen_ != nullptr; }
     float slice_w() const { return slice_w_; }
@@ -576,9 +578,37 @@ public:
         if (slice_theta_ < -kTwoPi * 0.5f) slice_theta_ += kTwoPi;
     }
     float slice_theta() const { return slice_theta_; }
+    float slice_phi() const { return slice_phi_; }
+
+    // Turn the cut in the XW plane, about the player.
+    //
+    // The same construction as rotate_slice, one plane over: the pair
+    // (offset, player-slice-x) rotates as a vector, and x_shift puts the
+    // player back at their own world x so the turn is exactly reversible
+    // and leaves the ground under them alone.
+    //
+    // Two planes rather than one because a single plane cannot reach a
+    // whole axis of 4D orientation - you can lean the world away from you
+    // but never sideways. 4D Miner splits them across the two mouse axes
+    // for the same reason.
+    void rotate_slice_xw(float delta, float player_x) {
+        if (!slice_gen_) return;
+        const float c = std::cos(delta), sn = std::sin(delta);
+        const float o = slice_w_ * kWScale;
+        const float u = player_x + slice_x_shift_;
+        const float o2 = o * c - u * sn;
+        const float u2 = o * sn + u * c;
+        slice_w_ = o2 / kWScale;
+        slice_x_shift_ = u2 - player_x;
+        slice_phi_ += delta;
+        constexpr float kTwoPi = 6.28318530718f;
+        if (slice_phi_ >  kTwoPi * 0.5f) slice_phi_ -= kTwoPi;
+        if (slice_phi_ < -kTwoPi * 0.5f) slice_phi_ += kTwoPi;
+    }
 
     TerrainGen4D::Slice slice() const {
-        return {slice_w_, slice_theta_, slice_z_shift_};
+        return {slice_w_, slice_theta_, slice_z_shift_,
+                slice_phi_, slice_x_shift_};
     }
 
     // Legacy one-shot: move and, if that crossed the threshold, rebuild
@@ -852,6 +882,9 @@ private:
     float               slice_theta_ = 0.0f;  // how their cut is tilted
     // Where the slice's z axis starts; moves only when the cut turns.
     float               slice_z_shift_ = 0.0f;
+    // The XW plane, and the shift that pivots it at the player.
+    float               slice_phi_ = 0.0f;
+    float               slice_x_shift_ = 0.0f;
     // Player edits, by chunk and slice, replayed over freshly generated
     // terrain. See VoxelEdit.
     std::unordered_map<SliceCoord, std::vector<VoxelEdit>, SliceCoordHash>

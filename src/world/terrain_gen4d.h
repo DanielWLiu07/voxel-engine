@@ -114,6 +114,14 @@ public:
         // Zero for every axis-aligned slice and for the whole 3D engine,
         // so it costs nothing where it is not needed.
         float z_shift = 0.0f;
+        // The second rotation plane, and the second shift that pivots it.
+        //
+        // 4D Miner turns the cut in TWO planes: the wheel (and vertical
+        // mouse) turns it in ZW, horizontal mouse turns it in XW. One
+        // plane alone leaves a whole axis of 4D orientation unreachable -
+        // you can tilt the world away from you but never sideways.
+        float phi = 0.0f;
+        float x_shift = 0.0f;
     };
 
     // Surface height for a world column at (wx, wz) on the given slice.
@@ -145,12 +153,27 @@ public:
     // (sz, kWScale * w): a true rotation of an isotropic space. theta=0
     // is untouched - it reduces to z4 = sz, w4 = kWScale * w, exactly
     // what every published 3D and untilted 4D figure was measured with.
-    static void to_4d(float sz, Slice s, float* out_z4, float* out_w4) {
+    // Where a point of the slice lands in the noise's 4D space.
+    //
+    // Two rotations, composed: XW first, then ZW. The slice's x axis
+    // leans into w by phi, and what comes out of that leans into w again
+    // by theta along z. At phi = 0 this reduces exactly to the ZW-only
+    // form every earlier figure was measured with, and at theta = phi = 0
+    // to the axis-aligned hyperplane the whole thing started as.
+    static void to_4d(float sx, float sz, Slice s,
+                      float* out_x4, float* out_z4, float* out_w4) {
         const float w = s.w * kWScale;
-        const float d = sz + s.z_shift;
-        const float c = std::cos(s.theta), sn = std::sin(s.theta);
-        *out_z4 = d * c - w * sn;
-        *out_w4 = d * sn + w * c;
+        const float dx = sx + s.x_shift;
+        const float dz = sz + s.z_shift;
+        const float cp = std::cos(s.phi), sp = std::sin(s.phi);
+        // XW: x leans into w.
+        const float x4 = dx * cp - w * sp;
+        const float w1 = dx * sp + w * cp;
+        // ZW: z leans into whatever w has become.
+        const float ct = std::cos(s.theta), st = std::sin(s.theta);
+        *out_x4 = x4;
+        *out_z4 = dz * ct - w1 * st;
+        *out_w4 = dz * st + w1 * ct;
     }
 
     void set_caves_enabled(bool e) { caves_enabled_ = e; }
