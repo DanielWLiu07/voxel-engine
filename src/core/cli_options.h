@@ -112,6 +112,15 @@ struct CliOptions {
     // --capture-tilt N: hold the camera and sweep the slice rotation
     // through a ping-pong, one PNG per frame. Implies --4d.
     int  capture_tilt = 0;
+    // --capture-walk N: hold the cut and walk the camera forward, one PNG
+    // per frame. Implies --4d.
+    //
+    // The complement of --capture-tilt, and it exists to answer a
+    // question the other captures cannot: on a TILTED cut, does walking
+    // move you through the fourth dimension? It does, because the slice's
+    // own z axis leans into w - and the only way to show that rather than
+    // assert it is a clip where nothing but the camera position changes.
+    int  capture_walk = 0;
     int  slice_w = 0;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;

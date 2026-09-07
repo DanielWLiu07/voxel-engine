@@ -705,6 +705,27 @@ public:
                static_cast<float>(kChunkSizeX * kChunkSizeZ);
     }
 
+    // Resident chunks that were meshed against fewer neighbours than are
+    // resident beside them right now.
+    //
+    // The invariant is "a resident chunk is meshed against every resident
+    // neighbour", and a chunk that falls short is drawing boundary faces
+    // the chunk next door hides - invisible geometry, paid for in bytes
+    // and in draw. Zero once the world has converged; anything else is a
+    // dropped re-mesh.
+    int chunks_meshed_short() const {
+        int short_count = 0;
+        for (const auto& kv : chunks_) {
+            std::uint8_t resident = 0;
+            if (chunks_.count({kv.first.x - 1, kv.first.z})) resident |= kNeighborNegX;
+            if (chunks_.count({kv.first.x + 1, kv.first.z})) resident |= kNeighborPosX;
+            if (chunks_.count({kv.first.x, kv.first.z - 1})) resident |= kNeighborNegZ;
+            if (chunks_.count({kv.first.x, kv.first.z + 1})) resident |= kNeighborPosZ;
+            if (resident & ~kv.second->meshed_with) ++short_count;
+        }
+        return short_count;
+    }
+
     // How many resident chunks hold each mesh encoding.
     //
     // Exists so the validator can prove it is looking at a genuinely

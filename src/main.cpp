@@ -295,11 +295,16 @@ int main(int argc, char** argv) {
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
     const int tilt_frames  = opt.capture_tilt;
+    const int walk_frames  = opt.capture_walk;
+    // Where --capture-walk measures its offsets from. Set on the first
+    // settled frame of the walk, never after.
+    glm::vec3 walk_origin{0.0f};
+    bool      walk_origin_set = false;
     // The two capture questions, named once (core/capture_mode.h). Built
     // from the same values the locals above carry; shot_after is the one
     // that counts down, so `capture` is rebuilt where that matters.
     core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
-                              tilt_frames,
+                              tilt_frames, walk_frames,
                               bench_frames};
     const bool no_occlusion = opt.no_occlusion;
     const std::optional<world::ChunkCoord> only_chunk =
@@ -332,6 +337,7 @@ int main(int argc, char** argv) {
                           verify_4d || opt.bench_4d ||
                           shot_after > 0 || orbit_frames > 0 ||
                           cycle_frames > 0 || tilt_frames > 0 ||
+                          walk_frames > 0 ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
@@ -1010,6 +1016,43 @@ int main(int argc, char** argv) {
             const float want = kTiltAmplitude * std::sin(phase);
             wrld.rotate_slice(want - wrld.slice_theta(), cam.position().z);
         }
+        // The complement of the tilt clip: the cut is held and the
+        // CAMERA moves. On a flat cut that shows nothing changing, which
+        // is the control; on a tilted one the terrain reworks itself as
+        // you go, because the slice's own z axis leans into w and walking
+        // forward is travel along the fourth axis.
+        //
+        // A ping-pong, like the tilt sweep and for the same reason: a
+        // straight walk's last frame does not meet its first, and a GIF
+        // that jump-cuts back to the start reads as a glitch. Walking out
+        // and back also shows the return - the world you walk back into
+        // is the one you left, exactly.
+        if (walk_frames > 0 && world_settled) {
+            if (!walk_origin_set) {
+                if (!have_pose_at) {
+                    const OrbitPose op = orbit_pose_at(0, 1, orbit_center);
+                    cam.set_position(op.pos);
+                    cam.set_yaw_pitch(op.yaw, op.pitch);
+                }
+                // Captured once, from wherever the pose ended up, so
+                // every frame is an offset from the same point rather
+                // than from the previous frame - a walk that accumulated
+                // would drift with the frame count.
+                walk_origin = cam.position();
+                walk_origin_set = true;
+            }
+            // 24 blocks out and back. At a 0.45 rad tilt that is about
+            // ten 4D cells each way, which is enough for the middle
+            // distance to become somewhere else and back.
+            constexpr float kWalkBlocks = 24.0f;
+            const float phase = 6.28318530718f *
+                static_cast<float>(capture_frame) /
+                static_cast<float>(walk_frames);
+            const float along = kWalkBlocks * std::sin(phase);
+            const float yaw_rad = glm::radians(cam.yaw());
+            const glm::vec3 fwd{std::cos(yaw_rad), 0.0f, std::sin(yaw_rad)};
+            cam.set_position(walk_origin + fwd * along);
+        }
         if ((orbit_frames > 0 || cycle_frames > 0) && world_settled) {
             // Cycle parks at the orbit start (frame 0) and spends its
             // frames on time-of-day; orbit sweeps the full circle.
@@ -1245,6 +1288,33 @@ int main(int argc, char** argv) {
         if ((frame_index & 3ull) == 1ull)        shadow_cascade_mask |= (1u << 2);
         // First frame: refresh everything so caches are valid.
         if (frame_index == 0ull) shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
+        // A scripted camera refreshes every cascade every frame, and that
+        // is a correctness fix rather than a quality one.
+        //
+        // The stagger above is keyed to frame_index, which counts every
+        // iteration of the render loop - including the settle frames
+        // before a capture starts and the frames each capture frame
+        // spends waiting for the world to converge. Both are wall-clock
+        // dependent. So which cascades a captured PNG was rendered with
+        // depended on how long streaming happened to take, and cascades 1
+        // and 2 can hold depth rendered from an OLDER camera position.
+        //
+        // Measured: --capture-walk 4 puts frames 0 and 2 at the same
+        // pose, and they came out byte-identical on two runs in three and
+        // different on the third, with no other input changing. That is
+        // the repo's byte-stable capture guarantee failing intermittently
+        // in every multi-frame mode - the orbit and day-cycle GIFs
+        // included, where it reads as shadows popping.
+        //
+        // A capture already waits seconds per frame for convergence, so
+        // three shadow passes instead of 1.75 costs it nothing, and it
+        // makes a frame a pure function of its pose. --bench-frame is
+        // deliberately NOT included: it is timing the engine, and giving
+        // it a shadow schedule the engine never runs would measure
+        // something else.
+        if (capture.scripted_camera()) {
+            shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
+        }
         // When shadows just transitioned 0 -> active (sunrise), the cached
         // depth textures and matrices are stale from before the night
         // skip-pass - force-refresh all cascades to resync.
@@ -1374,7 +1444,7 @@ int main(int argc, char** argv) {
                 // convergence that fell back on its deadline burned
                 // twenty seconds ninety times before the first PNG was
                 // written. Six frames took over ten minutes.
-                if (tilt_frames > 0) {
+                if (tilt_frames > 0 || walk_frames > 0) {
                     const auto deadline = std::chrono::steady_clock::now() +
                                           std::chrono::seconds(10);
                     bool converged = false;
@@ -1393,6 +1463,24 @@ int main(int argc, char** argv) {
                         std::fprintf(stderr, "[capture] frame %d did not "
                                      "converge; %d chunks stale\n",
                                      capture_frame, wrld.slice_lag().stale);
+                    }
+                    // Behind an env var and off by default, but kept: this
+                    // is the instrument that found three separate defects
+                    // in the streaming path, none of which showed in the
+                    // image and none of which any counter already
+                    // reported. chunks=/pending=/remesh=/stale= say the
+                    // world converged; gpu= and short= say whether it
+                    // converged to the SAME world twice.
+                    if (std::getenv("VOXEL_CAPTURE_TRACE")) {
+                        std::fprintf(stderr, "[capture-trace] frame=%d "
+                                     "chunks=%zu pending=%d remesh=%zu "
+                                     "stale=%d gpu=%zu short=%d\n",
+                                     capture_frame, wrld.chunk_count(),
+                                     wrld.pending_async(),
+                                     wrld.pending_remesh(),
+                                     wrld.slice_lag().stale,
+                                     wrld.resident_gpu_bytes(),
+                                     wrld.chunks_meshed_short());
                     }
                 }
                 char frame_name[32];

@@ -426,6 +426,47 @@ void test_winding_matches_the_normal_it_carries() {
     EXPECT(backwards == 0, "every quad winds the way its normal points");
 }
 
+void test_reading_columns_back_out_of_voxels_is_lossy() {
+    // Why a boundary re-mesh of ordinary terrain goes back to the
+    // GENERATOR rather than reading the chunk it already holds.
+    //
+    // Both sources are legitimate - a chunk the player edited is the
+    // authority on itself and has to be read back - but they are not
+    // equal. Reading back asks each cell which voxel its centroid lands
+    // in, and a cell too thin to contain a voxel centre has no source of
+    // its own, so it inherits a neighbour's column. That merges cells
+    // that should differ.
+    //
+    // If the two sources were mixed by path - fresh streams generated,
+    // re-meshes read back - then whether a chunk took a re-mesh would
+    // change its geometry, and which chunks take one depends on worker
+    // timing. Same world, different mesh, decided by a race.
+    world::TerrainGen4D gen(1337);
+    const auto s = slice_of(0.0f, 0.45f, 0.45f);
+    const auto from_gen = world::build_prism_chunk(gen, {1, 1}, s);
+
+    world::Chunk voxels;
+    world::rasterize_to_chunk(from_gen, voxels);
+    const auto from_blocks = world::build_prism_chunk_from_blocks(voxels, {1, 1}, s);
+
+    EXPECT(from_gen.cells.size() == from_blocks.cells.size(),
+           "both sources tile the chunk into the same cells");
+
+    int differing = 0;
+    for (std::size_t i = 0; i < from_gen.cells.size() &&
+                            i < from_blocks.cells.size(); ++i) {
+        if (from_gen.cells[i].blocks != from_blocks.cells[i].blocks) ++differing;
+    }
+    EXPECT(differing > 0,
+           "reading columns back out of voxels does not reproduce them");
+
+    const int gen_quads    = world::build_prism_mesh(from_gen).quad_count;
+    const int blocks_quads = world::build_prism_mesh(from_blocks).quad_count;
+    EXPECT(gen_quads != blocks_quads,
+           "and the two produce different geometry, so the source cannot "
+           "be chosen by which code path a chunk happened to take");
+}
+
 void test_fuzz_random_cuts_and_chunks() {
     // The check that would have found the sub-step wall on its own.
     //
@@ -534,6 +575,7 @@ int main() {
     test_the_neighbouring_chunk_hides_the_outer_walls();
     test_every_vertex_fits_the_packed_range();
     test_winding_matches_the_normal_it_carries();
+    test_reading_columns_back_out_of_voxels_is_lossy();
     test_fuzz_random_cuts_and_chunks();
     test_a_cell_keeps_its_block_when_the_cut_turns();
     std::printf("\nprism_tests: %d checks, %d failures\n", g_checks, g_failures);

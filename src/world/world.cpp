@@ -834,6 +834,40 @@ int World::drain_finished(int max_per_frame) {
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.
         mark_neighbors_dirty(fc.coord);
+        // And this chunk itself, if it landed meshed against fewer
+        // neighbours than are resident now.
+        //
+        // The invariant is "a resident chunk is meshed against every
+        // resident neighbour", and there was a path that broke it
+        // silently. flush_pending_remeshes drops a dirty mark when a job
+        // for that coord is already in flight, on the reasoning that the
+        // job will mesh it correctly - but the job captured its boundary
+        // planes at SUBMIT time, which can predate the neighbour's
+        // arrival. The mark is discarded, the job lands short, and
+        // nothing ever revisits it.
+        //
+        // Measured before this: a walk that evicts and re-requests left
+        // the resident mesh footprint varying about 0.2% run to run
+        // (22,993,392 vs 22,942,272 bytes) with pending_remesh() reading
+        // 0 - the marks were not pending, they were gone. Invisible in
+        // the image, because the extra faces are buried between chunks,
+        // right up until a camera reaches somewhere the difference shows.
+        // A static load never hit it: during a bulk load a chunk that is
+        // still in flight is not resident, so it is never marked in the
+        // first place and whichever of the pair lands second fixes both.
+        //
+        // Checking the landed mask against what is resident NOW closes it
+        // without a retry loop: the answer is known here, at the moment
+        // the job lands, and it is exactly the condition the invariant
+        // names.
+        {
+            std::uint8_t resident_now = 0;
+            if (chunks_.count({fc.coord.x - 1, fc.coord.z})) resident_now |= kNeighborNegX;
+            if (chunks_.count({fc.coord.x + 1, fc.coord.z})) resident_now |= kNeighborPosX;
+            if (chunks_.count({fc.coord.x, fc.coord.z - 1})) resident_now |= kNeighborNegZ;
+            if (chunks_.count({fc.coord.x, fc.coord.z + 1})) resident_now |= kNeighborPosZ;
+            if (resident_now & ~landed_mask) queue_remesh(fc.coord);
+        }
         total_upload_ms_ += std::chrono::duration<double, std::milli>(
             clock::now() - up_t0).count();
         ++uploaded;
@@ -927,9 +961,38 @@ int World::flush_pending_remeshes(core::ThreadPool& pool, int max_jobs) {
         // regenerates nothing - it re-packs the geometry a chunk already
         // holds - so claiming the current slice here would mark a stale
         // chunk fresh and stream_slice would stop rebuilding it.
+        //
+        // ALL FIVE fields. This used to pass {slice_w, slice_theta} and
+        // let the other three default to zero. The slot is re-stamped
+        // from what is passed, so after a boundary re-mesh a chunk
+        // recorded phi = z_shift = x_shift = 0 whatever it was actually
+        // built at.
+        //
+        // What that costs, measured rather than assumed, because the
+        // first version of this comment claimed two things that are not
+        // true. It does NOT make the chunk permanently stale: the next
+        // stream_slice re-requests it with the full current slice, so the
+        // world still converges. And the redundant regeneration is not
+        // visible in wall time - two runs each way of a six-frame walk
+        // capture were 3.6/2.6 s against 2.9/2.7 s, which is noise.
+        //
+        // What it does cost is wrong geometry, and in prism mode that is
+        // direct: the stamp is also the CUT the tiling is rebuilt from,
+        // so a re-mesh tiled the chunk with a hyperplane its blocks never
+        // came from. Resident mesh at the same capture frame moved
+        // 22,935,216 -> 22,995,216 bytes when this was fixed, and the
+        // second figure is the correct one.
+        //
+        // It hid because every check that turns phi turns it briefly -
+        // --verify-4d's xw leg rotates and rotates back. A cut left
+        // tilted in XW is what exposes it, which is what a player does
+        // and what no test did.
         enqueue_decoded_chunk(c, it->second->chunk, pool,
                               it->second->player_modified,
-                              {it->second->slice_w, it->second->slice_theta});
+                              {it->second->slice_w, it->second->slice_theta,
+                               it->second->slice_z_shift,
+                               it->second->slice_phi,
+                               it->second->slice_x_shift});
         ++issued;
     }
     return issued;
@@ -950,9 +1013,10 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
     const bool prisms = prisms_;
+    const TerrainGen4D* slice_gen = slice_gen_;
     NeighborLight nlight = neighbor_light_for(c);
     pool.submit([this, c, gen, seq, stamp, preserve_on_evict, from_disk, mask, kind,
-                 prisms,
+                 prisms, slice_gen,
                  planes = std::move(planes),
                  nlight = std::move(nlight),
                  chunk = std::move(chunk)]() mutable {
@@ -979,11 +1043,29 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
         propagate_light(fc.chunk, nlight, fc.light);
-        // A restored chunk IS the authority on its own contents, so the
-        // tiling reads its columns back rather than regenerating them.
+        // Where the cells come from, and it has to be the SAME source a
+        // fresh stream would have used or the mesh depends on which path
+        // the chunk happened to take.
+        //
+        // A chunk the player edited, or one off disk, IS the authority on
+        // its own contents: the generator cannot reproduce it, so its
+        // tiling reads columns back out of the voxel grid. Everything
+        // else - which is every boundary re-mesh of ordinary terrain -
+        // goes back to the generator, because reading columns back is
+        // lossy for a cell too thin to hold a voxel centre and a chunk
+        // that took a re-mesh would otherwise end up subtly different
+        // from an identical one that did not.
+        //
+        // That difference was measurable: 11,712 bytes of resident mesh
+        // between two runs of the same walk, moving with worker timing.
+        const bool authoritative = preserve_on_evict || from_disk ||
+                                   slice_gen == nullptr;
         fc.mesh_data = prisms
-            ? build_prism_mesh(build_prism_chunk_from_blocks(fc.chunk, c, stamp),
-                               planes, {&fc.light, &nlight})
+            ? build_prism_mesh(
+                  authoritative
+                      ? build_prism_chunk_from_blocks(fc.chunk, c, stamp)
+                      : build_prism_chunk(*slice_gen, c, stamp),
+                  planes, {&fc.light, &nlight})
             : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);

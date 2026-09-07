@@ -144,6 +144,12 @@ grep_step "prism tiling reduces to the voxel grid" \
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "headers self-sufficient"   ./scripts/check_headers.py
 step      "occlusion byte-identity"   ./scripts/verify_occlusion.sh
+# Byte identity ACROSS FRAMES of one capture, which the step above does
+# not cover: it compares one frame between two runs. A multi-frame
+# capture has to be a pure function of its pose, and it was not - the
+# shadow-cascade stagger is keyed to a frame counter that includes settle
+# frames and convergence waits.
+step      "capture byte-stability"    ./scripts/verify_capture_stable.sh
 step      "persistence contract"      ./scripts/verify_persistence.sh
 
 if [ "${1:-}" = "--with-sanitizers" ]; then

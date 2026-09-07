@@ -26,6 +26,14 @@ struct CaptureMode {
     // and turns the 4D cut instead, which is the only capture where the
     // WORLD moves and the viewer does not.
     int tilt_frames  = 0;
+    // Frames of a walk along the camera's facing, one PNG each, with the
+    // cut held still. The complement of tilt_frames: there the world
+    // moves and the viewer does not, here the viewer moves and the world
+    // changes anyway - because on a tilted cut the slice's own z axis
+    // leans into w, so walking forward IS travel along the fourth axis.
+    // On a flat cut the same capture shows nothing changing, which is the
+    // control and is worth being able to produce.
+    int walk_frames  = 0;
     int bench_frames = 0;  // frames to time; writes no image
 
     // The camera is driven by a script rather than by the player, so live
@@ -38,7 +46,7 @@ struct CaptureMode {
     // pose and the orbit bench drives the camera through its own path.
     bool scripted_camera() const {
         return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0 ||
-               tilt_frames > 0;
+               tilt_frames > 0 || walk_frames > 0;
     }
 
     // The run exists to produce an image or a measurement, so interface
@@ -63,7 +71,8 @@ struct CaptureMode {
     int image_sequence_frames() const {
         if (orbit_frames > 0) return orbit_frames;
         if (cycle_frames > 0) return cycle_frames;
-        return tilt_frames;
+        if (tilt_frames > 0)  return tilt_frames;
+        return walk_frames;
     }
 };
 
