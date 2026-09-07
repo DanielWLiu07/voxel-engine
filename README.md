@@ -15,12 +15,15 @@ different cross-section of the same fixed 4D world.
 Blocks are drawn as the polygon their 4D cell actually presents, not as
 cubes:
 
-<table>
-<tr>
-<td><img src="docs/media/blocks_cube.jpg" width="380"><br><sub><b>cubes</b> - every corner a right angle</sub></td>
-<td><img src="docs/media/blocks_prism.jpg" width="380"><br><sub><b>cross-sections</b> - the same blocks, cut at the angle you look through</sub></td>
-</tr>
-</table>
+![Blinking between cubes and true 4D cross-sections: same world, same cut, same camera](docs/media/blocks_blink.gif)
+
+Same world, same cut, same camera - only the block shape changes. `P`
+toggles it live. Every right angle in the first frame is a right angle
+because a cube says so; every obtuse corner in the second is where the
+hyperplane actually cut that block.
+
+    ./build/voxel_engine --slice-prisms --slice-tilt 0.45 --slice-tilt-xw 0.45 \
+        --pose-at 22,44,26,-125,-14 --time-of-day 0.7 --screenshot-after 110
 
 That distinction turns out to have a result in it. The mesher's own
 comments said the cross-section geometry could not be greedy-meshed -
