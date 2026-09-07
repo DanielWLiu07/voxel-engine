@@ -610,6 +610,22 @@ World::SliceLag World::slice_lag() const {
     return out;
 }
 
+World::SliceLag World::slice_lag_ahead() const {
+    SliceLag out{0, 0};
+    for (const auto& kv : chunks_) {
+        if (!ahead_of_view(kv.first)) continue;
+        ++out.resident;
+        const float drift = slice_drift(kv.first,
+                                        {kv.second->slice_w,
+                                         kv.second->slice_theta,
+                                         kv.second->slice_z_shift,
+                                         kv.second->slice_phi,
+                                         kv.second->slice_x_shift});
+        if (drift >= kSliceDriftMin) ++out.stale;
+    }
+    return out;
+}
+
 int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
                         int budget) {
     if (!slice_gen_ || budget <= 0) return 0;
@@ -624,7 +640,7 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
     // by a budget-limited frame stays at the front of the queue until it
     // is caught up. Nothing is ever globally stale, so nothing has to stop
     // and wait.
-    struct Stale { ChunkCoord c; long dist2; float drift; };
+    struct Stale { ChunkCoord c; long dist2; float drift; bool ahead; };
     std::vector<Stale> stale;
     for (const auto& kv : chunks_) {
         // How far this chunk's terrain has actually moved in the noise
@@ -640,16 +656,25 @@ int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
         if (requested_.count(kv.first)) continue;   // already on its way
         const long dx = kv.first.x - last_center_.x;
         const long dz = kv.first.z - last_center_.z;
-        stale.push_back({kv.first, dx * dx + dz * dz, drift});
+        stale.push_back({kv.first, dx * dx + dz * dz, drift,
+                         ahead_of_view(kv.first)});
     }
     if (stale.empty()) return 0;
 
-    // Nearest first; drift breaks ties so a chunk that has been skipped
-    // repeatedly is not starved by a neighbour at the same distance.
-    // Coordinates break the rest, so the order never depends on the hash
-    // map's iteration.
+    // In front of the camera first, then nearest; drift breaks ties so a
+    // chunk that has been skipped repeatedly is not starved by a
+    // neighbour at the same distance. Coordinates break the rest, so the
+    // order never depends on the hash map's iteration.
+    //
+    // Facing is the primary key because a rotation invalidates the whole
+    // window at once - measured, 289 of 289 chunks stale for as long as
+    // the wheel is turning - so the queue is never short and the only
+    // question is what comes off it first. Distance alone rebuilds what
+    // is behind the player before what is in front, which is work the
+    // frame cannot show.
     std::sort(stale.begin(), stale.end(),
               [](const Stale& a, const Stale& b) {
+                  if (a.ahead != b.ahead) return a.ahead;
                   if (a.dist2 != b.dist2) return a.dist2 < b.dist2;
                   if (a.drift != b.drift) return a.drift > b.drift;
                   return a.c.z != b.c.z ? a.c.z < b.c.z : a.c.x < b.c.x;

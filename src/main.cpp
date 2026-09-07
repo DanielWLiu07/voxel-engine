@@ -941,6 +941,15 @@ int main(int argc, char** argv) {
         // Pull the world toward the player's w, a bounded slice of it per
         // frame. Runs every frame rather than on a key, so the terrain
         // keeps converging after the player stops travelling.
+        // Tell the world which way the camera faces before it decides
+        // what to rebuild. A slice rotation invalidates the whole window,
+        // so the rebuild queue is never short and the only question is
+        // what comes off it first; without this it is whatever is nearest,
+        // including everything behind the player.
+        {
+            const glm::vec3 f = cam.forward();
+            wrld.set_view_forward(f.x, f.z);
+        }
         if (wrld.is_4d()) wrld.stream_slice(terrain, pool);
 
         capture.shot_after = shot_after;  // counts down as the shot settles
@@ -2664,9 +2673,9 @@ int main(int argc, char** argv) {
             // throughput. What the budget leaves is reported instead:
             // whether the world keeps up at it, and how long it takes to
             // converge once the motion stops.
-            std::printf("  %-11s %10s %10s %12s %12s %12s\n", "motion",
+            std::printf("  %-11s %10s %10s %12s %12s %10s %12s\n", "motion",
                         "mean ms", "p99 ms", "issued/frame", "behind",
-                        "settle ms");
+                        "ahead ms", "settle ms");
 
             for (const Phase& ph : phases) {
                 // Start each phase from the SAME slice, not just a
@@ -2784,11 +2793,22 @@ int main(int argc, char** argv) {
                 // it takes to spin 4000 times - which is a number, is
                 // stable, looks like a settle time, and is not one.
                 bool converged = false;
+                double ahead_settle_ms = -1.0;
                 const auto settle_deadline =
                     std::chrono::steady_clock::now() + std::chrono::seconds(20);
                 while (std::chrono::steady_clock::now() < settle_deadline) {
                     wrld.drain_finished(48);
                     wrld.flush_pending_remeshes(pool, 4);
+                    // When the half of the window the camera faces goes
+                    // clean. That is the number a player feels: the world
+                    // behind them can stay stale for another second
+                    // without anyone being able to tell.
+                    if (ahead_settle_ms < 0.0 &&
+                        wrld.slice_lag_ahead().stale == 0) {
+                        ahead_settle_ms =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - settle_t0).count();
+                    }
                     if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
                         && wrld.stream_slice(terrain, pool) == 0) {
                         converged = true;
@@ -2796,6 +2816,7 @@ int main(int argc, char** argv) {
                     }
                     std::this_thread::yield();
                 }
+                if (ahead_settle_ms < 0.0) ahead_settle_ms = 0.0;
                 if (!converged) {
                     const auto l = wrld.slice_lag();
                     std::fprintf(stderr, "[settle] %s did not converge: "
@@ -2808,6 +2829,8 @@ int main(int argc, char** argv) {
                 const double settle_ms =
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - settle_t0).count();
+                char ahead[24];
+                std::snprintf(ahead, sizeof ahead, "%.0f", ahead_settle_ms);
 
                 std::sort(frame_ms.begin(), frame_ms.end());
                 double sum = 0.0;
@@ -2827,9 +2850,9 @@ int main(int argc, char** argv) {
                     std::snprintf(settle, sizeof settle, "NEVER (%.0f)",
                                   settle_ms);
                 }
-                std::printf("  %-11s %10.2f %10.2f %6.1f / %-5d %12s %12s\n",
+                std::printf("  %-11s %10.2f %10.2f %6.1f / %-5d %12s %10s %12s\n",
                             ph.name, mean, p99, issued_per_frame, kStreamBudget,
-                            behind, settle);
+                            behind, ahead, settle);
                 (void)elapsed_s;
             }
             std::printf("\nmain-thread cost only; chunk generation and "

@@ -386,6 +386,25 @@ public:
     struct SliceLag { int stale; int resident; };
     SliceLag slice_lag() const;
 
+    // The same count restricted to chunks the player could be looking at.
+    //
+    // Worth separating because it is the number a player feels. Total
+    // staleness says how much work is outstanding; this says how much of
+    // it is in front of them, and a rebuild queue that clears the second
+    // one first reads as a far smoother world for the same throughput.
+    SliceLag slice_lag_ahead() const;
+
+    // Which way the camera is facing, in the XZ plane, normalized.
+    //
+    // Set once a frame by the render loop. The streaming queue was
+    // ordered by distance from the player alone, which rebuilds a chunk
+    // three behind them before one five ahead - work spent where nobody
+    // is looking while the view stays stale.
+    void set_view_forward(float fx, float fz) {
+        const float len = std::sqrt(fx * fx + fz * fz);
+        if (len > 1e-6f) { view_fx_ = fx / len; view_fz_ = fz / len; }
+    }
+
     // How far a chunk's terrain has moved in the noise field between the
     // slice it was generated on and the current one - a distance, in the
     // same units for both motions, rather than a weighted sum of two
@@ -988,6 +1007,18 @@ private:
     // Where the player was standing at the last streaming update, so a
     // rebuild can start with the chunks they are looking at.
     ChunkCoord          last_center_{0, 0};
+    float               view_fx_ = 0.0f, view_fz_ = -1.0f;
+
+    // Whether a chunk sits in the half-plane the camera faces. A
+    // hemisphere rather than the view frustum on purpose: the frustum
+    // would starve everything a turn of the head is about to reveal, and
+    // the point is to be ahead of the player, not exactly level with them.
+    bool ahead_of_view(ChunkCoord c) const {
+        const float dx = static_cast<float>(c.x - last_center_.x);
+        const float dz = static_cast<float>(c.z - last_center_.z);
+        if (dx == 0.0f && dz == 0.0f) return true;
+        return dx * view_fx_ + dz * view_fz_ >= 0.0f;
+    }
     double                             total_worker_ms_  = 0.0;
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;
