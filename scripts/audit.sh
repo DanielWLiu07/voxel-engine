@@ -111,6 +111,24 @@ grep_step "edit persistence" \
 grep_step "4D slice step + tilt" \
   "changed=1 returned=1.*tilt_changed=1 tilt_returned=1 notch=1 edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1 tilt_survives_travel=1 xw=1 edit_survives_inflight=1 reversible_away=1 edit_rotates=1 settled=1 edit_ns_stable=1" \
   ./build/voxel_engine --verify-4d --radius 6
+# The same 21 properties again, with blocks drawn as their 4D
+# cross-section instead of as cubes. Not a duplicate: the prism path is a
+# different mesher, a different vertex encoding and a different order of
+# operations (cells first, voxel grid rasterised from them), so every
+# property that holds for one has to be re-established for the other.
+# tilt_returned in particular is a byte-identity check, and it is the one
+# that would notice the tiling failing to reproduce itself.
+grep_step "4D slice step + tilt, cross-section blocks" \
+  "changed=1 returned=1.*tilt_changed=1 tilt_returned=1 notch=1 edit_survives_scroll=1 converges=1 pivot=1 ground_fixed=1 tilt_survives_travel=1 xw=1 edit_survives_inflight=1 reversible_away=1 edit_rotates=1 settled=1 edit_ns_stable=1" \
+  ./build/voxel_engine --verify-4d --slice-prisms --radius 6
+# The prism mesher against the cube mesher on the same terrain. Gated on
+# the flat cut only, and on a ratio of COUNTS: an untilted 4D cut tiles
+# into exactly the voxel grid, so 256 cells per chunk is a property of the
+# geometry and not of the machine. If it ever reads anything else, the
+# tiling and the voxel grid have come apart.
+grep_step "prism tiling reduces to the voxel grid" \
+  "flat  *256 " \
+  ./build/hyperslice --mesh 3
 grep_step "save/load roundtrip" "roundtrip_ok=1"        ./build/voxel_engine --bench-io
 step      "headers self-sufficient"   ./scripts/check_headers.py
 step      "occlusion byte-identity"   ./scripts/verify_occlusion.sh
