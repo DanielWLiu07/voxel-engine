@@ -163,6 +163,15 @@ private:
     // painted on a static map.
     Noise4D biome_, temp_;
     Noise4D cave_a_, cave_b_;
+    // The density field: what makes this a world SLICED from four
+    // dimensions rather than one PARAMETERISED by a fourth.
+    //
+    // height_at still gives the landscape its shape, but it is a GUIDE
+    // now, not the surface. Solidity near it is decided per voxel by this
+    // field, so a column can enter and leave the ground more than once -
+    // which is where arches, roofs over air and floating ground come
+    // from, and which a heightfield cannot produce at any tilt.
+    Noise4D density_;
     bool caves_enabled_ = true;
 };
 

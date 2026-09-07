@@ -172,27 +172,38 @@ void test_fill_chunk_puts_the_surface_where_height_at_says() {
                 for (int z = 0; z < world::kChunkSizeZ; ++z)
                     for (int x = 0; x < world::kChunkSizeX; ++x) {
                         ++checked;
+                        // height_at is a GUIDE, not the surface.
+                        //
+                        // It used to be both, and these two checks
+                        // asserted it: the block at h is solid, and
+                        // nothing but foliage sits above it. Neither
+                        // survives a world sliced from a 4D solid rather
+                        // than swept from a heightfield - the density
+                        // band can carve the ground away under h or leave
+                        // a roof above it, which is the entire point.
+                        //
+                        // What is still true, and worth more: the real
+                        // surface stays within the band of the guide. A
+                        // guide that stopped predicting the terrain would
+                        // break the biome bands, the tree rules and the
+                        // waterline, all of which key off it.
                         const int h = t.height_at(cx * world::kChunkSizeX + x,
                                                   cz * world::kChunkSizeZ + z, {static_cast<float>(w), 0.0f});
-                        if (!world::is_solid(c.get(x, h, z))) ++wrong_surface;
-                        // Air, or the bottom of a tree. Caves are off in
-                        // this sweep but trees are not, and a trunk
-                        // legitimately occupies h+1.
-                        if (h + 1 < world::kChunkSizeY) {
-                            const world::BlockId above = c.get(x, h + 1, z);
-                            if (above != world::BlockId::Air &&
-                                above != world::BlockId::Wood &&
-                                above != world::BlockId::Leaves) {
-                                ++wrong_above;
-                            }
-                        }
+                        int top = -1;
+                        for (int y = world::kChunkSizeY - 1; y >= 0; --y)
+                            if (world::is_solid(c.get(x, y, z))) { top = y; break; }
+                        if (top < 0 || std::abs(top - h) > 24) ++wrong_surface;
+                        // Below the band the world is unconditionally
+                        // solid, so that half of the guide is exact.
+                        const int floor_of_band = std::max(1, h - 20) - 1;
+                        if (!world::is_solid(c.get(x, floor_of_band, z))) ++wrong_above;
                     }
             }
         }
     }
     EXPECT(checked == 3 * 9 * 16 * 16, "the sweep covered nine chunks on three slices");
-    EXPECT(wrong_surface == 0, "height_at names a solid block in every column");
-    EXPECT(wrong_above == 0, "nothing but foliage sits above the surface");
+    EXPECT(wrong_surface == 0, "the real surface stays within the density band of the guide");
+    EXPECT(wrong_above == 0, "everything below the band is solid");
 }
 
 void test_a_column_is_solid_all_the_way_down_without_caves() {
@@ -206,11 +217,17 @@ void test_a_column_is_solid_all_the_way_down_without_caves() {
             for (int x = 0; x < world::kChunkSizeX; ++x) {
                 const int h = t.height_at(3 * world::kChunkSizeX + x,
                                           -2 * world::kChunkSizeZ + z, {static_cast<float>(w), 0.0f});
-                for (int y = 0; y <= h; ++y)
+                // Only up to the floor of the density band. Above it a
+                // column may legitimately hold air with solid over it -
+                // that is an overhang, and producing them is why the
+                // density field exists. Below it nothing may be hollow
+                // with caves off.
+                const int floor_of_band = std::max(1, h - 20);
+                for (int y = 0; y < floor_of_band; ++y)
                     if (!world::is_solid(c.get(x, y, z))) ++gaps;
             }
     }
-    EXPECT(gaps == 0, "with caves off every column is solid from 0 to height");
+    EXPECT(gaps == 0, "with caves off nothing below the band is hollow");
 }
 
 void test_caves_only_ever_remove() {
@@ -282,7 +299,24 @@ void test_surface_material_follows_altitude() {
                 for (int x = 0; x < world::kChunkSizeX; ++x) {
                     const int h = t.height_at(cx * world::kChunkSizeX + x,
                                               cz * world::kChunkSizeZ + z, {0, 0.0f});
-                    const world::BlockId top = c.get(x, h, z);
+                    // The real topmost solid block, not the block at the
+                    // guide height. Those were the same thing while the
+                    // world was a heightfield; the density band separated
+                    // them, and reading the guide made every biome rule
+                    // here test a voxel that is often air.
+                    // Past foliage: a tree standing on higher ground
+                    // spreads leaves over the column next to it, and once
+                    // the density band could lift ground above the guide
+                    // those leaves became the topmost solid block of a
+                    // shoreline column. Six of them failed the sand rule
+                    // for being a tree rather than for being wrong.
+                    world::BlockId top = world::BlockId::Air;
+                    for (int y = world::kChunkSizeY - 1; y >= 0; --y) {
+                        const world::BlockId b = c.get(x, y, z);
+                        if (b == world::BlockId::Wood ||
+                            b == world::BlockId::Leaves) continue;
+                        if (world::is_solid(b)) { top = b; break; }
+                    }
                     if (top == world::BlockId::Snow) {
                         ++snow_seen;
                         if (h < world::kSnowBand) ++snow_below_line;
@@ -369,12 +403,21 @@ void test_neighbouring_chunks_agree_across_the_seam() {
         for (int z = 0; z < world::kChunkSizeZ; ++z) {
             const int h_left  = t.height_at(world::kChunkSizeX - 1, z, {static_cast<float>(w), 0.0f});
             const int h_right = t.height_at(world::kChunkSizeX, z, {static_cast<float>(w), 0.0f});
-            if (!world::is_solid(left.get(world::kChunkSizeX - 1, h_left, z))) ++mismatches;
-            if (!world::is_solid(right.get(0, h_right, z))) ++mismatches;
+            // The GUIDE is continuous across the seam; the surface it
+            // guides need not be solid at exactly h, because the density
+            // band decides that per voxel. Checking the guide is what
+            // this test was always about - a chunk that generated its
+            // neighbour's terrain would show up here as a jump.
             if (std::abs(h_left - h_right) > 8) ++mismatches;
+            // And both sides must still have a floor. y=0 rather than
+            // a depth below the guide: where the guide is low - the sea
+            // floor - "h minus the band" clamps into the band itself,
+            // where air is legal.
+            if (!world::is_solid(left.get(world::kChunkSizeX - 1, 0, z))) ++mismatches;
+            if (!world::is_solid(right.get(0, 0, z))) ++mismatches;
         }
     }
-    EXPECT(mismatches == 0, "the heightfield is continuous across a chunk seam");
+    EXPECT(mismatches == 0, "the guide height is continuous across a chunk seam");
 }
 
 // ----- what is deliberately NOT tested here ---------------------------------
@@ -430,12 +473,23 @@ void test_trees_grow_and_respond_to_w() {
                         // not counted at all. The same mistake was made in
                         // the 3D tree test and fixed there.
                         int base = -1;
-                        for (int y = h + 1; y < h + 12 && y < world::kChunkSizeY; ++y) {
+                        // From the floor of the density band, not from
+                        // h+1: a tree stands on the topmost SOLID block,
+                        // which the band can lift above the guide or cut
+                        // below it. Searching from h+1 missed every trunk
+                        // the density had lowered.
+                        for (int y = std::max(1, h - 24);
+                             y < h + 26 && y < world::kChunkSizeY; ++y) {
                             if (c.get(x, y, z) == world::BlockId::Wood) { base = y; break; }
                         }
                         if (base < 0) continue;
                         ++trees;
-                        if (base != h + 1) ++floating;
+                        // A trunk must sit directly on solid ground.
+                        // "One above the guide" stopped being the same
+                        // statement once the surface could leave the
+                        // guide; this is the property that was meant.
+                        if (base < 1 || !world::is_solid(c.get(x, base - 1, z)))
+                            ++floating;
                     }
             }
         return std::pair<int, int>{trees, floating};
@@ -445,7 +499,7 @@ void test_trees_grow_and_respond_to_w() {
     const auto [t1, floating1] = count_trees(2.0f);
     EXPECT(t0 > 20, "the world grows trees");
     EXPECT(floating0 == 0 && floating1 == 0,
-           "every trunk starts one block above the surface");
+           "every trunk stands on solid ground");
     // Density comes from the 4D biome field while the per-column draw is a
     // fixed 2D hash, so the forest moves with w rather than being painted
     // on a static map. Two slices apart the counts must differ.

@@ -208,9 +208,11 @@ int shape_report(std::uint32_t seed) {
         std::printf("  %8.2f  %14d  %13d (%.1f%%)\n", theta, cols, overhung,
                     100.0 * overhung / cols);
     }
-    std::printf("\nOverhangs here are carved by the cave pass, not produced "
-                "by the cut.\nThe surface is a heightfield at every tilt: see "
-                "docs/4d.md.\n");
+    std::printf("\nA heightfield scores whatever the cave pass carves and "
+                "nothing more -\nmeasured at 14.5%% before the surface "
+                "became a density field. The rest\nis the cut entering and "
+                "leaving the ground down one column, which is what\nputs "
+                "arches and floating ground in a 4D world. See docs/4d.md.\n");
     return 0;
 }
 

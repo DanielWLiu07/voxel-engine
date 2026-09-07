@@ -102,6 +102,18 @@ hyperplane slice - and the slice is something you can move.
 </tr>
 </table>
 
+Look at the rock formations on the right of the third frame, and the
+fragment floating over the water. Those are not decoration - they are the
+cut entering and leaving the ground down a single column, which is the
+one thing a heightfield can never do however you tilt it. The surface is
+a **4D density field**: within 20 blocks of the guide height, every voxel
+is decided by a fourth-dimensional field rather than by a height.
+
+    ./build/slice4d --shape        # 2451 of 6400 columns (38.3%) have a roof over air
+
+Against 14.5% for the heightfield it replaced - and all of that 14.5% was
+the cave pass, none of it the cut.
+
 One camera, one seed, one `w`. The only thing changing between those three
 frames is the **angle** of the cut through the 4D world. The coastline
 stays recognisable while the snow ridge becomes forest, islands appear

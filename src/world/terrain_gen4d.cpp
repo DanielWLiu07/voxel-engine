@@ -21,12 +21,30 @@ constexpr float kBiomeFreq     = 0.008f;
 constexpr float kTempFreq      = 0.006f;
 constexpr float kCaveFreq      = 0.038f;
 
+// Surface density. Within kDensityBand blocks of the guide height, a
+// voxel is solid when the field beats a ramp running from solid at the
+// bottom of the band to air at the top.
+//
+// The y term is deliberately the fastest axis. An earlier attempt used a
+// single octave whose y period was wider than the band, so the field
+// crossed the ramp exactly once per column and the result was still a
+// heightfield - it produced no overhangs at all and cost 1.6x for the
+// privilege. Several crossings need the field to vary faster in y than
+// the ramp does, which is what kDensityYSquash and the octave count buy.
+constexpr int   kDensityBand     = 20;
+constexpr float kDensityFreq     = 0.030f;
+constexpr float kDensityYSquash  = 5.5f;
+constexpr int   kDensityOctaves  = 4;
+// How hard the field can argue with the ramp. At 1.0 the band detaches
+// into floating gravel; below about 0.7 it cannot cross twice.
+constexpr float kDensityStrength = 1.10f;
+
 }  // namespace
 
 TerrainGen4D::TerrainGen4D(std::uint32_t seed)
     : continents_(seed), hills_(seed + 1), detail_(seed + 2), warp_(seed + 3),
       biome_(seed + 4), temp_(seed + 5),
-      cave_a_(seed + 6), cave_b_(seed + 7) {}
+      cave_a_(seed + 6), cave_b_(seed + 7), density_(seed + 8) {}
 
 int TerrainGen4D::height_at(int wx, int wz, Slice s) const {
     const float x = static_cast<float>(wx);
@@ -70,6 +88,9 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
     const int origin_z = chunk_z * kChunkSizeZ;
 
     int  surface[kChunkSizeZ][kChunkSizeX];
+    // The topmost solid block, which is not the guide height once the
+    // density band can put ground above it or carve it away.
+    int  top[kChunkSizeZ][kChunkSizeX];
     bool is_desert[kChunkSizeZ][kChunkSizeX];
     float biome_val[kChunkSizeZ][kChunkSizeX];
 
@@ -112,17 +133,61 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
                                             z4 * kBiomeFreq,
                                             0.0f, fw * kBiomeFreq);
 
-            for (int y = 0; y <= height; ++y) {
+            // Solidity first, block type second: with a density band a
+            // column can hold several solid runs, so "depth below the
+            // surface" is no longer "height minus y".
+            const int lo = std::max(1, height - kDensityBand);
+            const int hi = std::min(kChunkSizeY - 1, height + kDensityBand);
+            bool band[2 * kDensityBand + 2];
+            for (int y = lo; y <= hi; ++y) {
+                const float ramp = static_cast<float>(y - height)
+                                 / static_cast<float>(kDensityBand);
+                const float d = density_.fbm(
+                    static_cast<float>(wx),
+                    static_cast<float>(y) * kDensityYSquash,
+                    z4, fw, kDensityOctaves, kDensityFreq);
+                band[y - lo] = (d * kDensityStrength - ramp) > 0.0f;
+            }
+            // Everything under the band is stone: deeper than any surface
+            // rule cares about, and a tight fill rather than a scan.
+            for (int y = 0; y < lo; ++y) out.set(x, y, z, BlockId::Stone);
+
+            int t_top = lo - 1;
+            bool band_has_ground = false;
+            for (int y = hi; y >= lo; --y)
+                if (band[y - lo]) { t_top = y; band_has_ground = true; break; }
+            top[z][x] = t_top;
+
+            // Where the density carved the whole band away, the topmost
+            // solid block is the unconditional stone below it - and it
+            // would keep the stone it was filled with, so a shallow
+            // column came out stone-topped where every rule says sand.
+            // Give the exposed block the surface material it would have
+            // had. Only reachable when the band is entirely air, so it
+            // costs one write on a small minority of columns.
+            if (!band_has_ground && t_top >= 1) {
                 BlockId b;
-                if      (y == 0)                                           b = BlockId::Stone;
-                else if (height <= kSeaLevel + kSandBand && y >= height-1) b = BlockId::Sand;
-                else if (y == height && height >= kSnowBand)               b = BlockId::Snow;
-                else if (is_desert[z][x] && y >= height - 2)               b = BlockId::Sand;
-                else if (height >= kStoneBand && y == height)              b = BlockId::Stone;
-                else if (y == height)                                      b = BlockId::Grass;
-                else if (y >= height - 3)                                  b = BlockId::Dirt;
-                else                                                       b = BlockId::Stone;
+                if      (height <= kSeaLevel + kSandBand) b = BlockId::Sand;
+                else if (height >= kSnowBand)             b = BlockId::Snow;
+                else if (is_desert[z][x])                 b = BlockId::Sand;
+                else if (height >= kStoneBand)            b = BlockId::Stone;
+                else                                      b = BlockId::Grass;
+                out.set(x, t_top, z, b);
+            }
+
+            int depth = 0;
+            for (int y = hi; y >= lo; --y) {
+                if (!band[y - lo]) { depth = 0; continue; }
+                BlockId b;
+                if      (height <= kSeaLevel + kSandBand && depth <= 1) b = BlockId::Sand;
+                else if (depth == 0 && height >= kSnowBand)             b = BlockId::Snow;
+                else if (is_desert[z][x] && depth <= 2)                 b = BlockId::Sand;
+                else if (height >= kStoneBand && depth == 0)            b = BlockId::Stone;
+                else if (depth == 0)                                    b = BlockId::Grass;
+                else if (depth <= 3)                                    b = BlockId::Dirt;
+                else                                                    b = BlockId::Stone;
                 out.set(x, y, z, b);
+                ++depth;
             }
         }
     }
@@ -192,10 +257,13 @@ void TerrainGen4D::fill_chunk(int chunk_x, int chunk_z, Slice s, Chunk& out) con
     constexpr int kMargin = 2;
     for (int z = kMargin; z < kChunkSizeZ - kMargin; ++z) {
         for (int x = kMargin; x < kChunkSizeX - kMargin; ++x) {
-            const int h = surface[z][x];
+            // The topmost solid block, not the guide height: planting at
+            // the guide buried trees inside overhangs and left others
+            // floating where the density carved the ground away.
+            const int h = top[z][x];
             if (is_desert[z][x]) continue;
-            if (h <= kSeaLevel + kSandBand) continue;
-            if (h >= kStoneBand) continue;
+            if (surface[z][x] <= kSeaLevel + kSandBand) continue;
+            if (surface[z][x] >= kStoneBand) continue;
             if (out.get(x, h, z) != BlockId::Grass) continue;
             if (h + 8 >= kChunkSizeY) continue;
 
