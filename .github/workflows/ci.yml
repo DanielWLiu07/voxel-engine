@@ -52,6 +52,11 @@ jobs:
         # byte-identical BENCH_SUMMARY. A tolerance would hide the case
         # this exists for, which is a machine-dependent figure being added
         # to a table that promises the opposite.
+        # It also re-runs the same bar against the prism tiling's
+        # PRISM_SUMMARY, which carries counts only - the millisecond
+        # columns of hyperslice --mesh are deliberately left out of it,
+        # because those are the one part of that table that moves with
+        # what else the machine is doing.
         run: ./scripts/check_invariance.py 3 ./build/voxel_engine
 
       - name: Header self-sufficiency check
@@ -83,6 +88,17 @@ jobs:
         # size.
         if: runner.os == 'Linux'
         run: xvfb-run -a ./build/voxel_engine --verify-4d --radius 4
+
+      - name: 4D cross-section blocks
+        # The same 21 properties with blocks drawn as their 4D
+        # cross-section rather than as cubes. Not a duplicate of the step
+        # above: it is a different mesher, a different vertex encoding and
+        # a different order of operations (cells first, the voxel grid
+        # rasterised from them), so nothing that holds for one is implied
+        # for the other. tilt_returned is a byte-identity check and is the
+        # one that would notice the tiling failing to reproduce itself.
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./build/voxel_engine --verify-4d --slice-prisms --radius 4
 
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it

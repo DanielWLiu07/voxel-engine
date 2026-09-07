@@ -212,6 +212,35 @@ int mesh_cost(int side) {
                     static_cast<double>(prism_quads) / static_cast<double>(greedy_quads),
                     prism_ms / chunks, greedy_ms / chunks);
     }
+    // One line of counts and nothing else, so a determinism check has
+    // something to compare byte-for-byte. Every field here is a count or
+    // a ratio of counts, which is the bar the rest of this repo's
+    // invariance checking holds figures to - the millisecond columns
+    // above are deliberately NOT in it, because they are the one part
+    // that moves with what else the machine is doing.
+    std::printf("\nPRISM_SUMMARY");
+    for (const Cfg& cfg : cfgs) {
+        world::TerrainGen4D::Slice s{};
+        s.theta = cfg.theta;
+        s.phi   = cfg.phi;
+        long cells = 0, quads = 0;
+        int chunks = 0;
+        for (int cx = lo; cx <= hi; ++cx) {
+            for (int cz = lo; cz <= hi; ++cz) {
+                world::PrismChunk pc = world::build_prism_chunk(gen, {cx, cz}, s);
+                cells += static_cast<long>(pc.cells.size());
+                quads += world::build_prism_mesh(pc).quad_count;
+                ++chunks;
+            }
+        }
+        // Field names carry the cut, so a diff names which one moved.
+        std::string key(cfg.name);
+        for (char& c : key) if (c == ' ') c = '_';
+        std::printf(" %s_cells=%ld %s_quads=%ld",
+                    key.c_str(), cells / chunks, key.c_str(), quads);
+    }
+    std::printf("\n");
+
     std::printf("\nCells per chunk is 256 at a flat cut, which is the voxel\n"
                 "grid exactly. It rises with tilt because a turned\n"
                 "hyperplane passes through more cells per unit of area.\n"
