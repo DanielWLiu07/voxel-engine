@@ -588,6 +588,9 @@ int main(int argc, char** argv) {
     if (opt.slice_tilt != 0.0f && tilt_frames == 0) {
         wrld.rotate_slice(opt.slice_tilt, cam.position().z);
     }
+    if (opt.slice_tilt_xw != 0.0f) {
+        wrld.rotate_slice_xw(opt.slice_tilt_xw, cam.position().x);
+    }
 
     core::Input input;
     glfwSetWindowUserPointer(window, &input);

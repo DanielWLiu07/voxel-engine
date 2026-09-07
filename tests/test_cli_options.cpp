@@ -135,6 +135,7 @@ constexpr ValueFlag kValueFlags[] = {
     // trailing garbage after a number.
     {"--slice-w",           "3",               true},
     {"--slice-tilt",        "0.25",            true},
+    {"--slice-tilt-xw",     "0.25",            true},
     {"--monitor",           "0",               true},
 };
 
@@ -310,7 +311,8 @@ void test_the_slice_flags_imply_four_dimensions() {
     // Asking for a slice is asking for the 4D engine. Without this a
     // capture with --slice-tilt would render the 3D world and silently
     // ignore the tilt, which looks like the tilt doing nothing.
-    for (const char* flag : {"--slice-w", "--slice-tilt"}) {
+    for (const char* flag : {"--slice-w", "--slice-tilt",
+                             "--slice-tilt-xw"}) {
         const auto r = parse({flag, "1"});
         EXPECT(r.opts.has_value(), flag);
         if (r.opts.has_value()) EXPECT(r.opts->four_d, flag);
@@ -329,6 +331,14 @@ void test_the_tilt_is_bounded_to_about_a_half_turn() {
            "just outside is rejected, by name");
     EXPECT(rejected_naming(parse({"--slice-tilt", "-3.3"}), "--slice-tilt"),
            "and just outside the other way");
+    // The second plane is bounded the same way. It was added later, and a
+    // flag that skipped the parser's checks is exactly how --monitor got
+    // in with an atoi.
+    EXPECT(parse({"--slice-tilt-xw", "3.2"}).opts.has_value(),
+           "the XW bound is accepted");
+    EXPECT(rejected_naming(parse({"--slice-tilt-xw", "3.3"}),
+                           "--slice-tilt-xw"),
+           "and just outside it is rejected, by name");
 }
 
 void test_a_negative_slice_is_a_place_not_an_error() {

@@ -115,6 +115,12 @@ struct CliOptions {
     int  slice_w = 0;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
+    // --slice-tilt-xw R: the second rotation plane, for captures.
+    //
+    // Without it the XW plane is unreachable from the command line, so no
+    // still or clip could show it and nothing about it was reproducible -
+    // the same reason --slice-tilt exists for the first plane.
+    float slice_tilt_xw = 0.0f;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;

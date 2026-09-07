@@ -131,6 +131,21 @@ rather than as teleporting.
 
     CLIP_TIME_OF_DAY=0.62 scripts/capture_clip.sh tilt
 
+<table>
+<tr>
+<td><img src="docs/media/plane_zw.jpg" width="400"><br><sub><b>turned 0.15 rad in ZW</b> (the wheel)</sub></td>
+<td><img src="docs/media/plane_xw.jpg" width="400"><br><sub><b>turned 0.15 rad in XW</b> (horizontal mouse)</sub></td>
+</tr>
+</table>
+
+Same camera, same seed, same `w`, same angle - different **plane**. Two
+different worlds, and neither is reachable from the other by any amount
+of the first rotation. Reproduce with:
+
+    ./build/voxel_engine --4d --seed 1337 --radius 12 --slice-tilt 0.15 \
+        --pose-at 20,100,20,-115,-22 --time-of-day 0.62 --screenshot-after 150
+    # ... and again with --slice-tilt-xw 0.15 instead
+
 The cut turns in **two planes**, which is how 4D Miner does it and what
 one plane cannot cover: the wheel and vertical mouse turn it in ZW,
 horizontal mouse in XW. Hold `M` or the middle mouse button and the mouse
