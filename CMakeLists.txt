@@ -197,7 +197,23 @@ if(VOXEL_BUILD_TESTS)
     target_link_libraries(voxel_tests PRIVATE
       ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
     )
-    # These two are ctest tests, not benchmarks, and they used to live in
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(voxel_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Wno-unused-parameter
+    )
+  endif()
+  add_test(NAME world_unit COMMAND voxel_tests)
+
+  # Everything below is unconditional, and the endif() above is why. It
+  # used to sit forty lines further down, so the if(APPLE) that adds
+  # Cocoa to voxel_tests swallowed both targets that follow: on macOS
+  # eight tests ran, on Linux the binaries did not exist and ctest
+  # reported "100% tests passed ... out of 6". Nothing failed, because
+  # nothing was registered. scripts/check_test_targets.py now compares
+  # the registered suite against a written-down list on both platforms.
+
+  # These two are ctest tests, not benchmarks, and they used to live in
   # the VOXEL_BUILD_BENCH block below because that is where the
   # hyperslice binary they grew up beside lives. That put them out of
   # reach of scripts/run_sanitizers.sh, which configures with
@@ -239,14 +255,6 @@ if(VOXEL_BUILD_TESTS)
   target_include_directories(hyperslice_tests PRIVATE src)
   target_link_libraries(hyperslice_tests PRIVATE fastnoise)
   add_test(NAME hyperslice COMMAND hyperslice_tests)
-
-endif()
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(voxel_tests PRIVATE
-      -Wall -Wextra -Wpedantic -Wno-unused-parameter
-    )
-  endif()
-  add_test(NAME world_unit COMMAND voxel_tests)
 
   # Differential fuzz: greedy vs naive, decomposed to unit faces and
   # compared as sets, over randomized fills x neighbour configurations.

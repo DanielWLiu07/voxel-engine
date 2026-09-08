@@ -61,6 +61,7 @@ grep_step() {
   fi
 }
 
+step      "test suite registered" ./scripts/check_test_targets.py build
 step      "unit tests"          ctest --test-dir build --output-on-failure
 step      "mesher differential fuzz" ./build/mesher_fuzz_tests
 # The ratio counts only faces a camera can reach: the chunk is meshed

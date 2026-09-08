@@ -43,6 +43,15 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
+      - name: Test-suite registration check
+        # ctest cannot notice a test that was never registered, and that
+        # is not hypothetical: an unclosed if(APPLE) put prism_tests and
+        # hyperslice_tests - the whole 4D cross-section kernel - inside
+        # the Apple branch, so this job ran six tests on Linux and eight
+        # on macOS and reported 100% passed on both. The suite is
+        # written down in the script; both platforms must match it.
+        run: ./scripts/check_test_targets.py build
+
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
 
