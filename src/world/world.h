@@ -7,13 +7,17 @@
 #include "world/chunk.h"
 #include "world/chunk_light.h"
 #include "world/chunk_mesh.h"
+#include "world/prism_mesh.h"
 #include "world/section_visibility.h"
 #include "world/terrain_gen.h"
+#include "world/terrain_gen4d.h"
 
 #include <glm/glm.hpp>
 
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -22,22 +26,43 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace world {
 
-struct ChunkCoord {
-    std::int32_t x;
-    std::int32_t z;
-    bool operator==(const ChunkCoord& o) const { return x == o.x && z == o.z; }
+// A chunk, plus which slice of the fourth dimension it belongs to.
+//
+// Edits belong to the w they were made at. Without that, an edit made at
+// one slice reappears at every other one, in a place where the terrain
+// around it means something completely different - a hole dug into a
+// hillside at w=0 turning up in mid-air at w=5. In the 3D engine w is
+// always 0 and this behaves exactly as a bare ChunkCoord did.
+// Which slice an edit belongs to: a chunk and an integer w.
+//
+// Deliberately NOT the orientation. An edit made on a flat slice is
+// restored on a tilted one, and that is a decision rather than an
+// oversight: the player built it, and turning their view of the fourth
+// dimension should not delete their house. Keying on theta as well would
+// make anything built vanish the moment the wheel moved, which is the
+// opposite failure and a worse one.
+//
+// The cost is that two hyperplanes sharing an integer w share a bucket,
+// so a structure built flat reappears in terrain that a tilted cut has
+// rearranged around it. That is the same trade the w key already makes
+// at coarser grain, and it is the reason the w key is integer at all:
+// edits belong to a slab you can return to, not to an exact real number
+// nobody can hit twice.
+struct SliceCoord {
+    ChunkCoord c{};
+    std::int32_t w = 0;
+    bool operator==(const SliceCoord& o) const { return c == o.c && w == o.w; }
 };
 
-struct ChunkCoordHash {
-    std::size_t operator()(const ChunkCoord& c) const noexcept {
-        std::uint64_t ux = static_cast<std::uint32_t>(c.x);
-        std::uint64_t uz = static_cast<std::uint32_t>(c.z);
-        std::uint64_t h = (ux * 0x9E3779B97F4A7C15ull) ^ (uz + 0xBF58476D1CE4E5B9ull);
-        h ^= h >> 27; h *= 0x94D049BB133111EBull; h ^= h >> 31;
-        return static_cast<std::size_t>(h);
+struct SliceCoordHash {
+    std::size_t operator()(const SliceCoord& s) const noexcept {
+        const std::size_t h = ChunkCoordHash{}(s.c);
+        return h ^ (static_cast<std::size_t>(static_cast<std::uint32_t>(s.w))
+                    * 0x9E3779B97F4A7C15ull);
     }
 };
 
@@ -69,10 +94,43 @@ struct ChunkSlot {
     // the frustum, we skip all section tests for the chunk.
     gfx::AABB  chunk_aabb{};
     bool       any_section_has_mesh = false;
+    // The w this chunk's voxels were generated at.
+    //
+    // Per chunk, not per world, and that is what lets travel along w be
+    // continuous. With a single world-wide meshed_w the only way to move
+    // was to rebuild every chunk at once and wait: the terrain updated in
+    // discrete full-window waves a third of a second apart. Tracking it
+    // here lets the engine always be rebuilding whichever chunks have
+    // drifted furthest from the player's w, nearest first, on a per-frame
+    // budget - so the world updates continuously instead of pulsing.
+    float      slice_w = 0.0f;
+    // The slice ROTATION this chunk was generated at. Tracked alongside w
+    // because rotating the cut changes the world exactly as translating it
+    // does, so a chunk is stale if either has moved.
+    float      slice_theta = 0.0f;
+    // The slice-z origin this chunk was generated with. Part of the
+    // slice's identity like w and theta, so drift cannot be computed
+    // without it.
+    float      slice_z_shift = 0.0f;
+    // The second rotation plane, stamped like the first. Without these a
+    // chunk compares against a phi of 0 forever, so any XW turn leaves
+    // the whole window permanently stale and the world never converges.
+    float      slice_phi = 0.0f;
+    float      slice_x_shift = 0.0f;
+    // True only for chunks that came off disk. The terrain generator
+    // cannot reproduce those, so they are the one case that still has to
+    // be stashed whole; everything else is regenerated and has its edits
+    // replayed on top.
+    bool       from_disk = false;
     // Bytes this chunk holds in GPU buffers (VBO + EBO): the actual vertex
     // and index data uploaded for it. Summed across resident chunks to get
     // the engine's GPU mesh footprint, the VRAM analogue of RSS.
     std::size_t gpu_bytes = 0;
+    // What one unit of this mesh's packed x/z bytes is worth in blocks.
+    // 1 for a cube mesh, gfx::kSubUnitXZScale for a prism one. Per chunk
+    // rather than per world so the two can be resident at once while a
+    // mesher switch works its way through the window.
+    float      mesh_xz_scale = 1.0f;
     // Which of the four horizontal neighbours were resident when this
     // slot's mesh was built, as kNeighbor* bits. A chunk meshed before a
     // neighbour arrived still carries the boundary faces that neighbour
@@ -169,11 +227,17 @@ public:
     struct StreamStats {
         int evicted = 0;
         int requested = 0;
-        // Edit persistence: modified chunks RLE-stashed on eviction, and
-        // chunks rebuilt from the stash (instead of the terrain generator)
-        // on re-entry.
+        // Edit persistence, whole-chunk path: chunks RLE-stashed on
+        // eviction and rebuilt from the stash on re-entry.
+        //
+        // Only chunks that came off disk take this path now. A player's
+        // edits ride back in through slice_edits_, replayed over
+        // regenerated terrain, which is what lets an edited chunk keep
+        // changing with the slice instead of freezing.
         int stashed = 0;
         int restored = 0;
+        // Chunks that came back carrying replayed player edits.
+        int replayed = 0;
     };
     StreamStats update_streaming(ChunkCoord center, int radius,
                                  const TerrainGen& terrain,
@@ -190,8 +254,28 @@ public:
     // preserve_on_evict: true when the chunk cannot be regenerated from
     // the active terrain (player edits, or a save whose seed is unknown
     // or different); such chunks stash on eviction instead of vanishing.
+    // Mesh an already-decoded chunk off-thread: a stash restore, or a
+    // re-mesh of a chunk whose neighbour just landed.
+    //
+    // `stamp` is which slice the resulting chunk belongs to, and it is a
+    // required argument rather than a default because getting it wrong is
+    // invisible. It used to be omitted entirely, so every chunk down this
+    // path was stamped with FinishedChunk's default (w=0, theta=0). At
+    // any nonzero slice that chunk was instantly stale again, got
+    // re-issued, landed stamped 0 again, and the world never converged -
+    // one scroll notch put the whole window into a rebuild loop that
+    // never ended. It was invisible at w=0, theta=0, where the default
+    // happens to be correct, and that is the only state the audit ran in.
+    //
+    // A restore takes the CURRENT slice: the stash is keyed by slice, so
+    // a restored chunk belongs where it is being restored to. A re-mesh
+    // takes the slot's OWN slice, because re-meshing does not regenerate
+    // anything - claiming the current slice there would mark a stale
+    // chunk fresh and it would stop being rebuilt.
     void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool,
-                               bool preserve_on_evict);
+                               bool preserve_on_evict,
+                               TerrainGen4D::Slice stamp,
+                               bool from_disk = false);
     void request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
                                core::ThreadPool& pool);
 
@@ -203,6 +287,368 @@ public:
     // Iterates every loaded chunk slot in unspecified order. Read-only.
     void for_each_chunk(
         const std::function<void(ChunkCoord, const Chunk&)>& fn) const;
+
+    // ----- the fourth dimension ----------------------------------------
+    //
+    // Opt-in and entirely additive: with no slice source set, every path
+    // below behaves exactly as it did before and the engine is the 3D
+    // engine. Setting one swaps which generator the worker jobs call.
+    //
+    // A 4D world reaches a 3D renderer by slicing - the mesher, the
+    // culler, the lighting and the renderer never learn there is a fourth
+    // axis, because they only ever see the slice at the player's w. That
+    // is what keeps this a change to generation and streaming rather than
+    // to everything.
+    // Point the world at a 4D generator and put it on a named slice.
+    //
+    // A full reset, orientation included: this says "start here", and a
+    // caller that means it does not want the previous slice's tilt or
+    // z origin surviving. --bench-4d resets between phases and had to
+    // clear those two separately before this did it.
+    void set_slice_source(const TerrainGen4D* gen, float w) {
+        slice_gen_ = gen;
+        slice_w_ = w;
+        travel_w_ = w;
+        meshed_w_ = w;
+        slice_theta_ = 0.0f;
+        slice_z_shift_ = 0.0f;
+        slice_phi_ = 0.0f;
+        slice_x_shift_ = 0.0f;
+    }
+    bool  is_4d() const { return slice_gen_ != nullptr; }
+    float slice_w() const { return slice_w_; }
+    // Which integer slice edits made right now belong to. Always 0 in the
+    // 3D engine, so the stash keys are exactly what they always were.
+    //
+    // Derived from travel_w_, which only TRAVEL changes - never from
+    // slice_w_, which rotation rewrites every notch.
+    //
+    // Rotating about the player leaves the player's 4D position exactly
+    // where it was, so it must not move them to a different edit
+    // namespace. It did. slice_w_ comes back from a round trip as a tiny
+    // residue rather than as zero, and floor is one-sided there, so a
+    // value of -1e-16 reads as slice -1 while every resident chunk still
+    // records slice 0. Seven notches out and back, fifty blocks from
+    // spawn - somebody trying the wheel - was enough. The lookup then
+    // misses, the terrain regenerates without the edit, and the edit is
+    // filed under a key the player will never consult again. Scrolling
+    // back does not bring it back.
+    //
+    // Rounding instead of flooring does not help; it moves the straddle
+    // to +/-0.5 and waits.
+    std::int32_t edit_slice() const {
+        return slice_gen_ ? static_cast<std::int32_t>(std::floor(travel_w_)) : 0;
+    }
+    // The w of the most-stale chunk anywhere in the window. Informational:
+    // at a large radius the worst chunk is past the fog, so this says more
+    // about window size than about what the player sees.
+    float meshed_w() const { return meshed_w_; }
+
+    // The w of the most-stale chunk within `chunk_radius` of the camera -
+    // the freshness of the world the player is actually looking at.
+    //
+    // This is the number worth gating on. Judging by the global worst
+    // makes a large draw distance look broken: at radius 12 the far corner
+    // is nearly two hundred blocks out, behind fog, and its being a few
+    // hundredths of a w behind is invisible and harmless. The near field
+    // is what the eye checks.
+    float near_meshed_w(int chunk_radius = 4) const;
+
+    // How many resident chunks are behind the current slice, and how many
+    // there are. The honest "is the world keeping up" measure for BOTH
+    // motions through w.
+    //
+    // near_meshed_w cannot do that job for a rotation: rotating does not
+    // change slice_w, so a w-based lag is zero by construction whatever
+    // the geometry is actually doing. This counts staleness the way
+    // stream_slice decides it, so it means the same thing on either axis.
+    // One block a player changed, as an offset into the chunk and what
+    // they changed it to.
+    //
+    // Edits are kept as a REPLAY LIST rather than as a snapshot of the
+    // chunk they belong to, and that is the whole point. The stash used
+    // to hold the entire chunk and restore it verbatim, so an edited
+    // chunk stopped being generated at all - and once the slice could
+    // rotate, that meant a single placed block froze its whole 16x256x16
+    // chunk against every further turn of the wheel. Measured: the edited
+    // chunk's surface stayed at 29 through sixty notches while its
+    // unedited neighbour moved 45 -> 41. A seam in the world, produced by
+    // building in it.
+    //
+    // A replay list regenerates the terrain for whatever slice is current
+    // and puts the edits back on top, so a built structure turns with the
+    // world instead of pinning a hole in it.
+    struct VoxelEdit {
+        std::uint32_t index;   // ((y * kChunkSizeZ) + z) * kChunkSizeX + x
+        std::uint8_t  block;
+    };
+
+    struct SliceLag { int stale; int resident; };
+    SliceLag slice_lag() const;
+
+    // The same count restricted to chunks the player could be looking at.
+    //
+    // Worth separating because it is the number a player feels. Total
+    // staleness says how much work is outstanding; this says how much of
+    // it is in front of them, and a rebuild queue that clears the second
+    // one first reads as a far smoother world for the same throughput.
+    SliceLag slice_lag_ahead() const;
+
+    // Which way the camera is facing, in the XZ plane, normalized.
+    //
+    // Set once a frame by the render loop. The streaming queue was
+    // ordered by distance from the player alone, which rebuilds a chunk
+    // three behind them before one five ahead - work spent where nobody
+    // is looking while the view stays stale.
+    void set_view_forward(float fx, float fz) {
+        const float len = std::sqrt(fx * fx + fz * fz);
+        if (len > 1e-6f) { view_fx_ = fx / len; view_fz_ = fz / len; }
+    }
+
+    // How far a chunk's terrain has moved in the noise field between the
+    // slice it was generated on and the current one - a distance, in the
+    // same units for both motions, rather than a weighted sum of two
+    // numbers that are not commensurable.
+    //
+    // This replaces `|dw| + |dtheta| * 32`. That form had to invent a
+    // constant to convert an angle into a length, and 32 was chosen to
+    // make the first scroll notch clear the threshold rather than to
+    // describe anything. It was wrong in two directions at once: too
+    // eager for chunks near the axis, which it marked stale for a
+    // displacement of nearly zero, and too timid for the far ones.
+    //
+    // A displacement is the honest quantity, and it only became a valid
+    // proxy for how much the terrain CHANGES once the noise space was
+    // made isotropic - before that, moving a given distance along w
+    // changed the world six times more than moving it along z, so no
+    // single threshold could have been right for both. Now equal
+    // displacement means equal expected change whatever direction it is
+    // in, which is exactly what a staleness test needs.
+    float slice_drift(ChunkCoord c, TerrainGen4D::Slice from) const;
+
+    // Target interval between rebuilds while travelling along w, in
+    // seconds. The threshold is derived from this and the player's speed
+    // rather than fixed, so the rebuild rate does not scale with speed.
+    //
+    // Deliberately shorter than any radius can actually sustain, because
+    // it is not the rate limiter - resample_slice is. That declines while
+    // a rebuild is draining, so the real cadence is whatever the worker
+    // pool manages, and this only has to avoid being the binding
+    // constraint. The two interact well because a rebuild always targets
+    // the player's CURRENT w rather than the next increment: however long
+    // the throttle makes you wait, the rebuild you get catches all the
+    // way up.
+    //
+    // The effect is that the engine tunes itself to the draw distance. At
+    // radius 4 (81 chunks, ~0.04 s a rebuild) it updates about twenty
+    // times a second and the terrain genuinely flows; at radius 12 (625
+    // chunks, ~0.28 s) the throttle holds it near three, and each update
+    // is correspondingly larger. Neither needs a different constant.
+    static constexpr float kSliceRebuildPeriod = 0.05f;
+
+    // Floor and ceiling on the derived threshold. The floor stops a
+    // near-zero speed from rebuilding every frame; the ceiling stops a
+    // very large one from jumping the world somewhere unrecognisable in
+    // a single update.
+    static constexpr float kSliceStepMin = 0.015f;
+    // The same threshold expressed as a distance in the noise field,
+    // which is what slice_drift returns. kSliceStepMin is a w offset and
+    // one unit of w is kWScale units of noise, so this is the identical
+    // sensitivity to travel that the engine has always had - a pure
+    // translation of kSliceStepMin displaces a chunk by exactly this
+    // much - now stated in units a rotation can also be measured in.
+    static constexpr float kSliceDriftMin = kSliceStepMin * kWScale;
+    static constexpr float kSliceStepMax = 0.60f;
+
+    // How far the player can travel along w before the world is rebuilt
+    // for the new position.
+    //
+    // Not zero, because a rebuild is not free: every chunk in the window
+    // changes when w moves (the cost model in docs/4d.md measured 100%),
+    // so re-meshing on every frame of movement is not affordable. Not
+    // large either, or the fourth axis goes back to being a menu of
+    // discrete worlds.
+    //
+    // 0.12 is about eight rebuilds per world-unit of travel. At a w speed
+    // of ~1.5 units/sec that is a rebuild every ~0.09 s, and each one is
+    // spread across the worker pool and drained a few chunks per frame,
+    // so the terrain ripples into its new shape instead of stalling.
+    static constexpr float kSliceRemeshStep = 0.12f;
+
+    // How fast the player travels along w, in world units per second.
+    //
+    // Bounded by what the worker pool can rebuild, not by feel. A rebuild
+    // re-requests every chunk in the window - 625 at radius 12 - and the
+    // pool sustains about 2,200 chunks/sec, so a rebuild costs ~0.28 s
+    // there. At a threshold of 0.12 that allows roughly 0.43 units/sec
+    // before the world stops keeping up with the player.
+    //
+    // 0.4 sits just inside that. One world unit of w changes about half
+    // the columns, so this crosses a visibly different world every two
+    // and a half seconds - a pace for exploring an axis rather than
+    // flicking through it. Sprint triples it and does outrun the pool at
+    // radius 12, which is the honest trade: hold shift and the terrain
+    // lags behind you.
+    static constexpr float kWalkSpeedW   = 0.4f;
+    static constexpr float kSprintSpeedW = 1.2f;
+
+    // Moves the player's w by `delta` and rebuilds the world if that has
+    // taken it far enough from the geometry's w to matter. Returns how
+    // many chunks were re-requested, which is 0 on most calls.
+    //
+    // Chunks are NOT cleared: the old geometry keeps drawing until its
+    // replacement lands, so travelling along w morphs the world rather
+    // than blinking it.
+    // `speed` is the player's current w speed in units/sec, used only to
+    // derive the rebuild threshold; pass 0 to fall back to kSliceRemeshStep.
+    // Moves the player along w and nothing else. The world catches up
+    // through stream_slice, which the render loop calls every frame.
+    void advance_w(float delta) {
+        if (!slice_gen_) return;
+        slice_w_ += delta;
+        travel_w_ += delta;
+    }
+
+    // Rotates the slicing hyperplane in the (z, w) plane.
+    //
+    // This is the control 4D Miner puts on the scroll wheel, and it is
+    // what translation alone cannot do: a tilted cut meets the 4D lattice
+    // at an angle, so structures present a different cross-section and
+    // appear to change shape. Translation only ever swaps one axis-aligned
+    // world for another.
+    // Turn the slice about the PLAYER, not about the world origin.
+    //
+    // Rotating about the origin makes the wheel's effect depend on where
+    // you are standing, because a tilt displaces a point in proportion to
+    // its distance from the axis it turns about. Measured, one notch:
+    //
+    //     player z     columns changed
+    //            0       7.0%  max  1     <- spawn: almost nothing
+    //          512      62.7%  max  4     <- 100 seconds of walking
+    //         8192      95.8%  max 26
+    //
+    // and at z = 0 exactly the row is invariant: no tilt, at any angle,
+    // ever changes it. Standing where the engine spawns you and looking
+    // down +/-x, the wheel does nothing at all. That is not a tuning
+    // problem, it is the pivot being in the wrong place.
+    //
+    // Turning about the player instead is a change of which point on the
+    // slice stays fixed, so it is still the same family of hyperplanes.
+    // Keeping the player's own 4D position fixed while theta moves means
+    // the offset has to move with it:
+    //
+    //     o' = o cos(dtheta) - pz sin(dtheta)
+    //
+    // where o = kWScale * w is the slice's perpendicular offset and pz is
+    // the player's z. The terrain under the player's feet then stays put
+    // and the world turns around them, which is what a player expects
+    // from a control that is advertised as rotating their view of 4D.
+    void rotate_slice(float delta, float player_z) {
+        if (!slice_gen_) return;
+        // Turn the pair (offset, player-position-along-the-slice) as a
+        // vector. That is all rotating about the player is: the player's
+        // 4D position is fixed, so its coordinates in the slice's own
+        // frame rotate with the frame.
+        //
+        //     u  = player_z + z_shift      (the player's slice-z)
+        //     o' = o cos d - u sin d
+        //     u' = o sin d + u cos d
+        //
+        // and the new shift is whatever puts the player back at their own
+        // world z. Doing it as a rotation of a pair is what makes it
+        // exactly reversible - a rotation by -d undoes a rotation by d,
+        // for any offset and any player position. The earlier version
+        // updated the offset alone and lost the u term, so a notch out
+        // and back left o at o*cos^2(d): standing still and scrolling to
+        // and fro slid the player along w, 8.5% of their w after ten
+        // thousand notches, with the HUD's counter drifting to match.
+        const float c = std::cos(delta), sn = std::sin(delta);
+        const float o = slice_w_ * kWScale;
+        const float u = player_z + slice_z_shift_;
+        const float o2 = o * c - u * sn;
+        const float u2 = o * sn + u * c;
+        slice_w_ = o2 / kWScale;
+        slice_z_shift_ = u2 - player_z;
+        slice_theta_ += delta;
+        // Kept in [-pi, pi]. A rotation is 2pi-periodic and the sampling
+        // goes through sin and cos, so this is exactly the identity - the
+        // same slice, named by the angle a reader would name it.
+        //
+        // Not fixing an observed bug, and worth saying so: a float loses
+        // the resolution of one notch somewhere past 1e5 radians, which is
+        // six days of continuous flicking, and --slice-tilt is clamped to
+        // +/-3.2 so the command line cannot get there either. It is here
+        // because an unbounded accumulator is a bad thing to leave lying
+        // around, and because the HUD reads better showing an orientation
+        // than a running total.
+        //
+        // It is only safe because staleness is a displacement now. The old
+        // |slice_theta_ - slot.slice_theta| would have seen a wrap as a
+        // 2pi jump and marked the entire world stale at the crossing;
+        // slice_drift goes through to_4d, which is periodic, so a wrap is
+        // invisible to it.
+        constexpr float kTwoPi = 6.28318530718f;
+        if (slice_theta_ >  kTwoPi * 0.5f) slice_theta_ -= kTwoPi;
+        if (slice_theta_ < -kTwoPi * 0.5f) slice_theta_ += kTwoPi;
+    }
+    float slice_theta() const { return slice_theta_; }
+    float slice_phi() const { return slice_phi_; }
+
+    // Turn the cut in the XW plane, about the player.
+    //
+    // The same construction as rotate_slice, one plane over: the pair
+    // (offset, player-slice-x) rotates as a vector, and x_shift puts the
+    // player back at their own world x so the turn is exactly reversible
+    // and leaves the ground under them alone.
+    //
+    // Two planes rather than one because a single plane cannot reach a
+    // whole axis of 4D orientation - you can lean the world away from you
+    // but never sideways. 4D Miner splits them across the two mouse axes
+    // for the same reason.
+    void rotate_slice_xw(float delta, float player_x) {
+        if (!slice_gen_) return;
+        const float c = std::cos(delta), sn = std::sin(delta);
+        const float o = slice_w_ * kWScale;
+        const float u = player_x + slice_x_shift_;
+        const float o2 = o * c - u * sn;
+        const float u2 = o * sn + u * c;
+        slice_w_ = o2 / kWScale;
+        slice_x_shift_ = u2 - player_x;
+        slice_phi_ += delta;
+        constexpr float kTwoPi = 6.28318530718f;
+        if (slice_phi_ >  kTwoPi * 0.5f) slice_phi_ -= kTwoPi;
+        if (slice_phi_ < -kTwoPi * 0.5f) slice_phi_ += kTwoPi;
+    }
+
+    TerrainGen4D::Slice slice() const {
+        return {slice_w_, slice_theta_, slice_z_shift_,
+                slice_phi_, slice_x_shift_};
+    }
+
+    // Legacy one-shot: move and, if that crossed the threshold, rebuild
+    // the whole window synchronously. Kept for --verify-4d, which wants a
+    // definite before and after.
+    int move_w(float delta, float speed, const TerrainGen& terrain,
+               core::ThreadPool& pool);
+
+    // Rebuilds at the current w regardless of how far it has drifted.
+    // Whole-window and synchronous to request; used by --verify-4d, which
+    // wants a definite before and after rather than a rolling update.
+    int resample_slice(const TerrainGen& terrain, core::ThreadPool& pool);
+
+    // The continuous path, called every frame while the player travels.
+    //
+    // Re-requests up to `budget` chunks whose own slice_w has drifted
+    // furthest from the player's, nearest to the camera first. Returns how
+    // many were re-requested, which is 0 when nothing has drifted far
+    // enough to matter.
+    //
+    // This replaces waiting for a whole-window rebuild. The world is never
+    // globally stale or globally fresh; it is a field that the workers are
+    // continuously pulling toward the player's w, and the budget is what
+    // keeps that inside a frame.
+    int stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
+                     int budget = 24);
 
     BlockId block_at(int wx, int wy, int wz) const;
     bool    set_block(int wx, int wy, int wz, BlockId b);
@@ -247,6 +693,74 @@ public:
     void set_mesher(MesherKind kind) { mesher_kind_ = kind; }
     MesherKind mesher() const { return mesher_kind_; }
 
+    // What texture coordinates are encoded in. One value for every mesh
+    // the engine builds, which is what lets the cube and prism meshers
+    // coexist in one world: a per-chunk uv scale would need a uniform set
+    // per chunk, and the terrain pass sets uv once.
+    static constexpr float mesh_uv_scale() { return gfx::kSubUnitUVScale; }
+
+    // Draw blocks as the cross-section of the 4D lattice rather than as
+    // cubes. Requires a 4D generator; a 3D world has no lattice to cut
+    // and set_prism_meshing is ignored there.
+    //
+    // Takes effect on chunks built from here on. Position scale is
+    // per-chunk (ChunkSlot::mesh_xz_scale), so a world part-way through
+    // switching draws both kinds correctly rather than crushing the ones
+    // that have not caught up - which is what makes it a runtime toggle
+    // and not a launch flag.
+    void set_prism_meshing(bool on) { prisms_ = on && slice_gen_ != nullptr; }
+    bool prism_meshing() const { return prisms_; }
+
+    // Cells the prism tiling produced for the most recent chunk built,
+    // against the 256 voxel columns a flat cut gives. 1.0 flat, and it
+    // rises with tilt because a turned hyperplane passes through more
+    // cells per unit of area.
+    //
+    // Read off the last chunk rather than averaged, because it is a HUD
+    // number whose job is to move while the player turns the wheel; an
+    // average over a streaming window lags the thing it is describing.
+    float prism_cells_per_column() const {
+        return static_cast<float>(last_prism_cells_.load()) /
+               static_cast<float>(kChunkSizeX * kChunkSizeZ);
+    }
+
+    // Resident chunks that were meshed against fewer neighbours than are
+    // resident beside them right now.
+    //
+    // The invariant is "a resident chunk is meshed against every resident
+    // neighbour", and a chunk that falls short is drawing boundary faces
+    // the chunk next door hides - invisible geometry, paid for in bytes
+    // and in draw. Zero once the world has converged; anything else is a
+    // dropped re-mesh.
+    int chunks_meshed_short() const {
+        int short_count = 0;
+        for (const auto& kv : chunks_) {
+            std::uint8_t resident = 0;
+            if (chunks_.count({kv.first.x - 1, kv.first.z})) resident |= kNeighborNegX;
+            if (chunks_.count({kv.first.x + 1, kv.first.z})) resident |= kNeighborPosX;
+            if (chunks_.count({kv.first.x, kv.first.z - 1})) resident |= kNeighborNegZ;
+            if (chunks_.count({kv.first.x, kv.first.z + 1})) resident |= kNeighborPosZ;
+            if (resident & ~kv.second->meshed_with) ++short_count;
+        }
+        return short_count;
+    }
+
+    // How many resident chunks hold each mesh encoding.
+    //
+    // Exists so the validator can prove it is looking at a genuinely
+    // MIXED window rather than at one that has not started switching yet.
+    // A check that only ever runs where the thing it guards is absent is
+    // not a check, and a mesher switch is a transient, so the only way to
+    // tell the two apart is to count.
+    void mesh_encoding_mix(int* cube, int* prism) const {
+        *cube = 0; *prism = 0;
+        for (const auto& kv : chunks_) {
+            if (!kv.second->any_section_has_mesh) continue;
+            if (kv.second->mesh_xz_scale == 1.0f) ++*cube;
+            else                                  ++*prism;
+        }
+    }
+
     std::size_t chunk_count() const { return chunks_.size(); }
     // Chunks still owed a re-mesh because a neighbour landed after them.
     // A world with a nonzero count draws correctly but is still carrying
@@ -287,7 +801,12 @@ public:
     void for_each_stashed(
         const std::function<void(ChunkCoord,
                                  const std::vector<std::uint8_t>&)>& fn) const {
-        for (const auto& kv : edited_stash_) fn(kv.first, kv.second);
+        for (const auto& kv : edited_stash_) fn(kv.first.c, kv.second);
+        // Edited chunks the window evicted. Both maps are keyed by slice,
+        // and a coord in both saves whichever comes first - they cannot
+        // disagree, because a chunk is either generator-reproducible or
+        // it is not.
+        for (const auto& kv : evicted_snapshots_) fn(kv.first.c, kv.second);
     }
 
     // Total bytes the resident chunks hold in GPU buffers: per-chunk vertex
@@ -343,6 +862,15 @@ private:
         // first job sits in the pool backlog); drain only accepts the job
         // whose stamp matches the coord's current entry in requested_.
         std::uint64_t   request_stamp = 0;
+        // The w the worker generated this chunk at, carried back so the
+        // slot records what it actually holds rather than what the player
+        // has since moved to.
+        float           slice_w = 0.0f;
+        float           slice_theta = 0.0f;
+        float           slice_z_shift = 0.0f;
+        float           slice_phi = 0.0f;
+        float           slice_x_shift = 0.0f;
+        bool            from_disk = false;
         // True when the chunk must never be regenerated from terrain
         // (player edits, stash restores, or disk chunks the active seed
         // cannot reproduce); the built slot is marked player_modified so
@@ -391,6 +919,11 @@ private:
                         const std::function<void(const glm::mat4&)>& set_model) const;
 
     MesherKind mesher_kind_ = MesherKind::Greedy;
+    bool  prisms_ = false;
+    // Written by whichever worker finished a prism chunk last, read by the
+    // HUD. Atomic because those are different threads and it is a
+    // statistic, not state - a torn read would misreport one frame.
+    std::atomic<int> last_prism_cells_{0};
     std::unordered_map<ChunkCoord, std::unique_ptr<ChunkSlot>, ChunkCoordHash> chunks_;
     // The one element buffer every chunk mesh shares (all quads use the
     // same index pattern); grown to the largest chunk seen, uploaded once.
@@ -415,7 +948,7 @@ private:
     // with the number of distinct preserved chunks: edited ones, plus
     // loaded ones only when the save's manifest seed is absent or does
     // not match the active terrain (then nothing on disk is regenerable).
-    std::unordered_map<ChunkCoord, std::vector<std::uint8_t>, ChunkCoordHash>
+    std::unordered_map<SliceCoord, std::vector<std::uint8_t>, SliceCoordHash>
         edited_stash_;
 
     mutable std::mutex                 finished_mutex_;
@@ -426,6 +959,66 @@ private:
     // cannot pick up regenerated terrain from a job the wipe outran. Only
     // touched on the main thread (submit, drain, wipe), so not atomic.
     std::uint64_t                      generation_ = 0;
+
+    // Null in the 3D engine, which is the default and the only state the
+    // benches and --validate ever see.
+    const TerrainGen4D* slice_gen_ = nullptr;
+    float               slice_w_ = 0.0f;      // where the player is
+    // How far the player has TRAVELLED along w, which is what the
+    // edit namespace is keyed on. Rotation deliberately leaves it
+    // alone: turning the slice does not move the player.
+    float               travel_w_ = 0.0f;
+    float               slice_theta_ = 0.0f;  // how their cut is tilted
+    // Where the slice's z axis starts; moves only when the cut turns.
+    float               slice_z_shift_ = 0.0f;
+    // The XW plane, and the shift that pivots it at the player.
+    float               slice_phi_ = 0.0f;
+    float               slice_x_shift_ = 0.0f;
+    // Player edits, by chunk and slice, replayed over freshly generated
+    // terrain. See VoxelEdit.
+    std::unordered_map<SliceCoord, std::vector<VoxelEdit>, SliceCoordHash>
+                        slice_edits_;
+    // Counts chunk jobs that carried replayed edits, so update_streaming
+    // can report how many came back that way.
+    int                 stream_replayed_ = 0;
+    // Whole-chunk snapshots of edited chunks the stream window evicted,
+    // kept ONLY so a save can write them.
+    //
+    // Separate from edited_stash_ on purpose. The restore paths consult
+    // edited_stash_ and hand a chunk back verbatim, which is right for a
+    // chunk the generator cannot reproduce and wrong for one it can - a
+    // reproducible chunk handed back whole stops being generated, and
+    // then stops turning when the 4D slice does. These entries are never
+    // restored from; the chunk comes back through the generator with its
+    // edits replayed. They exist because save_world writes bytes, and an
+    // evicted chunk has none until somebody makes them.
+    //
+    // Without this, an edit made out of view was lost by any save: dig a
+    // hole, walk past the stream radius, save, reload, and the hole is
+    // gone. In-session it looked fine, because the replay list restored
+    // it on re-entry.
+    std::unordered_map<SliceCoord, std::vector<std::uint8_t>, SliceCoordHash>
+                        evicted_snapshots_;
+    float               meshed_w_ = 0.0f;  // where the geometry is
+    // The integer slice the resident chunks belong to. Needed separately
+    // from edit_slice() because a rebuild has to stash the OLD slice's
+    // edits before adopting the new one.
+    std::int32_t        meshed_slice_ = 0;
+    // Where the player was standing at the last streaming update, so a
+    // rebuild can start with the chunks they are looking at.
+    ChunkCoord          last_center_{0, 0};
+    float               view_fx_ = 0.0f, view_fz_ = -1.0f;
+
+    // Whether a chunk sits in the half-plane the camera faces. A
+    // hemisphere rather than the view frustum on purpose: the frustum
+    // would starve everything a turn of the head is about to reveal, and
+    // the point is to be ahead of the player, not exactly level with them.
+    bool ahead_of_view(ChunkCoord c) const {
+        const float dx = static_cast<float>(c.x - last_center_.x);
+        const float dz = static_cast<float>(c.z - last_center_.z);
+        if (dx == 0.0f && dz == 0.0f) return true;
+        return dx * view_fx_ + dz * view_fz_ >= 0.0f;
+    }
     double                             total_worker_ms_  = 0.0;
     double                             total_terrain_ms_ = 0.0;
     double                             total_mesh_ms_    = 0.0;

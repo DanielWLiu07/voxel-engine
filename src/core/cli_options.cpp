@@ -131,6 +131,22 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-edit N           N block edits after load, print BENCH_EDIT latency\n"
                 "  voxel_engine --validate               load world, verify GPU meshes against voxel data, exit\n"
                 "  voxel_engine --verify-edit-persistence  edit, stream away and back, check the edit survived, exit\n"
+                "  voxel_engine                          4D world by default; E and Q step along w, wheel rotates the slice\n"
+                "  voxel_engine --3d                     the 3D world instead\n"
+                "  voxel_engine --trace-input            log every key the engine receives, and w\n"
+                "  voxel_engine --auto-w                 travel along w automatically, no input needed\n"
+                "  voxel_engine --4d                     force 4D on (benches and captures default to 3D)\n"
+                "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
+                "  voxel_engine --bench-4d               cost of travelling and of rotating the slice, exit\n"
+                "  voxel_engine --capture-tilt N         N frames sweeping the 4D slice rotation, exit\n"
+                "  voxel_engine --list-monitors          list the displays and their indices, exit\n"
+                "  voxel_engine --monitor N              open on display N (default: wherever GLFW puts it)\n"
+                "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
+                "  voxel_engine --slice-tilt R           start with the cut turned R radians in ZW\n"
+                "  voxel_engine --slice-tilt-xw R        the same in the XW plane\n"
+                "  voxel_engine --warp-walk R            the cut turns R rad per block walked\n"
+                "  voxel_engine --slice-prisms           draw 4D cross-sections, not cubes\n"
+                "  voxel_engine --capture-walk N         N frames walking, cut held, one PNG each\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
                 "  voxel_engine --bench-io               save+load the loaded world to /tmp, print BENCH_IO\n"
@@ -170,6 +186,96 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--bench-io") { o.bench_io = true; continue; }
         if (arg == "--wireframe") { o.start_wireframe = true; continue; }
         if (arg == "--validate") { o.validate_mode = true; continue; }
+        if (arg == "--4d") { o.four_d = true; continue; }
+        if (arg == "--slice-tilt") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, -3.2f, 3.2f, "--slice-tilt",
+                                   &o.slice_tilt, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--capture-walk") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 2, 100000, "--capture-walk",
+                                   &o.capture_walk, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--slice-prisms") {
+            o.slice_prisms = true;
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--warp-walk") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 0.05f, "--warp-walk",
+                                   &o.warp_walk, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--slice-tilt-xw") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, -3.2f, 3.2f, "--slice-tilt-xw",
+                                   &o.slice_tilt_xw, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--trace-input") { o.trace_input = true; continue; }
+        if (arg == "--auto-w") { o.auto_w = true; o.four_d = true; continue; }
+        if (arg == "--3d") { o.force_3d = true; continue; }
+        if (arg == "--verify-4d") { o.verify_4d = true; o.four_d = true; continue; }
+        if (arg == "--bench-4d") { o.bench_4d = true; o.four_d = true; continue; }
+        if (arg == "--list-monitors") { o.list_monitors = true; continue; }
+        if (arg == "--capture-tilt") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 2, 100000, "--capture-tilt",
+                                   &o.capture_tilt, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--monitor") {
+            // parse_count, not atoi. atoi reads "banana" as 0 and "1O" as
+            // 1, so the run went ahead on the wrong display with no
+            // diagnostic - which is the whole class of bug the rest of
+            // this parser was written to avoid, reintroduced by a flag
+            // that did not go through it. 15 displays is past any real
+            // desk and keeps the message finite.
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 0, 15, "--monitor",
+                                   &o.monitor, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--slice-w") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v) return std::nullopt;
+            // Signed, unlike every other count flag, because w runs both
+            // ways from the origin - so this cannot use parse_count.
+            char* end = nullptr;
+            errno = 0;
+            const long sv = std::strtol(v, &end, 10);
+            if (end == v || *end != '\0' || errno == ERANGE ||
+                sv < -1000 || sv > 1000) {
+                std::fprintf(stderr, "--slice-w expects a whole number "
+                             "between -1000 and 1000 (got \"%s\")\n", v);
+                exit_code = EXIT_FAILURE;
+                return std::nullopt;
+            }
+            o.slice_w = static_cast<int>(sv);
+            o.four_d = true;   // asking for a slice implies the 4D world
+            continue;
+        }
         if (arg == "--verify-edit-persistence") {
             o.verify_edit_persistence = true;
             continue;
@@ -347,16 +453,26 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         return std::nullopt;
     }
 
-    // The two capture modes are mutually exclusive and need a positive
-    // frame count. Rejecting here keeps the render loop's guards simple
-    // and avoids the soft-lock a negative atoi would otherwise cause: the
+    // The capture modes are mutually exclusive and need a positive frame
+    // count. Rejecting here keeps the render loop's guards simple and
+    // avoids the soft-lock a negative atoi would otherwise cause: the
     // input-enable and capture-enable checks would disagree, freezing the
     // camera with no capture and no way out.
-    if (o.orbit_frames != 0 && o.cycle_frames != 0) {
-        std::fprintf(stderr,
-                     "--capture-orbit and --capture-cycle are exclusive\n");
+    {
+        const int modes = (o.orbit_frames != 0 ? 1 : 0) +
+                          (o.cycle_frames != 0 ? 1 : 0) +
+                          (o.capture_tilt != 0 ? 1 : 0);
+        if (modes > 1) {
+            std::fprintf(stderr, "--capture-orbit, --capture-cycle and "
+                                 "--capture-tilt are exclusive\n");
+            exit_code = EXIT_FAILURE;
+            return std::nullopt;
+        }
+    }
+    if (o.force_3d && o.capture_tilt != 0) {
+        std::fprintf(stderr, "--3d and --capture-tilt are contradictory\n");
         exit_code = EXIT_FAILURE;
-                return std::nullopt;
+        return std::nullopt;
     }
     // The count, range and sign checks that used to live here are gone
     // because they had become unreachable: every numeric flag now goes
@@ -368,6 +484,30 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
     // --orbit only means anything for the frame bench; label the run so its
     // BENCH_FRAME line is not mistaken for a static pose.
     if (o.bench_orbit && o.bench_frames > 0) o.bench_pose = "orbit";
+
+    // The fourth dimension defaults on for play and off for measurement.
+    // Decided here rather than at the flag, because it depends on which
+    // other modes were asked for and those can appear in any order.
+    const bool measuring = o.run_mesher_bench || o.bench_frames > 0 ||
+                           o.validate_mode || o.verify_edit_persistence ||
+                           o.bench_edit > 0 || o.bench_io ||
+                           !o.save_path.empty() || !o.load_path.empty() ||
+                           o.shot_after > 0 || o.orbit_frames > 0 ||
+                           o.cycle_frames > 0;
+    if (o.force_3d) {
+        o.four_d = false;
+    } else if (!measuring) {
+        // Interactive play, nothing measured: four dimensions.
+        o.four_d = true;
+    }
+    // A capture or a bench can still ask for 4D explicitly, and --verify-4d
+    // already sets four_d itself, so neither is overridden here.
+    if (o.force_3d && (o.verify_4d || o.bench_4d)) {
+        std::fprintf(stderr, "--3d and %s are contradictory\n",
+                     o.verify_4d ? "--verify-4d" : "--bench-4d");
+        exit_code = EXIT_FAILURE;
+        return std::nullopt;
+    }
     return o;
 }
 

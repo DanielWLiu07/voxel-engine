@@ -22,6 +22,11 @@ enum class Bind {
     PauseTime, StepTimeForward, StepTimeBack,
     Occlusion, Wireframe, Vsync,
     Save, Load, WalkFly, CopyPerf,
+    SliceForward, SliceBack,
+    // Held: the mouse turns the 4D cut instead of the camera.
+    SliceLook,
+    // Draw blocks as their 4D cross-section instead of as cubes.
+    SlicePrisms,
     Count,
 };
 
@@ -46,6 +51,28 @@ inline constexpr KeyBinding kBindings[static_cast<int>(Bind::Count)] = {
     {GLFW_KEY_F6,            "F6",    "load the world from ./saves/world1"},
     {GLFW_KEY_F,             "F",     "toggle walk / fly"},
     {GLFW_KEY_C,             "C",     "copy a perf snapshot to the clipboard"},
+    // The fourth dimension. Only bound when --4d is on; the keys do
+    // nothing in the 3D engine, which is the default.
+    // E and Q, not . and , - which is where they started and was a bad
+    // place for a movement axis. They sit under the fingers already on
+    // WASD, which is the convention for a fourth movement direction, and
+    // an input trace showed the real cost of the old binding: a player
+    // flew around for a full minute pressing W, A, Space and Shift and
+    // never once pressed either of the keys that make the world
+    // four-dimensional. The feature worked and was unreachable.
+    {GLFW_KEY_E,             "E",     "hold: travel +w (the 4th axis)"},
+    {GLFW_KEY_Q,             "Q",     "hold: travel -w (the 4th axis)"},
+    // Held, the mouse turns the CUT instead of the camera: vertical in
+    // the ZW plane (what the wheel does), horizontal in XW. Two planes,
+    // because one leaves an axis of 4D orientation unreachable - you can
+    // lean the world away from you but never sideways.
+    {GLFW_KEY_M,             "M",     "hold: mouse turns the 4D cut"},
+    // The one control that changes what a block IS rather than where the
+    // cut is. Worth a key rather than only a launch flag, because the
+    // difference between a cube and a hexagonal pillar is a thing to
+    // toggle back and forth while looking at one hillside, not a thing to
+    // compare across two launches.
+    {GLFW_KEY_P,             "P",     "toggle 4D cross-section blocks"},
 };
 
 constexpr int key_of(Bind b) { return kBindings[static_cast<int>(b)].key; }

@@ -58,6 +58,111 @@ struct CliOptions {
     int bench_edit = 0;
     bool validate_mode = false;
     bool verify_edit_persistence = false;
+    // --4d: generate the world from the four-dimensional terrain
+    // generator, with the player on slice w. The renderer, mesher and
+    // culler are unchanged - they only ever see the slice - so this is a
+    // change to generation and streaming alone. Off by default, and the
+    // 3D engine is exactly what it was.
+    // The fourth dimension is ON by default for interactive play, and OFF
+    // for every headless measurement path. --3d forces it off, --4d
+    // forces it on.
+    //
+    // The split is deliberate rather than timid. A world is a pure
+    // function of (seed, w), so a 4D world at w=0 is not the same world
+    // the 3D generator makes - different amplitude, no lakes, no trees.
+    // Defaulting the benches and --validate to it would silently move
+    // every published figure in the README: gpu_mesh_mb, the greedy
+    // ratio the CI gate pins, and the byte-identical BENCH_SUMMARY the
+    // invariance check compares. Those numbers describe the 3D engine and
+    // have to keep doing so.
+    //
+    // So: what a player walks around in is four-dimensional. What the
+    // repo measures and gates is the same thing it always measured, and
+    // asking for a 4D bench is one flag away.
+    bool four_d = false;
+    bool force_3d = false;
+    // --verify-4d: step along w and back, checking the world changes and
+    // then returns to exactly what it was. Implies --4d.
+    bool verify_4d = false;
+    // --trace-input: log every key the engine actually receives, plus the
+    // player position and w, to stdout. Exists because "nothing happens"
+    // is ambiguous between the engine ignoring input and the engine never
+    // being sent any, and those need completely different fixes.
+    bool trace_input = false;
+    // --auto-w: travel along w by itself, forever, with no input.
+    //
+    // Exists because "it does not look 4D" and "the keys are not reaching
+    // the engine" produce the same picture, and separating them by asking
+    // someone to hold a key at the right moment does not work. With this
+    // the world morphs on its own: if it does, the fourth dimension is
+    // fine and the problem is input; if it does not, it is not.
+    bool auto_w = false;
+    // --bench-4d: what moving through the fourth dimension costs, for both
+    // motions, under real 60 Hz pacing. Implies --4d.
+    //
+    // The other benches measure a static world. This measures the thing
+    // that makes a 4D engine hard: motion along w invalidates geometry
+    // rather than just moving the camera through it.
+    bool bench_4d = false;
+    // --monitor N: open the window on display N instead of wherever GLFW
+    // puts it, which on a laptop with external screens attached is the
+    // built-in one. --list-monitors prints the indices and exits.
+    int  monitor = -1;
+    bool list_monitors = false;
+    // --capture-tilt N: hold the camera and sweep the slice rotation
+    // through a ping-pong, one PNG per frame. Implies --4d.
+    int  capture_tilt = 0;
+    // --capture-walk N: hold the cut and walk the camera forward, one PNG
+    // per frame. Implies --4d.
+    //
+    // The complement of --capture-tilt, and it exists to answer a
+    // question the other captures cannot: on a TILTED cut, does walking
+    // move you through the fourth dimension? It does, because the slice's
+    // own z axis leans into w - and the only way to show that rather than
+    // assert it is a clip where nothing but the camera position changes.
+    int  capture_walk = 0;
+    int  slice_w = 0;
+    // --slice-tilt R: start with the cut rotated R radians, for captures.
+    float slice_tilt = 0.0f;
+    // --slice-tilt-xw R: the second rotation plane, for captures.
+    //
+    // Without it the XW plane is unreachable from the command line, so no
+    // still or clip could show it and nothing about it was reproducible -
+    // the same reason --slice-tilt exists for the first plane.
+    float slice_tilt_xw = 0.0f;
+    // --warp-walk R: the cut turns as you walk, R radians per block moved.
+    //
+    // Off by default, and that default is the physically honest one: a
+    // hyperplane is fixed, you move within it, so walking reveals more of
+    // the same cut rather than changing it. The generator does not even
+    // take the player's position.
+    //
+    // But "everything warps while I walk" is the feel people remember
+    // from a 4D game, and it is reachable without lying about the
+    // geometry: turn the cut a little for every block travelled and the
+    // world genuinely is a different slice by the time you arrive.
+    //
+    // It is worth being blunt that the memory is wrong. 4D Miner does not
+    // warp as you walk either - its wiki says the slice stays the same
+    // hyperplane and the change comes from rotating. So this is not
+    // catching up to it, it is offering something neither engine does,
+    // which is why it is off by default.
+    //
+    // R is radians per block: forward/back leans the cut in ZW, strafing
+    // leans it in XW, and both are signed so walking back unwinds them.
+    float warp_walk = 0.0f;
+    // --slice-prisms: draw blocks as the cross-section of the 4D lattice
+    // instead of as cubes. Implies --4d.
+    //
+    // Off by default and that is deliberate, not caution. A cut turned in
+    // ONE plane presents four-sided cells at every angle, so with the
+    // wheel alone a cube is not an approximation of the cross-section, it
+    // IS the cross-section - and the cube path draws it with the greedy
+    // mesher the whole repo is built around. The prism path earns its
+    // cost only when both planes are turned at once, which is where a
+    // cell becomes a pentagon or a hexagon and a cube starts to be a
+    // different shape rather than the same one.
+    bool slice_prisms = false;
     int thread_override = 0;
     int orbit_frames = 0;
     int cycle_frames = 0;

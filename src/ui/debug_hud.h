@@ -36,6 +36,25 @@ struct PerfFrame {
     std::size_t worker_count = 0;
     int   streamed_in = 0;
     int   streamed_out = 0;
+    // The fourth axis. Row hidden entirely in the 3D engine.
+    bool  four_d = false;
+    float slice_w = 0.0f;    // where the player is along w
+    float meshed_w = 0.0f;   // where the geometry is; lags while moving
+    // The 3D slice's orientation within 4D, one angle per rotation
+    // plane. Both are shown because one alone does not say where you are
+    // looking: a player who has turned only in XW would read theta as 0
+    // and conclude the wheel had done nothing.
+    float slice_theta = 0.0f;  // ZW plane: the wheel, and vertical mouse
+    float slice_phi   = 0.0f;  // XW plane: horizontal mouse
+    // Whether blocks are drawn as their 4D cross-section (P toggles it).
+    // Worth a line of its own because at a single-plane tilt the two
+    // modes are IDENTICAL - a cut turned in one plane presents four-sided
+    // cells at every angle - so a player who cannot see the mode has no
+    // way to tell the feature is on.
+    bool  prisms      = false;
+    // Cells the tiling produced for the last chunk built, against the 256
+    // voxel columns a flat cut would give. 1.0x flat, rising with tilt.
+    float prism_cells_per_column = 0.0f;
 };
 
 class DebugHud {
@@ -51,6 +70,15 @@ public:
     void toggle_visible() { visible_ = !visible_; }
 
     void copy_perf_to_clipboard(const PerfFrame& f) const;
+
+    // True when the pointer is over a HUD panel, so the caller can leave
+    // the mouse to ImGui instead of also acting on it.
+    //
+    // ImGui's GLFW backend chains whatever scroll callback was installed
+    // before it rather than replacing it, so a wheel event over the HUD
+    // reaches both: the panel scrolls AND the world rotates. Anything
+    // that reads the wheel has to ask first.
+    bool wants_mouse() const;
 
 private:
     // Rolling frame-time history for the perf-panel graph: a fixed ring the

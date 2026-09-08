@@ -22,6 +22,18 @@ struct CaptureMode {
     int shot_after   = 0;  // frames to settle before a single PNG
     int orbit_frames = 0;  // frames of a camera orbit, one PNG each
     int cycle_frames = 0;  // frames of a day/night cycle, one PNG each
+    // Frames of a slice-rotation sweep, one PNG each. Holds the camera
+    // and turns the 4D cut instead, which is the only capture where the
+    // WORLD moves and the viewer does not.
+    int tilt_frames  = 0;
+    // Frames of a walk along the camera's facing, one PNG each, with the
+    // cut held still. The complement of tilt_frames: there the world
+    // moves and the viewer does not, here the viewer moves and the world
+    // changes anyway - because on a tilted cut the slice's own z axis
+    // leans into w, so walking forward IS travel along the fourth axis.
+    // On a flat cut the same capture shows nothing changing, which is the
+    // control and is worth being able to produce.
+    int walk_frames  = 0;
     int bench_frames = 0;  // frames to time; writes no image
 
     // The camera is driven by a script rather than by the player, so live
@@ -33,7 +45,8 @@ struct CaptureMode {
     // --bench-frame is NOT here: the plain frame bench uses the player's
     // pose and the orbit bench drives the camera through its own path.
     bool scripted_camera() const {
-        return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0;
+        return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0 ||
+               tilt_frames > 0 || walk_frames > 0;
     }
 
     // The run exists to produce an image or a measurement, so interface
@@ -56,7 +69,10 @@ struct CaptureMode {
     // Orbit wins if both are somehow set, which matches the order the
     // camera path is chosen in.
     int image_sequence_frames() const {
-        return orbit_frames > 0 ? orbit_frames : cycle_frames;
+        if (orbit_frames > 0) return orbit_frames;
+        if (cycle_frames > 0) return cycle_frames;
+        if (tilt_frames > 0)  return tilt_frames;
+        return walk_frames;
     }
 };
 

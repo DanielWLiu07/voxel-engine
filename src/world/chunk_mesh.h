@@ -19,6 +19,15 @@ struct ChunkMeshData {
     std::vector<gfx::VertexPacked> vertices;
     int    quad_count = 0;
     double build_ms = 0.0;
+    // What one unit of the packed x/z bytes is worth in blocks, and what
+    // one unit of u/v is worth. Both 1 for the cube mesher, whose
+    // positions are already integers and whose uv is a whole run length.
+    // The prism mesher cuts corners wherever the hyperplane left them, so
+    // it quantises - see gfx::kSubUnitXZScale. Carried on the mesh rather
+    // than read from a global because the section bucketer needs it to
+    // turn vertices back into world-space AABBs, and it runs on a worker.
+    float  xz_scale = 1.0f;
+    float  uv_scale = 1.0f;
 };
 
 // The four horizontally adjacent chunks, when they are known.
@@ -116,6 +125,12 @@ struct LightSource {
     const LightGrid* grid = nullptr;
     const NeighborLight* neighbors = nullptr;
 };
+
+// Light at a chunk-local cell, following the neighbour faces when the
+// coordinate leaves the chunk, and full bright when there is no light
+// data at all. Shared with the prism mesher so both bake light by the
+// same rule: sample the cell OUTSIDE the face, which is the lit one.
+std::uint8_t sample_light(const LightSource& ls, int x, int y, int z);
 
 // One quad per visible face. The slow baseline.
 ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,

@@ -97,6 +97,11 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
     std::array<SectionBuild, kSectionsPerChunk> out;
     const float ox = static_cast<float>(coord.x * kChunkSizeX);
     const float oz = static_cast<float>(coord.z * kChunkSizeZ);
+    // Vertices are in mesh units, which are blocks only for the cube
+    // mesher. Culling AABBs are in world blocks, so the horizontal
+    // extents convert; y is in blocks either way, and the section a quad
+    // is bucketed into is chosen from y alone.
+    const float xs = src.xz_scale;
 
     const std::size_t quad_count = src.vertices.size() / 4;
     for (std::size_t q = 0; q < quad_count; ++q) {
@@ -127,8 +132,8 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
         s.vertices.push_back(src.vertices[4 * q + 3]);
         ++s.quad_count;
 
-        const glm::vec3 lo{xmin + ox, ymin, zmin + oz};
-        const glm::vec3 hi{xmax + ox, ymax, zmax + oz};
+        const glm::vec3 lo{xmin * xs + ox, ymin, zmin * xs + oz};
+        const glm::vec3 hi{xmax * xs + ox, ymax, zmax * xs + oz};
         if (!s.initialized) {
             s.aabb_min = lo;
             s.aabb_max = hi;
@@ -149,7 +154,9 @@ bucket_quads_by_section(const ChunkMeshData& src, ChunkCoord coord) {
 // data is built or uploaded per chunk at all.
 void apply_sections(ChunkSlot& slot,
                     std::array<SectionBuild, kSectionsPerChunk>&& built,
-                    gfx::QuadIndexBuffer& quad_indices) {
+                    gfx::QuadIndexBuffer& quad_indices,
+                    float xz_scale) {
+    slot.mesh_xz_scale = xz_scale;
     slot.any_section_has_mesh = false;
     bool union_init = false;
 
@@ -228,7 +235,7 @@ std::unique_ptr<ChunkSlot> build_slot(ChunkCoord coord, Chunk&& chunk,
     slot->chunk = std::move(chunk);
     slot->section_visibility = visibility;
     auto built = bucket_quads_by_section(mesh_data, coord);
-    apply_sections(*slot, std::move(built), quad_indices);
+    apply_sections(*slot, std::move(built), quad_indices, mesh_data.xz_scale);
     return slot;
 }
 
@@ -295,8 +302,26 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
+    const bool prisms = prisms_;
+    // Captured by value, like `gen` and `kind`: the player can step along
+    // w while jobs are in flight, and a worker reading slice_w_ off the
+    // member would then generate a chunk for a slice nobody asked for.
+    const TerrainGen4D* slice_gen = slice_gen_;
+    const TerrainGen4D::Slice slice = this->slice();
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, &terrain, c, gen, stamp, mask, kind,
+    // A copy of whatever the player has built here on this slice, replayed
+    // over the terrain the worker is about to generate. Copied like every
+    // other captured value, so the main thread stays free to keep editing
+    // while the job runs.
+    std::vector<VoxelEdit> edits;
+    if (auto eit = slice_edits_.find(SliceCoord{c, edit_slice()});
+        eit != slice_edits_.end()) {
+        edits = eit->second;
+    }
+    const bool had_edits = !edits.empty();
+    if (had_edits) ++stream_replayed_;
+    pool.submit([this, &terrain, c, gen, stamp, mask, kind, prisms, slice_gen, slice,
+                 had_edits, edits = std::move(edits),
                  planes = std::move(planes),
                  nlight = std::move(nlight)]() {
         ZoneScopedN("chunk_worker_job");
@@ -306,13 +331,50 @@ void World::request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
         fc.coord = c;
         fc.generation = gen;
         fc.request_stamp = stamp;
-        terrain.fill_chunk(c.x, c.z, fc.chunk);
+        fc.slice_w = slice.w;
+        fc.slice_theta = slice.theta;
+        fc.slice_z_shift = slice.z_shift;
+        fc.slice_phi = slice.phi;
+        fc.slice_x_shift = slice.x_shift;
+        // The one branch that makes the engine four-dimensional. Null in
+        // the 3D engine, which is every existing path.
+        //
+        // In prism mode the cells come first and the voxel grid is
+        // rasterised FROM them, which is the ordering that keeps what the
+        // player collides with equal to what they can see. The other way
+        // round - voxels first, cells derived - would put the two a
+        // rounding apart at every tilt.
+        std::optional<PrismChunk> cells;
+        if (prisms && slice_gen) {
+            cells = build_prism_chunk(*slice_gen, c, slice);
+            last_prism_cells_.store(static_cast<int>(cells->cells.size()));
+            rasterize_to_chunk(*cells, fc.chunk);
+        } else if (slice_gen) {
+            slice_gen->fill_chunk(c.x, c.z, slice, fc.chunk);
+        } else {
+            terrain.fill_chunk(c.x, c.z, fc.chunk);
+        }
+        // Replay the player's edits over the fresh terrain, in the order
+        // they were made.
+        for (const VoxelEdit& e : edits) {
+            const std::uint32_t i = e.index;
+            const int y  = static_cast<int>(i / (kChunkSizeZ * kChunkSizeX));
+            const int rem = static_cast<int>(i % (kChunkSizeZ * kChunkSizeX));
+            const int lx = rem % kChunkSizeX, lz = rem / kChunkSizeX;
+            fc.chunk.set(lx, y, lz, static_cast<BlockId>(e.block));
+            if (cells) {
+                apply_voxel_edit_to_cells(*cells, lx, y, lz,
+                                          static_cast<BlockId>(e.block));
+            }
+        }
+        fc.preserve_on_evict = had_edits;
         const auto t_after_terrain = clock::now();
         fc.terrain_ms = std::chrono::duration<double, std::milli>(
             t_after_terrain - t0).count();
         propagate_light(fc.chunk, nlight, fc.light);
-        fc.mesh_data = build_chunk_mesh(kind, fc.chunk, planes,
-                                        {&fc.light, &nlight});
+        fc.mesh_data = cells
+            ? build_prism_mesh(*cells, planes, {&fc.light, &nlight})
+            : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms = std::chrono::duration<double, std::milli>(
@@ -341,10 +403,331 @@ void World::enqueue_grid_async(int radius, const TerrainGen& terrain,
     }
 }
 
+int World::move_w(float delta, float speed, const TerrainGen& terrain,
+                  core::ThreadPool& pool) {
+    if (!slice_gen_ || delta == 0.0f) return 0;
+    slice_w_ += delta;
+    travel_w_ += delta;
+    // Travel along w is continuous; rebuilding is not. The world is
+    // rebuilt once the player has moved far enough from the w the
+    // geometry was built at that the difference would be visible - and
+    // "far enough" scales with how fast they are going, so the rebuild
+    // cadence stays put while the step size grows. See
+    // kSliceRebuildPeriod.
+    const float step = (speed > 0.0f)
+        ? std::clamp(speed * kSliceRebuildPeriod, kSliceStepMin, kSliceStepMax)
+        : kSliceRemeshStep;
+    if (std::fabs(slice_w_ - meshed_w_) < step) return 0;
+    return resample_slice(terrain, pool);
+}
+
+int World::resample_slice(const TerrainGen& terrain, core::ThreadPool& pool) {
+    if (!slice_gen_) return 0;
+
+    // One rebuild at a time.
+    //
+    // Without this, holding the travel key submits a whole window of jobs
+    // every time the player crosses the threshold - about three times a
+    // second - while the previous window is still sitting in the pool.
+    // The old jobs are not cancellable, so they run to completion and are
+    // then discarded on arrival for having a stale request stamp. The
+    // pool ends up saturated with work whose results are thrown away, and
+    // the geometry falls further behind the longer the key is held: the
+    // faster you travel, the less the world updates.
+    //
+    // Declining instead leaves meshed_w_ where it is, so move_w simply
+    // tries again on the next frame and the rebuild rate self-limits to
+    // whatever the pool can actually sustain. The player keeps moving at
+    // full speed; the geometry lags by however far they travelled during
+    // one rebuild, which the HUD shows.
+    // One rebuild at a time.
+    //
+    // Without this, holding the travel key submits a whole window of jobs
+    // every time the player crosses the threshold, while the previous
+    // window is still in the pool. Old jobs are not cancellable, so they
+    // run to completion and are then discarded on arrival for a stale
+    // request stamp: the pool saturates with work whose results are
+    // thrown away, and the faster you travel the less the world updates.
+    //
+    // Declining leaves meshed_w_ where it is, so move_w tries again next
+    // frame and the rate self-limits to what the pool sustains. Because a
+    // rebuild always targets the player's CURRENT w rather than the next
+    // increment, the one that eventually runs catches all the way up.
+    //
+    // Deliberately strict rather than "below some fraction of the
+    // window". The looser version was tried, on the theory that stray
+    // boundary re-meshes would hold the world still, and it measured
+    // WORSE: 0.69 of 0.80 units of travel tracked against 0.76 for this
+    // one, over two seconds of simulated held key. Letting a rebuild
+    // start while the previous is draining just makes the two compete.
+    if (jobs_in_flight_.load() > 0) return 0;
+
+    meshed_w_ = slice_w_;
+
+    // Every chunk in the world is now wrong: moving along w changes the
+    // contents of all of them, which the cost model in docs/4d.md measured
+    // at 100% - there is nothing to skip. So this re-requests the lot.
+    //
+    // Stale results from the previous slice are already handled, and by
+    // machinery that was here before this: request_terrain_chunk stamps
+    // every request with ++request_seq_, and drain_finished discards any
+    // result whose stamp is not the newest for its coord. Re-requesting a
+    // chunk therefore invalidates the in-flight job for it automatically.
+    //
+    // The generation bump and the two clears below are defence in depth,
+    // not the protection - verified by removing both and watching
+    // --verify-4d still pass, including its rapid-step phase. They are
+    // kept because they cost nothing and make the intent local, but this
+    // comment should not claim they are what makes a slice step safe.
+    ++generation_;
+    requested_.clear();
+    {
+        std::lock_guard<std::mutex> lock(finished_mutex_);
+        std::queue<FinishedChunk> empty;
+        finished_.swap(empty);
+    }
+    jobs_in_flight_.store(0);
+    // The stash is NOT cleared: it is keyed by (chunk, slice) now, so
+    // edits made at one w do not match the lookup at another. They stay
+    // put, and travelling back to the slice they belong to brings them
+    // back - which is what makes building across the fourth dimension
+    // work at all. Each slice keeps its own edits.
+    //
+    // Chunks that came off disk are written down here before the rebuild
+    // overwrites them; the generator cannot reproduce those. Player edits
+    // do not need it - slice_edits_ replays them over regenerated
+    // terrain, which is also what lets an edited chunk keep changing with
+    // the slice instead of freezing at the moment it was built.
+    for (const auto& kv : chunks_) {
+        if (!kv.second->from_disk) continue;
+        edited_stash_[SliceCoord{kv.first, meshed_slice_}] =
+            encode_chunk_rle(kv.second->chunk, /*edited=*/true);
+    }
+    meshed_slice_ = edit_slice();
+
+    std::vector<ChunkCoord> coords;
+    coords.reserve(chunks_.size());
+    for (const auto& kv : chunks_) coords.push_back(kv.first);
+    // Nearest to the player first, so the terrain they are actually
+    // looking at morphs immediately and the far edge of the window catches
+    // up over the following frames. Rebuilding in scan order instead made
+    // the world change from one corner, which reads as a glitch rather
+    // than as movement.
+    //
+    // Ties broken by (z, x) so the order stays deterministic and does not
+    // depend on the hash map's iteration - the same reason history_seek
+    // sorts.
+    const ChunkCoord centre = last_center_;
+    auto dist2 = [centre](const ChunkCoord& c) {
+        const long dx = c.x - centre.x, dz = c.z - centre.z;
+        return dx * dx + dz * dz;
+    };
+    std::sort(coords.begin(), coords.end(),
+              [&](const ChunkCoord& a, const ChunkCoord& b) {
+                  const long da = dist2(a), db = dist2(b);
+                  if (da != db) return da < db;
+                  return a.z != b.z ? a.z < b.z : a.x < b.x;
+              });
+    // Note: chunks_ is deliberately NOT cleared. The previous slice keeps
+    // drawing until its replacement arrives, so the world morphs instead
+    // of blinking through emptiness.
+    for (const ChunkCoord& c : coords) {
+        // A stashed edit for the DESTINATION slice beats fresh terrain,
+        // the same priority update_streaming applies. Without this the
+        // rebuild regenerates pristine terrain over an edit the player
+        // made on this very slice and travelled away from.
+        if (auto sit = edited_stash_.find(SliceCoord{c, meshed_slice_});
+            sit != edited_stash_.end()) {
+            Chunk restored;
+            if (decode_chunk_rle(sit->second, restored)) {
+                enqueue_decoded_chunk(c, std::move(restored), pool,
+                                      /*preserve_on_evict=*/true,
+                                      slice());
+                continue;
+            }
+            // A stash entry we wrote ourselves failing to decode is a bug,
+            // not corruption; fall through to terrain rather than loop.
+        }
+        // terrain is unused on this path - slice_gen_ is set, so the
+        // worker takes the 4D branch - but it is passed rather than
+        // faked, because forming a reference from nullptr is undefined
+        // even where nothing reads it.
+        request_terrain_chunk(c, terrain, pool);
+    }
+    return static_cast<int>(coords.size());
+}
+
+float World::near_meshed_w(int chunk_radius) const {
+    if (!slice_gen_) return slice_w_;
+    float worst = slice_w_;
+    for (const auto& kv : chunks_) {
+        const long dx = kv.first.x - last_center_.x;
+        const long dz = kv.first.z - last_center_.z;
+        if (dx * dx + dz * dz >
+            static_cast<long>(chunk_radius) * chunk_radius) {
+            continue;
+        }
+        if (std::fabs(slice_w_ - kv.second->slice_w) >
+            std::fabs(slice_w_ - worst)) {
+            worst = kv.second->slice_w;
+        }
+    }
+    return worst;
+}
+
+float World::slice_drift(ChunkCoord c, TerrainGen4D::Slice from) const {
+    // The chunk's centre column stands for the chunk. Its own corners
+    // move by different amounts under a rotation - that is what a
+    // rotation is - and the centre is the average of them.
+    const float sx = static_cast<float>(c.x * kChunkSizeX + kChunkSizeX / 2);
+    const float sz = static_cast<float>(c.z * kChunkSizeZ + kChunkSizeZ / 2);
+    float x_now = 0.0f, z_now = 0.0f, w_now = 0.0f;
+    float x_then = 0.0f, z_then = 0.0f, w_then = 0.0f;
+    TerrainGen4D::to_4d(sx, sz, slice(), &x_now, &z_now, &w_now);
+    TerrainGen4D::to_4d(sx, sz, from, &x_then, &z_then, &w_then);
+    // All three axes: the cut turns in two planes now, and a rotation in
+    // XW displaces a chunk along x where a ZW one does not. Measuring
+    // only (z, w) would leave the second plane invisible to staleness -
+    // the world would stop rebuilding when you turned it sideways.
+    const float dx = x_now - x_then;
+    const float dz = z_now - z_then;
+    const float dw = w_now - w_then;
+    return std::sqrt(dx * dx + dz * dz + dw * dw);
+}
+
+World::SliceLag World::slice_lag() const {
+    SliceLag out{0, 0};
+    for (const auto& kv : chunks_) {
+        ++out.resident;
+        const float drift = slice_drift(kv.first,
+                                        {kv.second->slice_w,
+                                         kv.second->slice_theta,
+                                         kv.second->slice_z_shift,
+                                         kv.second->slice_phi,
+                                         kv.second->slice_x_shift});
+        if (drift >= kSliceDriftMin) ++out.stale;
+    }
+    return out;
+}
+
+World::SliceLag World::slice_lag_ahead() const {
+    SliceLag out{0, 0};
+    for (const auto& kv : chunks_) {
+        if (!ahead_of_view(kv.first)) continue;
+        ++out.resident;
+        const float drift = slice_drift(kv.first,
+                                        {kv.second->slice_w,
+                                         kv.second->slice_theta,
+                                         kv.second->slice_z_shift,
+                                         kv.second->slice_phi,
+                                         kv.second->slice_x_shift});
+        if (drift >= kSliceDriftMin) ++out.stale;
+    }
+    return out;
+}
+
+int World::stream_slice(const TerrainGen& terrain, core::ThreadPool& pool,
+                        int budget) {
+    if (!slice_gen_ || budget <= 0) return 0;
+
+    // Chunks that have drifted far enough from the player's w to be worth
+    // rebuilding, nearest to the camera first so what the player is
+    // looking at is corrected before the far edge of the window.
+    //
+    // The threshold is per chunk rather than per world: a chunk generated
+    // at the player's current w is not stale no matter how far the player
+    // has travelled since the last global rebuild, and a chunk left behind
+    // by a budget-limited frame stays at the front of the queue until it
+    // is caught up. Nothing is ever globally stale, so nothing has to stop
+    // and wait.
+    struct Stale { ChunkCoord c; long dist2; float drift; bool ahead; };
+    std::vector<Stale> stale;
+    for (const auto& kv : chunks_) {
+        // How far this chunk's terrain has actually moved in the noise
+        // field. See slice_drift: a distance in one unit, not a weighted
+        // sum of a length and an angle.
+        const float drift = slice_drift(kv.first,
+                                        {kv.second->slice_w,
+                                         kv.second->slice_theta,
+                                         kv.second->slice_z_shift,
+                                         kv.second->slice_phi,
+                                         kv.second->slice_x_shift});
+        if (drift < kSliceDriftMin) continue;
+        if (requested_.count(kv.first)) continue;   // already on its way
+        const long dx = kv.first.x - last_center_.x;
+        const long dz = kv.first.z - last_center_.z;
+        stale.push_back({kv.first, dx * dx + dz * dz, drift,
+                         ahead_of_view(kv.first)});
+    }
+    if (stale.empty()) return 0;
+
+    // In front of the camera first, then nearest; drift breaks ties so a
+    // chunk that has been skipped repeatedly is not starved by a
+    // neighbour at the same distance. Coordinates break the rest, so the
+    // order never depends on the hash map's iteration.
+    //
+    // Facing is the primary key because a rotation invalidates the whole
+    // window at once - measured, 289 of 289 chunks stale for as long as
+    // the wheel is turning - so the queue is never short and the only
+    // question is what comes off it first. Distance alone rebuilds what
+    // is behind the player before what is in front, which is work the
+    // frame cannot show.
+    std::sort(stale.begin(), stale.end(),
+              [](const Stale& a, const Stale& b) {
+                  if (a.ahead != b.ahead) return a.ahead;
+                  if (a.dist2 != b.dist2) return a.dist2 < b.dist2;
+                  if (a.drift != b.drift) return a.drift > b.drift;
+                  return a.c.z != b.c.z ? a.c.z < b.c.z : a.c.x < b.c.x;
+              });
+
+    int issued = 0;
+    for (const Stale& st : stale) {
+        if (issued >= budget) break;
+        // A stashed edit for this slice beats fresh terrain, the same
+        // priority every other path applies.
+        if (auto sit = edited_stash_.find(SliceCoord{st.c, edit_slice()});
+            sit != edited_stash_.end()) {
+            Chunk restored;
+            if (decode_chunk_rle(sit->second, restored)) {
+                enqueue_decoded_chunk(st.c, std::move(restored), pool,
+                                      /*preserve_on_evict=*/true,
+                                      slice());
+                ++issued;
+                continue;
+            }
+        }
+
+        // No special case for edited chunks any more, and that is the
+        // fix rather than an omission. request_terrain_chunk regenerates
+        // the terrain for the current slice and replays slice_edits_ over
+        // it, so a built structure turns with the world.
+        //
+        // This used to stash the whole chunk and hand it back verbatim,
+        // which preserved the edit and froze everything around it: one
+        // placed block pinned its entire 16x256x16 chunk against every
+        // further turn of the wheel, while its neighbours kept rotating.
+        request_terrain_chunk(st.c, terrain, pool);
+        ++issued;
+    }
+    // meshed_w_ is now a report rather than a control: it says how far the
+    // WORST chunk still is from the player, which is what the HUD shows.
+    float worst = slice_w_;
+    for (const auto& kv : chunks_) {
+        if (std::fabs(slice_w_ - kv.second->slice_w) >
+            std::fabs(slice_w_ - worst)) {
+            worst = kv.second->slice_w;
+        }
+    }
+    meshed_w_ = worst;
+    return issued;
+}
+
 World::StreamStats World::update_streaming(ChunkCoord center, int radius,
                                            const TerrainGen& terrain,
                                            core::ThreadPool& pool) {
     StreamStats stats;
+    stream_replayed_ = 0;
+    last_center_ = center;
     auto in_window = [&](ChunkCoord c) {
         return std::abs(c.x - center.x) <= radius
             && std::abs(c.z - center.z) <= radius;
@@ -352,12 +735,21 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
 
     for (auto it = chunks_.begin(); it != chunks_.end(); ) {
         if (!in_window(it->first)) {
-            // Edits must survive eviction: regeneration from the terrain
-            // generator would silently undo them. Unmodified chunks are
-            // cheaper to regenerate than to keep.
-            if (it->second->player_modified) {
-                edited_stash_[it->first] = encode_chunk_rle(it->second->chunk, /*edited=*/true);
+            // Only chunks the generator cannot reproduce. A player's
+            // edits survive eviction through slice_edits_, which is
+            // replayed over regenerated terrain - so an edited chunk no
+            // longer has to be frozen whole to be preserved.
+            if (it->second->from_disk) {
+                edited_stash_[SliceCoord{it->first, edit_slice()}] =
+                    encode_chunk_rle(it->second->chunk, /*edited=*/true);
                 ++stats.stashed;
+            } else if (it->second->player_modified) {
+                // Not for restoring - the generator plus slice_edits_ does
+                // that, and does it better because the chunk keeps
+                // changing with the slice. This is so a save has bytes to
+                // write for a chunk that is no longer resident.
+                evicted_snapshots_[SliceCoord{it->first, edit_slice()}] =
+                    encode_chunk_rle(it->second->chunk, /*edited=*/true);
             }
             it = chunks_.erase(it);
             ++stats.evicted;
@@ -378,11 +770,13 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             // A stashed edit takes priority over fresh terrain. Decode is
             // main-thread (microseconds at RLE sizes); meshing still goes
             // through the worker pool like any load.
-            if (auto sit = edited_stash_.find(c); sit != edited_stash_.end()) {
+            if (auto sit = edited_stash_.find(SliceCoord{c, edit_slice()});
+                sit != edited_stash_.end()) {
                 Chunk restored;
                 if (decode_chunk_rle(sit->second, restored)) {
                     enqueue_decoded_chunk(c, std::move(restored), pool,
-                                          /*preserve_on_evict=*/true);
+                                          /*preserve_on_evict=*/true,
+                                          slice());
                     ++stats.restored;
                     continue;
                 }
@@ -394,6 +788,7 @@ World::StreamStats World::update_streaming(ChunkCoord center, int radius,
             ++stats.requested;
         }
     }
+    stats.replayed = stream_replayed_;
     return stats;
 }
 
@@ -443,6 +838,7 @@ int World::drain_finished(int max_per_frame) {
             // stashing on eviction; the terrain generator cannot reproduce
             // them.
             new_slot->player_modified = fc.preserve_on_evict;
+            new_slot->from_disk = fc.from_disk;
             slot_it = chunks_.emplace(fc.coord, std::move(new_slot)).first;
         } else {
             // A re-mesh of a chunk that is already resident. Assigning the
@@ -450,13 +846,53 @@ int World::drain_finished(int max_per_frame) {
             // on the main thread, where deleting GL objects is legal.
             new_slot->player_modified = slot_it->second->player_modified ||
                                         fc.preserve_on_evict;
+            new_slot->from_disk = slot_it->second->from_disk || fc.from_disk;
             slot_it->second = std::move(new_slot);
         }
         slot_it->second->meshed_with = landed_mask;
+        slot_it->second->slice_w = fc.slice_w;
+        slot_it->second->slice_theta = fc.slice_theta;
+        slot_it->second->slice_z_shift = fc.slice_z_shift;
+        slot_it->second->slice_phi = fc.slice_phi;
+        slot_it->second->slice_x_shift = fc.slice_x_shift;
         slot_it->second->light = fc.light;
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.
         mark_neighbors_dirty(fc.coord);
+        // And this chunk itself, if it landed meshed against fewer
+        // neighbours than are resident now.
+        //
+        // The invariant is "a resident chunk is meshed against every
+        // resident neighbour", and there was a path that broke it
+        // silently. flush_pending_remeshes drops a dirty mark when a job
+        // for that coord is already in flight, on the reasoning that the
+        // job will mesh it correctly - but the job captured its boundary
+        // planes at SUBMIT time, which can predate the neighbour's
+        // arrival. The mark is discarded, the job lands short, and
+        // nothing ever revisits it.
+        //
+        // Measured before this: a walk that evicts and re-requests left
+        // the resident mesh footprint varying about 0.2% run to run
+        // (22,993,392 vs 22,942,272 bytes) with pending_remesh() reading
+        // 0 - the marks were not pending, they were gone. Invisible in
+        // the image, because the extra faces are buried between chunks,
+        // right up until a camera reaches somewhere the difference shows.
+        // A static load never hit it: during a bulk load a chunk that is
+        // still in flight is not resident, so it is never marked in the
+        // first place and whichever of the pair lands second fixes both.
+        //
+        // Checking the landed mask against what is resident NOW closes it
+        // without a retry loop: the answer is known here, at the moment
+        // the job lands, and it is exactly the condition the invariant
+        // names.
+        {
+            std::uint8_t resident_now = 0;
+            if (chunks_.count({fc.coord.x - 1, fc.coord.z})) resident_now |= kNeighborNegX;
+            if (chunks_.count({fc.coord.x + 1, fc.coord.z})) resident_now |= kNeighborPosX;
+            if (chunks_.count({fc.coord.x, fc.coord.z - 1})) resident_now |= kNeighborNegZ;
+            if (chunks_.count({fc.coord.x, fc.coord.z + 1})) resident_now |= kNeighborPosZ;
+            if (resident_now & ~landed_mask) queue_remesh(fc.coord);
+        }
         total_upload_ms_ += std::chrono::duration<double, std::milli>(
             clock::now() - up_t0).count();
         ++uploaded;
@@ -546,8 +982,42 @@ int World::flush_pending_remeshes(core::ThreadPool& pool, int max_jobs) {
         // Copying rather than pointing is the whole reason this is safe to
         // run off-thread: the main thread stays free to edit or evict any
         // of these chunks while the job is in flight.
+        // The slot's OWN slice, not the current one. A boundary re-mesh
+        // regenerates nothing - it re-packs the geometry a chunk already
+        // holds - so claiming the current slice here would mark a stale
+        // chunk fresh and stream_slice would stop rebuilding it.
+        //
+        // ALL FIVE fields. This used to pass {slice_w, slice_theta} and
+        // let the other three default to zero. The slot is re-stamped
+        // from what is passed, so after a boundary re-mesh a chunk
+        // recorded phi = z_shift = x_shift = 0 whatever it was actually
+        // built at.
+        //
+        // What that costs, measured rather than assumed, because the
+        // first version of this comment claimed two things that are not
+        // true. It does NOT make the chunk permanently stale: the next
+        // stream_slice re-requests it with the full current slice, so the
+        // world still converges. And the redundant regeneration is not
+        // visible in wall time - two runs each way of a six-frame walk
+        // capture were 3.6/2.6 s against 2.9/2.7 s, which is noise.
+        //
+        // What it does cost is wrong geometry, and in prism mode that is
+        // direct: the stamp is also the CUT the tiling is rebuilt from,
+        // so a re-mesh tiled the chunk with a hyperplane its blocks never
+        // came from. Resident mesh at the same capture frame moved
+        // 22,935,216 -> 22,995,216 bytes when this was fixed, and the
+        // second figure is the correct one.
+        //
+        // It hid because every check that turns phi turns it briefly -
+        // --verify-4d's xw leg rotates and rotates back. A cut left
+        // tilted in XW is what exposes it, which is what a player does
+        // and what no test did.
         enqueue_decoded_chunk(c, it->second->chunk, pool,
-                              it->second->player_modified);
+                              it->second->player_modified,
+                              {it->second->slice_w, it->second->slice_theta,
+                               it->second->slice_z_shift,
+                               it->second->slice_phi,
+                               it->second->slice_x_shift});
         ++issued;
     }
     return issued;
@@ -557,16 +1027,21 @@ int World::pending_async() const { return jobs_in_flight_.load(); }
 
 void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
                                   core::ThreadPool& pool,
-                                  bool preserve_on_evict) {
-    const std::uint64_t stamp = ++request_seq_;
-    requested_[c] = stamp;
+                                  bool preserve_on_evict,
+                                  TerrainGen4D::Slice stamp,
+                                  bool from_disk) {
+    const std::uint64_t seq = ++request_seq_;
+    requested_[c] = seq;
     jobs_in_flight_.fetch_add(1);
     const std::uint64_t gen = generation_;
     std::uint8_t mask = 0;
     NeighborPlanes planes = neighbor_planes_for(c, &mask);
     const MesherKind kind = mesher_kind_;
+    const bool prisms = prisms_;
+    const TerrainGen4D* slice_gen = slice_gen_;
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, c, gen, stamp, preserve_on_evict, mask, kind,
+    pool.submit([this, c, gen, seq, stamp, preserve_on_evict, from_disk, mask, kind,
+                 prisms, slice_gen,
                  planes = std::move(planes),
                  nlight = std::move(nlight),
                  chunk = std::move(chunk)]() mutable {
@@ -576,15 +1051,47 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         FinishedChunk fc;
         fc.coord = c;
         fc.generation = gen;
-        fc.request_stamp = stamp;
+        fc.request_stamp = seq;
+        // Which slice this chunk belongs to. Omitting these was the whole
+        // defect: drain_finished stamps the slot from them, so leaving
+        // them at the FinishedChunk default made every restored or
+        // re-meshed chunk claim slice (0, 0).
+        fc.slice_w = stamp.w;
+        fc.slice_theta = stamp.theta;
+        fc.slice_z_shift = stamp.z_shift;
+        fc.slice_phi = stamp.phi;
+        fc.slice_x_shift = stamp.x_shift;
         fc.chunk = std::move(chunk);
         fc.preserve_on_evict = preserve_on_evict;
+        fc.from_disk = from_disk;
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;
         propagate_light(fc.chunk, nlight, fc.light);
-        fc.mesh_data  = build_chunk_mesh(kind, fc.chunk, planes,
-                                         {&fc.light, &nlight});
+        // Where the cells come from, and it has to be the SAME source a
+        // fresh stream would have used or the mesh depends on which path
+        // the chunk happened to take.
+        //
+        // A chunk the player edited, or one off disk, IS the authority on
+        // its own contents: the generator cannot reproduce it, so its
+        // tiling reads columns back out of the voxel grid. Everything
+        // else - which is every boundary re-mesh of ordinary terrain -
+        // goes back to the generator, because reading columns back is
+        // lossy for a cell too thin to hold a voxel centre and a chunk
+        // that took a re-mesh would otherwise end up subtly different
+        // from an identical one that did not.
+        //
+        // That difference was measurable: 11,712 bytes of resident mesh
+        // between two runs of the same walk, moving with worker timing.
+        const bool authoritative = preserve_on_evict || from_disk ||
+                                   slice_gen == nullptr;
+        fc.mesh_data = prisms
+            ? build_prism_mesh(
+                  authoritative
+                      ? build_prism_chunk_from_blocks(fc.chunk, c, stamp)
+                      : build_prism_chunk(*slice_gen, c, stamp),
+                  planes, {&fc.light, &nlight})
+            : build_chunk_mesh(kind, fc.chunk, planes, {&fc.light, &nlight});
         fc.neighbor_mask = mask;
         fc.visibility = compute_section_visibility(fc.chunk);
         fc.worker_ms  = std::chrono::duration<double, std::milli>(
@@ -597,9 +1104,19 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
 void World::clear_all() {
     chunks_.clear();
     requested_.clear();
-    // A full reload replaces world state wholesale; stale stashed edits
-    // from the previous state must not leak into it.
+    // A full reload replaces world state wholesale; stale edits from the
+    // previous state must not leak into it.
+    //
+    // All THREE stores, and the third was missed when edits moved into a
+    // replay list: request_terrain_chunk replays slice_edits_ over
+    // freshly generated terrain, so edits from the discarded world came
+    // back in the new one. Reachable from F6 and from --bench-io, and it
+    // composed with the save bug above into something worse than either -
+    // a load looked like it had preserved an edit the save file did not
+    // contain.
     edited_stash_.clear();
+    evicted_snapshots_.clear();
+    slice_edits_.clear();
     ++generation_;  // in-flight jobs are now stale; drain_finished drops them
     std::lock_guard<std::mutex> lock(finished_mutex_);
     // Results already queued but not yet drained are dropped here, so their
@@ -637,6 +1154,36 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
 
     slot.chunk.set(lx, wy, lz, b);
     slot.player_modified = true;
+    // Recorded as a replay entry, not just as a flag. The terrain under
+    // an edit has to be free to change when the slice does, and it can
+    // only do that if the edit is stored separately from the chunk it
+    // sits in. Appended rather than deduplicated: replay is in order, so
+    // the last write to a voxel wins by construction.
+    // A job already in flight for this chunk would land on top of the
+    // edit and erase it.
+    //
+    // The stale-result guard cannot help: that job was issued BEFORE the
+    // edit, so its stamp still matches and the result is accepted - and
+    // it carries a copy of slice_edits_ taken at submit time, without the
+    // new edit. The chunk is then stamped at the current slice, so
+    // nothing considers it stale and it is never rebuilt.
+    //
+    // Player-facing, and precisely when it is most likely: placing a
+    // block while scrolling the wheel or holding a travel key is placing
+    // one while jobs are in flight. The block vanishes, then reappears
+    // whenever the next rebuild happens to replay the list.
+    //
+    // Dropping the request is enough. The result is discarded on arrival
+    // for having no outstanding request, the resident chunk keeps the
+    // edit set_block just applied and re-meshed, and if the chunk was
+    // stale the next stream_slice re-requests it - with the edit in the
+    // replay list this time.
+    requested_.erase(cc);
+    slice_edits_[SliceCoord{cc, edit_slice()}].push_back(
+        VoxelEdit{static_cast<std::uint32_t>(
+                      (static_cast<std::size_t>(wy) * kChunkSizeZ + lz)
+                      * kChunkSizeX + lx),
+                  static_cast<std::uint8_t>(b)});
     const auto edit_t0 = std::chrono::steady_clock::now();
     std::uint8_t mask = 0;
     const NeighborPlanes planes = neighbor_planes_for(cc, &mask);
@@ -646,8 +1193,16 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // the whole edit cost, and propagation is 0.04 ms/chunk, so it does not
     // move the block-edit latency figure meaningfully.
     propagate_light(slot.chunk, nlight, slot.light);
-    auto mesh_data = build_chunk_mesh(mesher_kind_, slot.chunk, planes,
-                                      {&slot.light, &nlight});
+    // The edited chunk is the source of truth for its own blocks, so the
+    // prism path re-tiles from it rather than from the generator. That is
+    // a whole re-tile per edit - a few milliseconds against the cube
+    // path's fraction of one - which is the price of the edit landing on
+    // the shape the player is actually looking at.
+    auto mesh_data = prisms_
+        ? build_prism_mesh(build_prism_chunk_from_blocks(slot.chunk, cc, slice()),
+                           planes, {&slot.light, &nlight})
+        : build_chunk_mesh(mesher_kind_, slot.chunk, planes,
+                           {&slot.light, &nlight});
     slot.meshed_with = mask;
     // Edits can shift quads across section boundaries (placing a block on
     // top of a tall column, breaking the lowest solid in a section), so
@@ -655,7 +1210,7 @@ bool World::set_block(int wx, int wy, int wz, BlockId b) {
     // meshing on a 16x256x16 chunk is sub-millisecond, so doing it again
     // per edit is fine.
     auto built = bucket_quads_by_section(mesh_data, slot.coord);
-    apply_sections(slot, std::move(built), quad_ibo_);
+    apply_sections(slot, std::move(built), quad_ibo_, mesh_data.xz_scale);
     slot.section_visibility = compute_section_visibility(slot.chunk);
     edit_last_ms_ = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - edit_t0).count();
@@ -866,6 +1421,32 @@ bool occlusion_bfs(
     return true;
 }
 
+// Pulls a mesh vertex back into blocks. x and z are stored in mesh units,
+// which are blocks for the cube path and sixteenths of one for the prism
+// path; y is blocks either way.
+static glm::vec3 vertex_blocks(const gfx::VertexPacked& v, float xz) {
+    return {static_cast<float>(v.x) * xz, static_cast<float>(v.y),
+            static_cast<float>(v.z) * xz};
+}
+
+// What the GPU actually holds, checked against what the mesher promised.
+//
+// The prism path gets a different question asked of it, and that is not a
+// weaker gate, it is the right one. "Every face is backed by a solid
+// voxel on the correct side" is a statement about a voxel mesh: it
+// assumes faces lie on integer planes and that the cell behind one is a
+// voxel. Neither is true of a cross-section, whose faces sit wherever the
+// hyperplane cut them and whose backing is a lattice cell the chunk grid
+// only approximates.
+//
+// So a prism mesh is checked on the two things that ARE true of it and
+// that a bug would break: every vertex inside the chunk footprint the
+// byte encoding can address, and every triangle winding the way the
+// normal it carries points. The second is the one that matters - a quad
+// wound against its normal is culled from the side it should be seen from
+// and solid from the side it should not, which reads as random holes in
+// the world. It is checked here on the bytes the GPU has, not on what the
+// CPU thinks it sent.
 int World::debug_validate_gpu_meshes() const {
     std::vector<gfx::VertexPacked> verts;
     std::vector<std::uint32_t> idx;
@@ -873,11 +1454,40 @@ int World::debug_validate_gpu_meshes() const {
     for (const auto& kv : chunks_) {
         const ChunkSlot& slot = *kv.second;
         if (!slot.any_section_has_mesh) continue;
+        const float xz = slot.mesh_xz_scale;
         slot.chunk_mesh.debug_read_back(verts, idx);
+        if (xz != 1.0f) {
+            for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+                const glm::vec3 p0 = vertex_blocks(verts[idx[t]], xz);
+                const glm::vec3 p1 = vertex_blocks(verts[idx[t + 1]], xz);
+                const glm::vec3 p2 = vertex_blocks(verts[idx[t + 2]], xz);
+                const glm::vec3 n  = verts[idx[t]].nrm();
+                const glm::vec3 g  = glm::cross(p1 - p0, p2 - p0);
+                // A fan's odd filler triangle has zero area on purpose and
+                // rasterises nothing; it carries no winding to check.
+                const bool degenerate = glm::length(g) < 1e-6f;
+                const bool wound = degenerate ||
+                                   glm::dot(glm::normalize(g), n) > 0.5f;
+                const bool in_range =
+                    p0.x >= -0.01f && p0.x <= kChunkSizeX + 0.01f &&
+                    p0.z >= -0.01f && p0.z <= kChunkSizeZ + 0.01f &&
+                    p0.y >= 0.0f   && p0.y <= kChunkSizeY;
+                if (wound && in_range) continue;
+                ++bad;
+                if (bad <= 16) {
+                    std::printf("[validate] chunk(%+d,%+d) tri %zu %s: "
+                                "(%.2f,%.2f,%.2f) n=(%.2f,%.2f,%.2f)\n",
+                                slot.coord.x, slot.coord.z, t / 3,
+                                wound ? "OUT OF RANGE" : "BACKWARDS",
+                                p0.x, p0.y, p0.z, n.x, n.y, n.z);
+                }
+            }
+            continue;
+        }
         for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
-            const glm::vec3 p0 = verts[idx[t]].pos();
-            const glm::vec3 p1 = verts[idx[t + 1]].pos();
-            const glm::vec3 p2 = verts[idx[t + 2]].pos();
+            const glm::vec3 p0 = vertex_blocks(verts[idx[t]], xz);
+            const glm::vec3 p1 = vertex_blocks(verts[idx[t + 1]], xz);
+            const glm::vec3 p2 = vertex_blocks(verts[idx[t + 2]], xz);
             const glm::vec3 n = verts[idx[t]].nrm();
             const int d = (std::abs(n.x) > 0.5f) ? 0 : (std::abs(n.y) > 0.5f ? 1 : 2);
             const bool coplanar = (p0[d] == p1[d]) && (p1[d] == p2[d]);
@@ -952,6 +1562,15 @@ DrawStats World::draw_impl(const gfx::Frustum& frustum,
         const float ox = static_cast<float>(slot.coord.x * kChunkSizeX);
         const float oz = static_cast<float>(slot.coord.z * kChunkSizeZ);
         glm::mat4 model = glm::translate(glm::mat4(1.0f), {ox, 0.0f, oz});
+        // Sub-block meshes store x and z in units of mesh_xz_scale. The
+        // scale is diagonal and leaves y alone, which is exact for every
+        // normal these meshes carry: prism walls are horizontal and its
+        // caps point straight up or down, and all three survive a
+        // (s, 1, s) scale once the shader normalizes.
+        if (slot.mesh_xz_scale != 1.0f) {
+            model = glm::scale(model,
+                               {slot.mesh_xz_scale, 1.0f, slot.mesh_xz_scale});
+        }
         bool vao_bound = false;
         bool drew_any  = false;
         for (int i = 0; i < kSectionsPerChunk; ++i) {

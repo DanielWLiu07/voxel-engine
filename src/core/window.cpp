@@ -26,6 +26,22 @@ std::optional<Window> Window::create(const Config& config) {
         return std::nullopt;
     }
 
+    if (config.list_monitors) {
+        int count = 0;
+        GLFWmonitor** monitors = glfwGetMonitors(&count);
+        std::printf("%d display(s):\n", count);
+        for (int i = 0; i < count; ++i) {
+            int mx = 0, my = 0, mw = 0, mh = 0;
+            glfwGetMonitorWorkarea(monitors[i], &mx, &my, &mw, &mh);
+            std::printf("  --monitor %d  %-24s %dx%d at (%d, %d)%s\n", i,
+                        glfwGetMonitorName(monitors[i]), mw, mh, mx, my,
+                        monitors[i] == glfwGetPrimaryMonitor()
+                            ? "  [primary]" : "");
+        }
+        glfwTerminate();
+        return std::nullopt;
+    }
+
     // 4.1 core is the ceiling on macOS, which froze OpenGL in 2018. Every
     // other platform this builds on has at least that.
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -35,6 +51,18 @@ std::optional<Window> Window::create(const Config& config) {
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, config.msaa_samples);
     if (!config.visible) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    // Take keyboard focus when shown.
+    //
+    // Launched from a terminal on macOS the window appears but focus stays
+    // with whatever was frontmost, so every keypress goes somewhere else
+    // and the engine looks completely unresponsive - it renders, the HUD
+    // updates, and nothing you press does anything. That is indis-
+    // tinguishable from a broken input path, and it cost several rounds of
+    // debugging the wrong layer.
+    //
+    // Only for a visible window: a headless bench or capture must never
+    // steal focus from whatever the user is actually doing.
+    if (config.visible) glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(config.width, config.height,
                                           config.title, nullptr, nullptr);
@@ -43,6 +71,34 @@ std::optional<Window> Window::create(const Config& config) {
         return std::nullopt;
     }
     glfwMakeContextCurrent(window);
+    // Place the window on the requested display before showing it, so it
+    // never appears on the wrong screen and jumps.
+    if (config.visible && config.monitor >= 0) {
+        int count = 0;
+        GLFWmonitor** monitors = glfwGetMonitors(&count);
+        if (monitors && config.monitor < count) {
+            GLFWmonitor* m = monitors[config.monitor];
+            // The WORK area, not the monitor bounds: on macOS the menu bar
+            // and Dock are outside it, and centring on the raw bounds puts
+            // the title bar under the menu bar on the primary display.
+            int mx = 0, my = 0, mw = 0, mh = 0;
+            glfwGetMonitorWorkarea(m, &mx, &my, &mw, &mh);
+            int ww = 0, wh = 0;
+            glfwGetWindowSize(window, &ww, &wh);
+            glfwSetWindowPos(window, mx + (mw - ww) / 2, my + (mh - wh) / 2);
+        } else {
+            std::fprintf(stderr,
+                         "[window] no display %d (%d attached), using the "
+                         "default\n", config.monitor, count);
+        }
+    }
+    // The hint covers the normal case; this covers being launched from a
+    // background shell, where the process itself is not frontmost and the
+    // hint alone does not raise it.
+    if (config.visible) {
+        glfwShowWindow(window);
+        glfwFocusWindow(window);
+    }
     glfwSwapInterval(config.vsync ? 1 : 0);
 
     const int version = gladLoadGL(glfwGetProcAddress);

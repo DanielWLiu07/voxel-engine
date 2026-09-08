@@ -201,8 +201,18 @@ LoadStats load_world(World& w, const std::string& dir,
 
         stats.bytes_read += buf.size();
         stats.bytes_raw  += static_cast<std::size_t>(kChunkVolume);
+        // Loaded from disk, so it belongs to whatever slice the world is
+        // currently on - the save format has no slice in it, and a load
+        // is a load onto the present world rather than travel.
+        // from_disk means "the generator cannot reproduce this", which is
+        // the same condition as preserving it on eviction: a chunk that
+        // was edited before it was saved, or any chunk at all when the
+        // seed does not match the save. Those are stashed whole. A clean
+        // chunk under a matching seed is exactly what the generator would
+        // produce, so it is left to be regenerated like any other.
+        const bool irreproducible = edited || !stats.seed_matched;
         w.enqueue_decoded_chunk(coord, std::move(chunk), pool,
-                                edited || !stats.seed_matched);
+                                irreproducible, w.slice(), irreproducible);
         ++enqueued;
     }
 

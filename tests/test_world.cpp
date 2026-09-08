@@ -2055,8 +2055,83 @@ void test_every_direction_is_normalized() {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The packed vertex's wider normal table
+// ---------------------------------------------------------------------------
+
+static void test_axis_normals_decode_exactly_as_before() {
+    // The whole point of putting the horizontal directions ABOVE the six
+    // axes is that no vertex the cube mesher has ever emitted moves. If
+    // this fails, every published figure was measured on different
+    // geometry than ships.
+    for (unsigned i = 0; i < 6; ++i) {
+        EXPECT(gfx::decode_packed_normal(i) == gfx::kPackedNormals[i],
+               "an axis normal decodes exactly as before");
+    }
+}
+
+static void test_horizontal_normals_round_trip_within_half_a_step() {
+    // A prism wall faces wherever the cut left it. Encoding is a
+    // quantisation, so what has to hold is that the error is bounded by
+    // half a step - 0.72 degrees - not that it is zero.
+    const float step = gfx::kTwoPi / static_cast<float>(gfx::kHorizNormalCount);
+    float worst = 0.0f;
+    bool  all_horizontal = true;
+    for (int i = 0; i < 720; ++i) {
+        const float a = static_cast<float>(i) * (gfx::kTwoPi / 720.0f);
+        const glm::vec3 want{std::cos(a), 0.0f, std::sin(a)};
+        const glm::vec3 got = gfx::decode_packed_normal(
+            gfx::encode_horizontal_normal(want.x, want.z));
+        if (std::fabs(got.y) > 1e-6f) all_horizontal = false;
+        const float dot = std::clamp(got.x * want.x + got.z * want.z, -1.0f, 1.0f);
+        worst = std::max(worst, std::acos(dot));
+    }
+    EXPECT(all_horizontal, "every wall normal stays horizontal");
+    EXPECT(worst <= step * 0.5f + 1e-4f,
+           "the worst horizontal normal error is within half a step");
+}
+
+static void test_horizontal_normals_never_collide_with_the_axes() {
+    // Index 6 is the first horizontal slot, and it must not alias an axis
+    // entry - a wall shaded as +X because its index landed on the axis
+    // table is the kind of bug that reads as a lighting problem.
+    bool in_tail = true;
+    for (int i = 0; i < 720; ++i) {
+        const float a = static_cast<float>(i) * (gfx::kTwoPi / 720.0f);
+        const unsigned idx = gfx::encode_horizontal_normal(std::cos(a), std::sin(a));
+        if (idx < 6 || idx > 255) in_tail = false;
+    }
+    EXPECT(in_tail, "a horizontal normal never lands on an axis index");
+}
+
+static void test_sub_unit_quantisation_shares_corners() {
+    // The property that keeps a prism tiling watertight: two cells that
+    // meet at a corner name that corner with the same float, and the same
+    // float quantises the same way. If this stopped holding the world
+    // would show hairline cracks along every cell boundary.
+    bool within_half_a_step = true;
+    for (int i = 0; i <= 2000; ++i) {
+        const float v = static_cast<float>(i) * (16.0f / 2000.0f);
+        const float back = static_cast<float>(gfx::quantize_sub_unit_xz(v))
+                         * gfx::kSubUnitXZScale;
+        if (std::fabs(back - v) > gfx::kSubUnitXZScale * 0.5f + 1e-4f)
+            within_half_a_step = false;
+    }
+    EXPECT(within_half_a_step,
+           "sub-unit x/z round-trips to within half a quantisation step");
+    EXPECT(gfx::quantize_sub_unit_xz(0.0f) == 0, "the low corner is exact");
+    EXPECT(gfx::quantize_sub_unit_xz(16.0f) == 255, "the high corner is exact");
+    EXPECT(gfx::quantize_sub_unit_uv(1.0f) == 64,
+           "one block of texture is 64 uv units");
+}
+
 int main() {
     std::printf("voxel_tests: running...\n");
+    test_axis_normals_decode_exactly_as_before();
+    test_horizontal_normals_round_trip_within_half_a_step();
+    test_horizontal_normals_never_collide_with_the_axes();
+    test_sub_unit_quantisation_shares_corners();
     test_aabb_empty_chunk();
     test_aabb_single_block_in_offset_chunk();
     test_aabb_tight_y_spans_full_column();

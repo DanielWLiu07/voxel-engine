@@ -22,7 +22,8 @@ echo "==== AddressSanitizer + UndefinedBehaviorSanitizer: full logic suite ===="
 cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVOXEL_BUILD_BENCH=OFF \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -g -O1" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" >/dev/null
-cmake --build build-asan --target voxel_tests mpmc_tests mesher_fuzz_tests cli_tests
+cmake --build build-asan --target voxel_tests mpmc_tests mesher_fuzz_tests \
+  cli_tests prism_tests terrain4d_tests hyperslice_tests
 export ASAN_OPTIONS="halt_on_error=1"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$SUPP"
 ./build-asan/voxel_tests
@@ -34,6 +35,15 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$SUPP"
 # The CLI suite redirects stderr through dup2 onto a tmpfile and reads it
 # back, which is the only raw file-descriptor handling in the tests.
 ./build-asan/cli_tests
+# The 4D cross-section mesher. Worth its own line here rather than being
+# folded into the note above, because it is the one path in this repo that
+# writes geometry at computed indices into fixed-size arrays: the clipper
+# fills a polygon of up to eight vertices in place, the fan triangulator
+# indexes into it, and both are bounded by arithmetic rather than by a
+# container. ASan is the check that the arithmetic is right.
+./build-asan/prism_tests
+./build-asan/hyperslice_tests
+./build-asan/terrain4d_tests
 
 echo ""
 echo "All sanitizer runs clean (TSan + ASan + UBSan)."

@@ -46,8 +46,17 @@ gfx::VertexPacked pack_vertex(const glm::vec3& p, int normal_idx,
     v.z = static_cast<std::uint8_t>(p.z);
     v.normal = static_cast<std::uint8_t>(normal_idx);
     v.ao = static_cast<std::uint8_t>(ao);
-    v.u = static_cast<std::uint16_t>(uu);
-    v.v = static_cast<std::uint16_t>(vv);
+    // uv in 1/64 of a block, the same unit the prism mesher uses.
+    //
+    // A run length is a whole number of blocks here and needs no
+    // fraction, but carrying two encodings means the shader needs a
+    // uniform to tell them apart, and that uniform then has to be right
+    // for every mesh in a draw call - which stops the two meshers from
+    // ever coexisting in one world. One unit costs nothing (a 256-block
+    // run is 16384, well inside the u16) and buys a mesher that can be
+    // switched at runtime.
+    v.u = gfx::quantize_sub_unit_uv(uu);
+    v.v = gfx::quantize_sub_unit_uv(vv);
     v.block_id = id;
     v.light = light;
     return v;
@@ -152,6 +161,7 @@ ChunkMeshData build_chunk_mesh_naive(const Chunk& chunk,
     auto t0 = clock::now();
 
     ChunkMeshData out;
+    out.uv_scale = gfx::kSubUnitUVScale;
     out.vertices.reserve(static_cast<size_t>(chunk.solid_count()) * 8);
 
     for (int y = 0; y < kChunkSizeY; ++y) {
@@ -363,6 +373,7 @@ ChunkMeshData build_chunk_mesh_greedy(const Chunk& chunk,
     auto t0 = clock::now();
 
     ChunkMeshData out;
+    out.uv_scale = gfx::kSubUnitUVScale;
     if (chunk.empty()) {
         out.build_ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
         return out;

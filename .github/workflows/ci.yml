@@ -33,13 +33,24 @@ jobs:
             libglu1-mesa-dev \
             xorg-dev \
             libwayland-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev \
+            xvfb \
+            libgl1-mesa-dri
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j
+
+      - name: Test-suite registration check
+        # ctest cannot notice a test that was never registered, and that
+        # is not hypothetical: an unclosed if(APPLE) put prism_tests and
+        # hyperslice_tests - the whole 4D cross-section kernel - inside
+        # the Apple branch, so this job ran six tests on Linux and eight
+        # on macOS and reported 100% passed on both. The suite is
+        # written down in the script; both platforms must match it.
+        run: ./scripts/check_test_targets.py build
 
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
@@ -50,13 +61,74 @@ jobs:
         # byte-identical BENCH_SUMMARY. A tolerance would hide the case
         # this exists for, which is a machine-dependent figure being added
         # to a table that promises the opposite.
+        # It also re-runs the same bar against the prism tiling's
+        # PRISM_SUMMARY, which carries counts only - the millisecond
+        # columns of hyperslice --mesh are deliberately left out of it,
+        # because those are the one part of that table that moves with
+        # what else the machine is doing.
         run: ./scripts/check_invariance.py 3 ./build/voxel_engine
+
+      - name: Header self-sufficiency check
+        # A header that leans on a transitive include builds fine on the
+        # standard library that happens to supply it and breaks on the
+        # next one. That is what happened: std::cos with no <cmath> built
+        # clean on macOS libc++ and failed this very job on libstdc++.
+        # Compiling headers standalone does NOT catch it - that still runs
+        # under the local standard library - so this checks the dependency
+        # textually instead, and works anywhere.
+        run: ./scripts/check_headers.py
+
+      - name: 4D slice verification
+        # Linux only, under a virtual display.
+        #
+        # CI never ran this, so the entire fourth-dimension feature could
+        # have been deleted and only a local audit would have noticed.
+        # Both motions: travelling along w and rotating the slice, each
+        # checked to change the world, return it exactly when reversed,
+        # keep player edits, converge, and leave every triangle valid -
+        # that last one reads meshes back off the GPU, so unlike --bench
+        # this needs a real context and cannot run on a bare runner.
+        #
+        # The macOS runner has no way to give it one: NSGL fails to find a
+        # pixel format with no window server, and there is no equivalent
+        # of xvfb. Linux gets Xvfb plus Mesa's llvmpipe, which is slow but
+        # complete. Radius 4 rather than the audit's 6 for that reason -
+        # these are correctness properties and they hold at any window
+        # size.
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./build/voxel_engine --verify-4d --radius 4
+
+      - name: 4D cross-section blocks
+        # The same 20 properties with blocks drawn as their 4D
+        # cross-section rather than as cubes. Not a duplicate of the step
+        # above: it is a different mesher, a different vertex encoding and
+        # a different order of operations (cells first, the voxel grid
+        # rasterised from them), so nothing that holds for one is implied
+        # for the other. tilt_returned is a byte-identity check and is the
+        # one that would notice the tiling failing to reproduce itself.
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./build/voxel_engine --verify-4d --slice-prisms --radius 4
+
+      - name: GPU mesh validation, cross-section blocks at a tilt
+        # --validate on its own runs the DEFAULT cut, and the default cut
+        # is flat - where every cell is a whole square and the vertex
+        # quantisation cannot round an edge into a different direction.
+        # Turning both planes is what produces sub-step edges, and running
+        # this for the first time flagged 610 backwards-facing triangles
+        # on a world that looked correct and that every unit test passed.
+        if: runner.os == 'Linux'
+        run: >
+          xvfb-run -a ./build/voxel_engine --slice-prisms
+          --slice-tilt 0.45 --slice-tilt-xw 0.45 --validate --radius 4
 
       - name: README flag check
         # Prose is the only part of the project with no failure mode, so it
         # is the part that quietly stops being true. This checks the slice
-        # a machine can: every --flag the README documents exists.
-        run: ./scripts/check_readme_flags.py ./build/voxel_engine
+        # a machine can: every --flag the README documents exists, across
+        # every binary the README gives a command line for - not just the
+        # engine, which is what it used to check and which made a real
+        # slice4d flag look like a documentation error.
+        run: ./scripts/check_readme_flags.py ./build
 
       - name: Run benchmark and validate ratios
         run: |

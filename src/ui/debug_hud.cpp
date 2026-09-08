@@ -31,6 +31,12 @@ void DebugHud::shutdown() {
     initialized_ = false;
 }
 
+bool DebugHud::wants_mouse() const {
+    // Hidden HUD captures nothing: F2 should give the whole window back.
+    if (!initialized_ || !visible_) return false;
+    return ImGui::GetIO().WantCaptureMouse;
+}
+
 void DebugHud::begin_frame() {
     if (!initialized_) return;
     ImGui_ImplOpenGL3_NewFrame();
@@ -67,6 +73,19 @@ void DebugHud::draw_perf_panel(const PerfFrame& f) {
         ImGui::Separator();
 
         ImGui::Text("chunks drawn : %d / %d", f.chunks_drawn, f.chunks_total);
+    if (f.four_d) {
+        // The lag between the two is the point, not a defect: the player
+        // travels along w continuously and the world is rebuilt in steps,
+        // so geometry trails position by up to one rebuild threshold.
+        ImGui::Text("w %.2f (geom %.2f)   cut  zw %+.3f  xw %+.3f rad",
+                    f.slice_w, f.meshed_w, f.slice_theta, f.slice_phi);
+        if (f.prisms) {
+            ImGui::Text("blocks  : 4D cross-sections, %.2fx cells per column"
+                        " (P for cubes)", f.prism_cells_per_column);
+        } else {
+            ImGui::Text("blocks  : cubes (P draws their 4D cross-section)");
+        }
+    }
         if (f.chunks_total > 0) {
             float cull_ratio = static_cast<float>(f.chunks_total) /
                                std::max(1, f.chunks_drawn);

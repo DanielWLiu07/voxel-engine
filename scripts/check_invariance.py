@@ -28,13 +28,54 @@ import subprocess
 import sys
 
 
-def summary(binary):
-    out = subprocess.run([binary, "--bench"], capture_output=True, text=True,
+def summary_line(argv, tag):
+    out = subprocess.run(argv, capture_output=True, text=True,
                          timeout=900).stdout
     for line in out.splitlines():
-        if line.startswith("BENCH_SUMMARY"):
+        if line.startswith(tag):
             return line.strip()
     return None
+
+
+def summary(binary):
+    return summary_line([binary, "--bench"], "BENCH_SUMMARY")
+
+
+def prism(runs, binary="./build/hyperslice"):
+    """The same bar for the 4D cross-section mesher.
+
+    PRISM_SUMMARY carries only counts - cells per chunk and quads per cut -
+    with the millisecond columns of --mesh deliberately left out, because
+    those are the one part of that table that moves with what else the
+    machine is doing. A tiling is a property of the geometry and has to
+    reproduce exactly.
+
+    Skipped rather than failed when the binary is not built: this runs from
+    the same entry point as the engine check and should not turn a partial
+    build into a red line about invariance.
+    """
+    import os
+    if not os.path.exists(binary):
+        print(f"\nskip: {binary} not built, prism tiling not checked")
+        return 0
+
+    seen = []
+    for i in range(runs):
+        line = summary_line([binary, "--mesh", "3"], "PRISM_SUMMARY")
+        if line is None:
+            print(f"\nFAIL: run {i + 1} produced no PRISM_SUMMARY")
+            return 1
+        seen.append(line)
+        print(f"  prism run {i + 1}: {line}")
+
+    if len(set(seen)) == 1:
+        fields = len(seen[0].split()) - 1
+        print(f"ok: {fields} prism fields identical across {runs} runs")
+        return 0
+    print("\nFAIL: PRISM_SUMMARY is not reproducible across runs")
+    for line in sorted(set(seen)):
+        print(f"  {line}")
+    return 1
 
 
 def main():
@@ -53,7 +94,7 @@ def main():
     if len(set(seen)) == 1:
         fields = len(seen[0].split()) - 1
         print(f"\nok: {fields} fields identical across {runs} runs")
-        return 0
+        return prism(runs)
 
     # Name the fields that moved, not just the fact that something did.
     print("\nFAIL: BENCH_SUMMARY is not reproducible across runs")

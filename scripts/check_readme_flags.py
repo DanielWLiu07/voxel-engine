@@ -16,7 +16,13 @@ has to appear in --help. It does not check that the surrounding sentence
 is true, which is the larger and unautomatable half. It checks the part a
 machine can.
 
-    scripts/check_readme_flags.py [path/to/voxel_engine]
+    scripts/check_readme_flags.py [path/to/build]
+
+The README documents more than one executable, so the flags it mentions
+are checked against the union of every binary's --help. Scoping it to
+voxel_engine alone made it fail on `slice4d --tilt`, which is a real flag
+on a different program - a false failure, and a guard that cries wolf is
+one people learn to skip.
 """
 
 import pathlib
@@ -27,21 +33,37 @@ import sys
 # cmake and ctest flags appear in the build instructions and are not ours.
 FOREIGN = {"--build", "--test-dir", "--output-on-failure", "--target"}
 
+# Every executable the README gives a command line for. Each must answer
+# --help, which is a small contract but the one this check rests on: a
+# binary that ignores --help and runs its normal job instead would make
+# this script slow, or worse, pass by printing something flag-shaped.
+BINARIES = ("voxel_engine", "slice4d", "hyperslice")
+
 
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else "./build/voxel_engine"
+    build = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "./build")
+    # Accept a binary path as well as a build directory. The argument used
+    # to be the engine binary, and silently reinterpreting that as a
+    # directory would have turned every existing caller into a confusing
+    # "cannot run ./build/voxel_engine/voxel_engine".
+    if build.is_file():
+        build = build.parent
     root = pathlib.Path(__file__).resolve().parent.parent
     readme = (root / "README.md").read_text(encoding="utf-8")
 
-    try:
-        help_text = subprocess.run([binary, "--help"], capture_output=True,
-                                   text=True, timeout=60).stdout
-    except (OSError, subprocess.SubprocessError) as e:
-        print(f"cannot run {binary}: {e}")
-        return 1
-    if not help_text.strip():
-        print(f"{binary} --help printed nothing")
-        return 1
+    help_text = ""
+    for name in BINARIES:
+        binary = build / name
+        try:
+            out = subprocess.run([str(binary), "--help"], capture_output=True,
+                                 text=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"cannot run {binary}: {e}")
+            return 1
+        if not out.strip():
+            print(f"{binary} --help printed nothing")
+            return 1
+        help_text += out
 
     in_readme = set(re.findall(r"(--[a-z][a-z0-9-]+)", readme)) - FOREIGN
     in_help = set(re.findall(r"(--[a-z][a-z0-9-]+)", help_text))
@@ -54,7 +76,8 @@ def main():
     # without being in the README, and several deliberately do.
     undocumented = sorted(in_help - in_readme)
 
-    print(f"\n{len(in_readme)} flags in README, {len(in_help)} in --help")
+    print(f"\n{len(in_readme)} flags in README, {len(in_help)} across "
+          f"{len(BINARIES)} binaries")
     if undocumented:
         print(f"not mentioned in the README (fine, listed for awareness): "
               f"{' '.join(undocumented)}")

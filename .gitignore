@@ -27,3 +27,12 @@ saves/
 screenshots/
 textures/preview/
 
+
+# slice4d writes 24 slices by default; only the three the README cites are
+# committed (w_00 and w_01 to show a step is continuous, w_08 to show the
+# axis eventually leads somewhere else). Regenerate the rest with
+# ./build/slice4d.
+docs/media/slice4d/*.png
+!docs/media/slice4d/w_00.png
+!docs/media/slice4d/w_01.png
+!docs/media/slice4d/w_08.png

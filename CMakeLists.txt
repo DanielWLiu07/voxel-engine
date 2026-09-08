@@ -122,8 +122,11 @@ add_executable(voxel_engine
   src/world/chunk_light.cpp
   src/world/chunk_mesh.cpp
   src/world/chunk_serialize.cpp
+  src/world/prism_mesh.cpp
   src/world/section_visibility.cpp
   src/world/terrain_gen.cpp
+  src/world/terrain_gen4d.cpp
+  src/world/noise4d.cpp
   src/world/world.cpp
   src/world/world_io.cpp
 )
@@ -175,9 +178,12 @@ if(VOXEL_BUILD_TESTS)
     src/world/chunk_light.cpp
     src/world/chunk_mesh.cpp
     src/world/chunk_serialize.cpp
+    src/world/prism_mesh.cpp
     src/world/world_io.cpp
     src/world/section_visibility.cpp
     src/world/terrain_gen.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
     src/render/lighting.cpp
     src/gfx/frustum.cpp
     src/gfx/mesh.cpp
@@ -199,6 +205,57 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME world_unit COMMAND voxel_tests)
 
+  # Everything below is unconditional, and the endif() above is why. It
+  # used to sit forty lines further down, so the if(APPLE) that adds
+  # Cocoa to voxel_tests swallowed both targets that follow: on macOS
+  # eight tests ran, on Linux the binaries did not exist and ctest
+  # reported "100% tests passed ... out of 6". Nothing failed, because
+  # nothing was registered. scripts/check_test_targets.py now compares
+  # the registered suite against a written-down list on both platforms.
+
+  # These two are ctest tests, not benchmarks, and they used to live in
+  # the VOXEL_BUILD_BENCH block below because that is where the
+  # hyperslice binary they grew up beside lives. That put them out of
+  # reach of scripts/run_sanitizers.sh, which configures with
+  # -DVOXEL_BUILD_BENCH=OFF - so the one path in this repo that writes
+  # geometry at computed indices into fixed-size arrays was the one
+  # path ASan never saw.
+  # The prism mesher: a chunk meshed as the cross-section of a 4D world.
+  # Its own binary for the same reason mesher_fuzz_tests is - the
+  # properties it pins (a closed surface, a tiling that matches what
+  # physics rasterises) are its own oracle.
+  add_executable(prism_tests
+    tests/test_prism_mesh.cpp
+    src/world/prism_mesh.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_light.cpp
+    src/world/terrain_gen.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+    src/gfx/mesh.cpp
+  )
+  target_include_directories(prism_tests PRIVATE src)
+  target_link_libraries(prism_tests PRIVATE glm::glm fastnoise glad)
+  if(APPLE)
+    target_link_libraries(prism_tests PRIVATE
+      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
+    )
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(prism_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Wno-unused-parameter
+    )
+  endif()
+  add_test(NAME prism_mesh COMMAND prism_tests)
+
+  add_executable(hyperslice_tests tests/test_hyperslice.cpp
+                                  src/world/noise4d.cpp
+                                  src/world/terrain_gen4d.cpp
+                                  src/world/terrain_gen.cpp)
+  target_include_directories(hyperslice_tests PRIVATE src)
+  target_link_libraries(hyperslice_tests PRIVATE fastnoise)
+  add_test(NAME hyperslice COMMAND hyperslice_tests)
+
   # Differential fuzz: greedy vs naive, decomposed to unit faces and
   # compared as sets, over randomized fills x neighbour configurations.
   # Own binary because it is its own oracle and worth failing on its own
@@ -219,6 +276,31 @@ if(VOXEL_BUILD_TESTS)
     )
   endif()
   add_test(NAME mesher_equivalence COMMAND mesher_fuzz_tests)
+
+  # 4D gradient noise. Its own binary and no dependencies at all beyond the
+  # standard library: it is the one piece of a four-dimensional terrain
+  # generator that cannot come from FastNoiseLite, which stops at 3D.
+  add_executable(noise4d_tests tests/test_noise4d.cpp src/world/noise4d.cpp)
+  target_include_directories(noise4d_tests PRIVATE src)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(noise4d_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME noise4d COMMAND noise4d_tests)
+
+  # Four-dimensional terrain generation. Its own binary next to the noise
+  # tests: no GL, and the only reason fastnoise is on the line is that
+  # terrain_gen4d.cpp reads the altitude bands out of terrain_gen.h.
+  add_executable(terrain4d_tests
+    tests/test_terrain_gen4d.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+  )
+  target_include_directories(terrain4d_tests PRIVATE src)
+  target_link_libraries(terrain4d_tests PRIVATE fastnoise)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(terrain4d_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME terrain4d COMMAND terrain4d_tests)
 
   # Command-line parsing. Its own binary for the same reason as the fuzzer:
   # it is pure string -> struct with no voxel or GL dependency at all, so
@@ -248,6 +330,65 @@ endif()
 # Standalone, header-only queue, no GL. Built in Release for honest numbers.
 option(VOXEL_BUILD_BENCH "Build standalone microbenchmarks" ON)
 if(VOXEL_BUILD_BENCH)
+  # Where noise4d.cpp's normalization constant comes from. Committed so the
+  # figure in that comment has an input anyone can re-run.
+  add_executable(noise4d_range src/bench/noise4d_range.cpp src/world/noise4d.cpp)
+  target_include_directories(noise4d_range PRIVATE src)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(noise4d_range PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
+  # Renders 3D slices of a 4D heightfield as PNGs. The cheap answer to
+  # whether a fourth spatial axis morphs the world coherently or just
+  # reseeds it, asked before committing the engine to 4D storage.
+  add_executable(slice4d src/bench/slice4d.cpp src/world/noise4d.cpp
+                         src/world/terrain_gen4d.cpp)
+  target_include_directories(slice4d PRIVATE src)
+  target_link_libraries(slice4d PRIVATE stb fastnoise)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(slice4d PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
+  # What the fourth dimension costs: a step along w invalidates every mesh
+  # in the window, so this measures the full rebuild and how much of it an
+  # incremental scheme could skip. CPU only, single-threaded on purpose.
+  add_executable(wcost
+    src/bench/wcost.cpp
+    src/world/terrain_gen4d.cpp
+    src/world/noise4d.cpp
+    src/world/chunk_mesh.cpp
+    src/world/chunk_light.cpp
+    src/world/chunk_serialize.cpp
+  )
+  target_include_directories(wcost PRIVATE src)
+  # fastnoise is here only for its include dir: terrain_gen4d.cpp reads
+  # the altitude band constants out of terrain_gen.h, which includes
+  # FastNoiseLite. No 3D noise is sampled by this binary.
+  target_link_libraries(wcost PRIVATE glm::glm glad fastnoise)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(wcost PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
+  # What 4D Miner's cross-section look would cost, in geometry rather
+  # than in opinion. Pure math: no GL, no engine, no world.
+  add_executable(hyperslice src/bench/hyperslice.cpp src/world/noise4d.cpp
+                            src/world/terrain_gen4d.cpp
+                            src/world/terrain_gen.cpp
+                            src/world/prism_mesh.cpp
+                            src/world/chunk_mesh.cpp
+                            src/world/chunk_light.cpp
+                            src/gfx/mesh.cpp)
+  target_include_directories(hyperslice PRIVATE src)
+  target_link_libraries(hyperslice PRIVATE stb fastnoise glm::glm glad)
+  if(APPLE)
+    target_link_libraries(hyperslice PRIVATE
+      ${COCOA_LIB} ${IOKIT_LIB} ${COREVIDEO_LIB} ${OPENGL_LIB}
+    )
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(hyperslice PRIVATE -Wall -Wextra -Wpedantic -O2)
+  endif()
+
   add_executable(queue_bench src/bench/queue_bench.cpp)
   target_include_directories(queue_bench PRIVATE src)
   find_package(Threads REQUIRED)

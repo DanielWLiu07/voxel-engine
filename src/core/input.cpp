@@ -7,6 +7,8 @@ void Input::attach(GLFWwindow* w) {
     have_last_mouse_ = false;
     mouse_dx_ = mouse_dy_ = 0.0f;
     captured_ = false;
+    scroll_accum_ = 0.0f;
+    scroll_dy_ = 0.0f;
     for (auto& v : key_was_down_) v = false;
 }
 
@@ -23,6 +25,9 @@ void Input::begin_frame() {
     }
     last_mx_ = mx;
     last_my_ = my;
+    // Drain the accumulator: a frame sees each scroll notch once.
+    scroll_dy_ = scroll_accum_;
+    scroll_accum_ = 0.0f;
 }
 
 bool Input::key_down(int key) const {

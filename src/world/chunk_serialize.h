@@ -2,6 +2,7 @@
 
 #include "world/chunk.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 

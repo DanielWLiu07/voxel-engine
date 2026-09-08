@@ -1,0 +1,336 @@
+// Renders 3D slices of a 4D heightfield as PNGs, one per w.
+//
+// This is the question a 4D voxel engine has to answer before any of it is
+// worth building: as you move along the fourth axis, does the world morph
+// into a recognisably related place, or does it flicker between unrelated
+// worlds? A slice that has nothing to do with its neighbour is not a
+// fourth dimension, it is a seed change with extra steps.
+//
+// Answering it here, on a heightfield and a few hundred lines, costs a day
+// instead of the weeks that answering it inside the engine would.
+//
+//     cmake --build build --target slice4d && ./build/slice4d
+//
+// Writes docs/media/slice4d/w_XX.png plus a SLICE4D line of measurements.
+//
+//     ./build/slice4d --tilt [seed]
+//
+// answers the same question for the OTHER motion through w. Translating
+// along w moves an axis-aligned slice; ROTATING it tilts the cut, which
+// is what shows blocks in cross section instead of swapping one
+// axis-aligned world for another. Prints a table and no images.
+
+#include "world/terrain_gen.h"  // altitude band constants
+#include "world/terrain_gen4d.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr int kSize    = 512;   // pixels per slice, one pixel per world column
+constexpr int kSlices  = 24;    // how many w values to render
+// One world unit per slice by default.
+//
+// It used to be 0.35, which made the slice INDEX not the w value: the
+// committed w_01.png was w=0.35 and w_08.png was w=2.80, while the
+// captions said "one step" and "eight steps" and the documented command
+// did not reproduce either image. A default that makes `w_NN` mean w=NN
+// removes the whole class of mismatch.
+float g_w_step = 1.0f;
+
+// Bands come from the generator's own header, not retyped here.
+using world::kSeaLevel;
+using world::kSandBand;
+using world::kStoneBand;
+using world::kSnowBand;
+
+struct Rgb { std::uint8_t r, g, b; };
+
+// Relief shading. Without it a heightfield drawn by colour band alone is a
+// classification map: it shows which band a column is in and nothing about
+// the shape of the land. The gradient is the whole point of a heightfield,
+// so light it - a fixed low sun from the northwest, dotted with the
+// surface normal built from the local slope.
+float hillshade(int h, int h_east, int h_south) {
+    const float dx = static_cast<float>(h_east - h);
+    const float dz = static_cast<float>(h_south - h);
+    // Normal of the surface (-dx, 1, -dz), normalized.
+    const float len = std::sqrt(dx * dx + dz * dz + 1.0f);
+    const float nx = -dx / len, ny = 1.0f / len, nz = -dz / len;
+    // Sun low in the northwest, which rakes the slopes rather than
+    // flattening them the way an overhead light would.
+    constexpr float kLx = -0.55f, kLy = 0.62f, kLz = -0.55f;
+    const float lambert = nx * kLx + ny * kLy + nz * kLz;
+    return std::clamp(0.45f + 0.75f * lambert, 0.25f, 1.35f);
+}
+
+// The engine's surface bands, so these images read as terrain rather than
+// as a heatmap. Shaded by height within each band so relief is visible.
+Rgb shade(int height, float relief) {
+    const float t = std::clamp(static_cast<float>(height) / 60.0f, 0.0f, 1.0f);
+    // Water is flat, so relief must not darken it into mud; land takes the
+    // full hillshade.
+    const float lift = (height <= kSeaLevel)
+        ? (0.75f + 0.35f * t)
+        : (0.65f + 0.35f * t) * relief;
+    auto mul = [lift](int c) {
+        return static_cast<std::uint8_t>(std::clamp(
+            static_cast<int>(static_cast<float>(c) * lift), 0, 255));
+    };
+    if (height <= kSeaLevel)                 return {mul(40),  mul(90),  mul(160)};
+    if (height <= kSeaLevel + kSandBand)     return {mul(210), mul(195), mul(140)};
+    if (height >= kSnowBand)                 return {mul(240), mul(244), mul(250)};
+    if (height >= kStoneBand)                return {mul(120), mul(118), mul(115)};
+    return {mul(70), mul(135), mul(60)};
+}
+
+// No local copy of the terrain maths here any more.
+//
+// This file used to carry its own kWScale, its own height formula and its
+// own amplitude, and they drifted from src/world/terrain_gen4d.* the
+// moment that amplitude was refitted. The w-scale table in docs/4d.md was
+// then measured against constants the shipped generator no longer used -
+// every row stale by 2-4x, and the conclusion it supported false. A
+// harness that measures a copy of the thing measures nothing.
+//
+// It calls world::TerrainGen4D now, so what it reports is by construction
+// what the engine would generate.
+
+}  // namespace
+
+// How far a tilted slice diverges from a flat one, over the same window
+// the images use. Reported against theta = 0 rather than against the
+// previous row, because the question is how far a given tilt takes you
+// from where you started, not how far each row is from its neighbour.
+int tilt_table(std::uint32_t seed) {
+    const world::TerrainGen4D terrain(seed);
+    std::vector<int> flat(static_cast<std::size_t>(kSize) * kSize);
+    auto sample = [&](float theta, std::vector<int>& out) {
+        for (int py = 0; py < kSize; ++py)
+            for (int px = 0; px < kSize; ++px) {
+                const int x = static_cast<int>(px) - kSize / 2;
+                const int z = static_cast<int>(py) - kSize / 2;
+                out[static_cast<std::size_t>(py) * kSize + px] =
+                    terrain.height_at(x, z, {0.0f, theta});
+            }
+    };
+    sample(0.0f, flat);
+
+    // 0.003 is one scroll notch; 0.075 and 0.15 are the two tilts the
+    // README's triptych is captured at, and 0.15 is the tilt clip's sweep
+    // amplitude; the rest bracket them.
+    const float tilts[] = {0.003f, 0.01f, 0.03f, 0.05f, 0.075f, 0.15f,
+                           0.25f, 1.5708f};
+    std::printf("tilt divergence from theta=0, seed %u, %dx%d columns\n\n",
+                seed, kSize, kSize);
+    std::printf("  %8s  %10s  %8s  %10s\n",
+                "tilt", "degrees", "changed", "max jump");
+    std::vector<int> tilted(flat.size());
+    for (const float t : tilts) {
+        sample(t, tilted);
+        int changed = 0, worst = 0;
+        for (std::size_t i = 0; i < flat.size(); ++i) {
+            const int d = std::abs(flat[i] - tilted[i]);
+            if (d != 0) ++changed;
+            worst = std::max(worst, d);
+        }
+        std::printf("  %8.4f  %7.2f deg  %7.1f%%  %7d\n", t,
+                    t * 180.0f / 3.14159265f,
+                    100.0 * changed / static_cast<double>(flat.size()), worst);
+    }
+    // The comparison that matters: a whole rebuild threshold of w, which
+    // is the strongest thing TRANSLATION does between two rebuilds.
+    std::vector<int> shifted(flat.size());
+    for (int py = 0; py < kSize; ++py)
+        for (int px = 0; px < kSize; ++px)
+            shifted[static_cast<std::size_t>(py) * kSize + px] =
+                terrain.height_at(px - kSize / 2, py - kSize / 2, {0.12f, 0.0f});
+    int changed = 0, worst = 0;
+    for (std::size_t i = 0; i < flat.size(); ++i) {
+        const int d = std::abs(flat[i] - shifted[i]);
+        if (d != 0) ++changed;
+        worst = std::max(worst, d);
+    }
+    std::printf("\n  for comparison, translating w by one rebuild threshold "
+                "(0.12): %.1f%% changed, max jump %d\n",
+                100.0 * changed / static_cast<double>(flat.size()), worst);
+    return 0;
+}
+
+// Is the world a 3D SLICE of a 4D solid, or a heightfield PARAMETERISED
+// by a fourth number?
+//
+// The distinction is the one visible difference from the games that do
+// this, and it is decided by a count rather than a timing: a heightfield
+// has exactly one solid run per column, at every orientation, so it can
+// never produce an overhang. Tilting it gives a different plausible
+// landscape; slicing a 4D solid at an angle gives an implausible one -
+// arches, roofs over air, ground that floats.
+//
+// Reported as a fraction of columns so it means the same thing on any
+// machine, unlike the cost of changing it.
+int shape_report(std::uint32_t seed) {
+    const world::TerrainGen4D t(seed);
+    std::printf("terrain shape, seed %u, 5x5 chunks per row\n\n", seed);
+    std::printf("  %8s  %14s  %16s\n", "tilt", "columns", "with an overhang");
+    for (const float theta : {0.0f, 0.05f, 0.15f, 0.5f}) {
+        int cols = 0, overhung = 0;
+        for (int cx = -2; cx <= 2; ++cx) {
+            for (int cz = -2; cz <= 2; ++cz) {
+                world::Chunk c;
+                t.fill_chunk(cx, cz, {0.0f, theta}, c);
+                for (int z = 0; z < world::kChunkSizeZ; ++z) {
+                    for (int x = 0; x < world::kChunkSizeX; ++x) {
+                        ++cols;
+                        int top = -1;
+                        for (int y = world::kChunkSizeY - 1; y >= 0; --y)
+                            if (c.get(x, y, z) != world::BlockId::Air) { top = y; break; }
+                        for (int y = 1; y <= top; ++y) {
+                            if (c.get(x, y, z) != world::BlockId::Air &&
+                                c.get(x, y - 1, z) == world::BlockId::Air) {
+                                ++overhung; break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::printf("  %8.2f  %14d  %13d (%.1f%%)\n", theta, cols, overhung,
+                    100.0 * overhung / cols);
+    }
+    std::printf("\nA heightfield scores whatever the cave pass carves and "
+                "nothing more -\nmeasured at 14.5%% before the surface "
+                "became a density field. The rest\nis the cut entering and "
+                "leaving the ground down one column, which is what\nputs "
+                "arches and floating ground in a 4D world. See docs/4d.md.\n");
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--shape") {
+        return shape_report(argc > 2
+            ? static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10))
+            : 1337u);
+    }
+    if (argc > 1 && (std::string(argv[1]) == "--help" ||
+                     std::string(argv[1]) == "-h")) {
+        std::printf(
+            "slice4d - renders 3D slices of the 4D heightfield\n\n"
+            "  slice4d [seed] [out_dir] [w_step]\n"
+            "      write out_dir/w_NN.png for 24 values of w\n"
+            "      (default seed 1337, docs/media/slice4d, step 1.0)\n\n"
+            "  slice4d --tilt [seed]\n"
+            "      table of how far a ROTATED slice diverges from a flat\n"
+            "      one, and how that compares with translating along w\n\n"
+            "  slice4d --shape [seed]\n"
+            "      how much of the world is not a heightfield: the one\n"
+            "      visible difference from a true 4D-solid slicer\n\n"
+            "  slice4d --help\n");
+        return 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--tilt") {
+        return tilt_table(argc > 2
+            ? static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10))
+            : 1337u);
+    }
+
+    const std::uint32_t seed = (argc > 1)
+        ? static_cast<std::uint32_t>(std::strtoul(argv[1], nullptr, 10)) : 1337u;
+    const std::string out_dir = (argc > 2) ? argv[2] : "docs/media/slice4d";
+    if (argc > 3) g_w_step = std::strtof(argv[3], nullptr);
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir, ec);
+
+    const world::TerrainGen4D terrain(seed);
+
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kSize) * kSize * 3);
+    std::vector<int> prev_height;
+    double worst_slice_delta = 0.0;
+    double total_changed = 0.0;
+    int slices_compared = 0;
+
+    for (int s = 0; s < kSlices; ++s) {
+        const int w = static_cast<int>(static_cast<float>(s) * g_w_step);
+        std::vector<int> height(static_cast<std::size_t>(kSize) * kSize);
+
+        // Heights first, colours second: the hillshade needs each column's
+        // eastern and southern neighbours, so the field has to exist
+        // before any of it can be shaded.
+        for (int py = 0; py < kSize; ++py) {
+            for (int px = 0; px < kSize; ++px) {
+                // Centre the view on the origin so the same patch of world
+                // is framed in every slice - the only thing changing
+                // between images should be w.
+                const float x = static_cast<float>(px) - kSize * 0.5f;
+                const float z = static_cast<float>(py) - kSize * 0.5f;
+                height[static_cast<std::size_t>(py) * kSize + px] =
+                    terrain.height_at(static_cast<int>(x), static_cast<int>(z),
+                                      {static_cast<float>(w), 0.0f});
+            }
+        }
+        for (int py = 0; py < kSize; ++py) {
+            for (int px = 0; px < kSize; ++px) {
+                const std::size_t at = static_cast<std::size_t>(py) * kSize + px;
+                const int h  = height[at];
+                const int he = height[static_cast<std::size_t>(py) * kSize
+                                      + std::min(px + 1, kSize - 1)];
+                const int hs = height[static_cast<std::size_t>(
+                                          std::min(py + 1, kSize - 1)) * kSize + px];
+                const Rgb c = shade(h, hillshade(h, he, hs));
+                pixels[at * 3 + 0] = c.r;
+                pixels[at * 3 + 1] = c.g;
+                pixels[at * 3 + 2] = c.b;
+            }
+        }
+
+        char name[512];
+        std::snprintf(name, sizeof name, "%s/w_%02d.png", out_dir.c_str(), s);
+        if (!stbi_write_png(name, kSize, kSize, 3, pixels.data(), kSize * 3)) {
+            std::fprintf(stderr, "could not write %s\n", name);
+            return 1;
+        }
+
+        // The number that decides whether this is a dimension or a reseed:
+        // how much the terrain moved between adjacent slices. A continuous
+        // fourth axis gives small, bounded per-slice motion; unrelated
+        // worlds would give changes the size of the whole height range.
+        if (!prev_height.empty()) {
+            double sum = 0.0;
+            double worst = 0.0;
+            int changed = 0;
+            for (std::size_t i = 0; i < height.size(); ++i) {
+                const double d = std::abs(height[i] - prev_height[i]);
+                sum += d;
+                worst = std::max(worst, d);
+                if (d != 0.0) ++changed;
+            }
+            const double mean = sum / static_cast<double>(height.size());
+            const double changed_pct =
+                100.0 * changed / static_cast<double>(height.size());
+            std::printf("  w=%5.2f  mean |dh| vs previous slice %.3f, "
+                        "max %.0f, columns changed %.1f%%\n",
+                        w, mean, worst, changed_pct);
+            worst_slice_delta = std::max(worst_slice_delta, worst);
+            total_changed += changed_pct;
+            ++slices_compared;
+        }
+        prev_height = std::move(height);
+    }
+
+    std::printf("\nSLICE4D seed=%u slices=%d w_step=%.2f "
+                "max_column_jump=%.0f mean_columns_changed_pct=%.1f\n",
+                seed, kSlices, g_w_step, worst_slice_delta,
+                total_changed / std::max(1, slices_compared));
+    std::printf("wrote %d slices to %s\n", kSlices, out_dir.c_str());
+    return 0;
+}

@@ -191,8 +191,14 @@ const char* block_name(world::BlockId b) {
 
 void update_movement(core::Input& input, float dt,
                      gfx::FlyCamera& cam, game::Player& player,
-                     const world::World& wrld, bool walk_mode) {
-    cam.apply_mouse_delta(input.mouse_dx(), input.mouse_dy(), 0.12f);
+                     const world::World& wrld, bool walk_mode,
+                     bool slice_look) {
+    // While the 4D look modifier is held the mouse turns the CUT, not the
+    // camera, so the camera must not also consume the delta - otherwise
+    // the view swings while the world turns and neither reads clearly.
+    if (!slice_look) {
+        cam.apply_mouse_delta(input.mouse_dx(), input.mouse_dy(), 0.12f);
+    }
 
     if (walk_mode) {
         glm::vec3 fwd = cam.forward();   fwd.y = 0.0f;
@@ -284,13 +290,21 @@ int main(int argc, char** argv) {
     const int bench_edit = opt.bench_edit;
     const bool validate_mode = opt.validate_mode;
     const bool verify_edit_persistence = opt.verify_edit_persistence;
+    const bool verify_4d = opt.verify_4d;
     const int thread_override = opt.thread_override;
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
+    const int tilt_frames  = opt.capture_tilt;
+    const int walk_frames  = opt.capture_walk;
+    // Where --capture-walk measures its offsets from. Set on the first
+    // settled frame of the walk, never after.
+    glm::vec3 walk_origin{0.0f};
+    bool      walk_origin_set = false;
     // The two capture questions, named once (core/capture_mode.h). Built
     // from the same values the locals above carry; shot_after is the one
     // that counts down, so `capture` is rebuilt where that matters.
     core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
+                              tilt_frames, walk_frames,
                               bench_frames};
     const bool no_occlusion = opt.no_occlusion;
     const std::optional<world::ChunkCoord> only_chunk =
@@ -309,13 +323,29 @@ int main(int argc, char** argv) {
     // while the context is still current. That ordering is why this is a
     // named local at the top of main rather than something tucked inside a
     // setup helper.
+    // Every mode that exists to produce a file or a number rather than to
+    // be played, captures included.
+    //
+    // The image modes used to open a VISIBLE window, which meant taking a
+    // screenshot stole focus from whatever the person was actually doing
+    // and left a game window on top of their work for the duration. The
+    // frame is read back off the GPU either way - --bench and --validate
+    // have always rendered into an invisible window - so visibility was
+    // never doing anything for them except getting in the way.
     const bool headless = bench_frames > 0 || bench_io || bench_edit > 0 ||
                           validate_mode || verify_edit_persistence ||
+                          verify_4d || opt.bench_4d ||
+                          shot_after > 0 || orbit_frames > 0 ||
+                          cycle_frames > 0 || tilt_frames > 0 ||
+                          walk_frames > 0 ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
     auto win = core::Window::create({.visible = !headless,
-                                     .vsync   = vsync_enabled});
-    if (!win) return EXIT_FAILURE;
+                                     .vsync   = vsync_enabled,
+                                     .monitor = opt.monitor,
+                                     .list_monitors = opt.list_monitors});
+    // --list-monitors prints and stops, so a null window is success there.
+    if (!win) return opt.list_monitors ? EXIT_SUCCESS : EXIT_FAILURE;
     GLFWwindow* window = win->handle();
     // Section-graph occlusion culling (O to toggle). On by default; the
     // frustum-only path stays one keypress away (or --no-occlusion) for
@@ -410,6 +440,57 @@ int main(int argc, char** argv) {
                     "discarded on purpose)\n",
                     only_chunk->x, only_chunk->z);
     }
+    // The 4D world, when asked for. Declared here so it outlives every
+    // worker job that reads it, exactly as `terrain` does - the pool
+    // below is destroyed before both.
+    const world::TerrainGen4D terrain4d(terrain_seed);
+    if (opt.four_d) {
+        wrld.set_slice_source(&terrain4d, static_cast<float>(opt.slice_w));
+        // --slice-tilt is applied further down, once the camera has its
+        // pose, so it turns about the viewer exactly as the wheel does.
+        std::printf("\n"
+            "  ========================================================\n"
+            "   FOUR-DIMENSIONAL WORLD   (--3d for the ordinary one)\n"
+            "\n"
+            "   HOLD E / Q     travel along w, the 4th axis\n"
+            "   SCROLL WHEEL   rotate your 3D slice through 4D\n"
+            "\n"
+            "   WASD does NOT morph the world, at any tilt. Your slice\n"
+            "   is a fixed hyperplane and walking moves you WITHIN it,\n"
+            "   so what you can already see stays exactly as it is and\n"
+            "   what comes into view is ordinary new terrain. 4D Miner\n"
+            "   is the same; --warp-walk R turns the cut as you move if\n"
+            "   you want walking to warp anyway.\n"
+            "\n"
+            "   (On a tilted cut your w coordinate does change as you\n"
+            "   walk - one 4D cell every 2.3 blocks at 0.45 rad - but\n"
+            "   that has no visual consequence, because the hyperplane\n"
+            "   it moves you along is the one you are already in.)\n"
+            "\n"
+            "   These two are what change the world:\n"
+            "\n"
+            "   E/Q slide you along w - the world becomes a different\n"
+            "   but equally ordinary place, and Q brings it back exactly.\n"
+            "\n"
+            "   The WHEEL tilts the 3D slice you occupy. A tilted cut\n"
+            "   meets the 4D world at an angle, so terrain shows a\n"
+            "   different cross-section and structures appear to change\n"
+            "   shape. This is the one that looks four-dimensional.\n"
+            "\n"
+            "   F2 shows w on the HUD.  Starting at w=%d.\n"
+            "  ========================================================\n\n",
+            opt.slice_w);
+        if (opt.slice_prisms) {
+            wrld.set_prism_meshing(true);
+            std::printf(
+                "[world] prism meshing: blocks are drawn as the shape a 4D\n"
+                "        cell presents to your cut, not as cubes. Turn BOTH\n"
+                "        planes (wheel, and horizontal mouse with M held) to\n"
+                "        see it - one plane alone presents four-sided cells\n"
+                "        at every angle, where a cube is already exact.\n");
+        }
+    }
+
     core::ThreadPool pool(worker_count);
 
     const int total_chunks = (2 * stream_radius + 1) * (2 * stream_radius + 1);
@@ -463,7 +544,20 @@ int main(int argc, char** argv) {
     int streamed_out_total = 0;
 
     gfx::FlyCamera cam;
-    cam.set_position({0.0f, 80.0f, 80.0f});
+    // Launch vantage.
+    //
+    // The 3D world keeps its long-standing (0, 80, 80). The 4D world runs
+    // lower - roughly y=12..56 against the 3D generator's 30..45 plus
+    // lakes - so that vantage puts the camera hard against a snow face
+    // that fills the frame. There is no horizon and no landmark in it, so
+    // the terrain morphing along w is nearly impossible to read: the
+    // fourth dimension was working and invisible, which is a worse
+    // failure than it being broken.
+    //
+    // (0, 64, 0) looks out over coastline, islands and peaks - a view
+    // with enough structure that a change to it registers.
+    cam.set_position(opt.four_d ? glm::vec3{0.0f, 64.0f, 0.0f}
+                                : glm::vec3{0.0f, 80.0f, 80.0f});
     cam.set_yaw_pitch(-90.0f, -35.0f);
     if (have_pose_at) {
         bench_pose = "at";
@@ -504,8 +598,45 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --slice-tilt, applied here rather than where the 4D generator is
+    // attached, because it has to turn about the CAMERA.
+    //
+    // It used to pivot at the world origin, since the camera had no pose
+    // yet at that point. That made every tilted capture show more change
+    // than a player sees: rotating about the origin displaces terrain in
+    // proportion to its distance from z=0, so a camera parked 60 blocks
+    // out watched the ground under it move, where scrolling in game
+    // leaves it still and moves the distance. The stills were honest
+    // about the generator and wrong about the engine.
+    // In the tilt clip --slice-tilt names the sweep's AMPLITUDE rather
+    // than a fixed angle, so one flag covers both "hold this cut" and
+    // "swing through this much of one".
+    if (opt.slice_tilt != 0.0f && tilt_frames == 0) {
+        wrld.rotate_slice(opt.slice_tilt, cam.position().z);
+    }
+    if (opt.slice_tilt_xw != 0.0f) {
+        wrld.rotate_slice_xw(opt.slice_tilt_xw, cam.position().x);
+    }
+
     core::Input input;
+    glfwSetWindowUserPointer(window, &input);
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double dy) {
+        if (auto* in = static_cast<core::Input*>(glfwGetWindowUserPointer(w))) {
+            in->add_scroll(static_cast<float>(dy));
+        }
+    });
     input.attach(window);
+    // Capture the mouse straight away for an interactive run.
+    //
+    // Movement is gated on the cursor being captured, and Input::attach
+    // starts it released - so a fresh launch ignored WASD entirely until
+    // the player happened to press Tab, with nothing on screen saying so.
+    // An input trace caught this: the engine received 152 W keydowns and
+    // the player never left the spawn point.
+    //
+    // Not for headless runs, which have no window to capture into, and
+    // not for scripted captures, which lock the pose deliberately.
+    if (!headless) input.set_cursor_captured(true);
     input.set_cursor_captured(true);
 
     ui::DebugHud hud;
@@ -515,7 +646,10 @@ int main(int argc, char** argv) {
     }
 
     game::Player player;
-    player.set_position({0.0f, 80.0f, 0.0f});
+    // The 4D world runs lower than the 3D one - its heights span roughly
+    // y=12..56 against the 3D generator's 30..45-plus-lakes - so spawning
+    // at the 3D height would drop the player in well above the terrain.
+    player.set_position({0.0f, opt.four_d ? 64.0f : 80.0f, 0.0f});
     bool walk_mode = false;
     world::BlockId place_id = world::BlockId::Stone;
 
@@ -562,7 +696,67 @@ int main(int argc, char** argv) {
         float dt = static_cast<float>(now - prev_frame_time);
         prev_frame_time = now;
 
+        // No focus request here.
+        //
+        // One was tried - re-asserting glfwFocusWindow over the first few
+        // frames - because a launch from a background shell was leaving
+        // the terminal frontmost. It did not work, so it is not kept:
+        // macOS will not activate a non-bundled process that was started
+        // without a foreground session, whatever the window asks for. A
+        // normal launch from the user's own shell activates fine, and the
+        // request at window creation covers that.
+        //
+        // Keeping a fix that does not fix anything is worse than the bug,
+        // because the next person to see the symptom will believe it was
+        // handled.
+
         input.begin_frame();
+
+        // --trace-input: make the input path observable from outside the
+        // process. Prints any key the engine sees, and the player's
+        // position and w whenever they move, flushed every line so a
+        // watcher tailing the log sees it immediately.
+        if (opt.trace_input) {
+            static double last_trace = 0.0;
+            static glm::vec3 last_pos{1e9f};
+            static float last_w = 1e9f;
+            for (int k = 32; k < 350; ++k) {
+                if (input.key_down(k)) {
+                    std::printf("[input] key %d down\n", k);
+                    std::fflush(stdout);
+                }
+            }
+            static bool gate_logged = false;
+            if (!gate_logged) {
+                std::printf("[gate] cursor_captured=%d scripted_camera=%d walk_mode=%d\n",
+                            input.cursor_captured() ? 1 : 0,
+                            capture.scripted_camera() ? 1 : 0, walk_mode ? 1 : 0);
+                std::fflush(stdout);
+                gate_logged = true;
+            }
+            // The CAMERA, not the player. In fly mode - the default -
+            // update_movement drives cam.move_local and the player body is
+            // never touched, so tracing player.feet_position() showed a
+            // frozen position while the view was moving perfectly. That
+            // cost a round of hunting a movement bug that did not exist.
+            const glm::vec3 p = walk_mode ? player.feet_position() : cam.position();
+            // near_meshed_w, not meshed_w. The global worst is a chunk
+            // past the fog at any large radius, so tracing it showed
+            // "geometry 0.000" while the visible world was tracking
+            // within a few hundredths - the third time this trace has
+            // reported the engine broken when the instrument was wrong.
+            const float w = wrld.slice_w();
+            if (now - last_trace > 0.25 &&
+                (glm::distance(p, last_pos) > 0.01f ||
+                 std::fabs(w - last_w) > 0.001f)) {
+                std::printf("[state] pos %.2f,%.2f,%.2f  w %.3f (near geometry %.3f)\n",
+                            p.x, p.y, p.z, w, wrld.near_meshed_w());
+                std::fflush(stdout);
+                last_trace = now;
+                last_pos = p;
+                last_w = w;
+            }
+        }
 
         smoothed_frame_ms = smoothed_frame_ms * 0.9f + (dt * 1000.0f) * 0.1f;
         float instant_fps = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
@@ -581,6 +775,112 @@ int main(int argc, char** argv) {
             std::printf("[world] occlusion culling %s\n",
                         occlusion_cull_enabled ? "on" : "off");
         }
+        // Travel along w, held rather than pressed.
+        //
+        // This is the difference between a fourth dimension and a menu of
+        // worlds. key_down, not key_pressed: holding the key slides the
+        // player through w continuously, the same way holding W slides
+        // them through z, and the terrain morphs while they hold it. A
+        // keypress that jumped to the next integer slice made w a
+        // selector - you teleported between discrete worlds rather than
+        // moving through one.
+        if (wrld.is_4d()) {
+            float w_axis = 0.0f;
+            // --auto-w: travel forever with no input, so the fourth
+            // dimension can be watched rather than driven. Reverses
+            // direction every 12 units so it stays near the origin and
+            // the same landscape keeps morphing back and forth, which is
+            // easier to read than drifting away forever.
+            if (opt.auto_w) {
+                static float auto_dir = 1.0f;
+                if (wrld.slice_w() > 12.0f)  auto_dir = -1.0f;
+                if (wrld.slice_w() < -12.0f) auto_dir =  1.0f;
+                w_axis = auto_dir;
+                // Rotate as well as translate, because rotation is the
+                // half that looks four-dimensional: a sweep back and
+                // forth through most of a quarter turn shows the
+                // cross-sections changing without anyone touching the
+                // wheel.
+                //
+                // Not a SLOW sweep, whatever an earlier comment here
+                // said. 0.06 rad/s is twenty scroll notches a second and
+                // moves roughly four fifths of the visible columns in
+                // that second. It is a demonstration rate, chosen so the
+                // change is unmistakable to someone watching a recording,
+                // and it is well above anything a player produces by
+                // hand.
+                static float auto_theta_dir = 1.0f;
+                if (wrld.slice_theta() >  1.5f) auto_theta_dir = -1.0f;
+                if (wrld.slice_theta() < -1.5f) auto_theta_dir =  1.0f;
+                wrld.rotate_slice(auto_theta_dir * 0.06f * static_cast<float>(dt),
+                                  cam.position().z);
+            }
+            // . and , kept as aliases so anything that documented them
+            // still works, but E and Q are the bindings that matter.
+            // Scroll rotates the cut. This is the control that makes the
+            // world four-dimensional in the way a player can see standing
+            // still: a tilted hyperplane meets the 4D lattice at an angle,
+            // so terrain presents a different cross-section and structures
+            // appear to change shape. Travelling along w only ever swaps
+            // one axis-aligned world for another.
+            // Not while the pointer is over the HUD. ImGui's GLFW
+            // backend chains the previously installed scroll callback
+            // rather than replacing it, so without this a wheel event
+            // over a panel scrolls the panel AND rotates the world.
+            const float scroll = hud.wants_mouse() ? 0.0f : input.scroll_dy();
+            if (scroll != 0.0f) {
+                // 0.003 rad a notch, about a fifth of a degree.
+                //
+                // Fine, but not as fine as it sounds: a rotated
+                // hyperplane diverges from the original in proportion to
+                // distance, so the far edge of the window moves several
+                // times more than the ground under the player. Measured
+                // against a flat slice over a 512-block window:
+                //
+                //     0.003 rad  19% of columns change, max jump  2
+                //     0.010      50%                         6
+                //     0.030      73%                        15
+                //     0.050      81%                        17
+                //
+                // The first value chosen was 0.05, which moves four
+                // fifths of the visible columns in one notch - the scene
+                // being replaced rather than reshaped.
+                //
+                // Clamped per frame, because a wheel is not a keyboard.
+                // GLFW reports kinetic trackpad scrolling as a stream of
+                // large deltas, and the accumulator adds them all up
+                // between frames, so one flick could apply an arbitrary
+                // angle in a single step - past a quarter turn, which no
+                // amount of streaming budget can follow and which reads
+                // as the world being swapped. Eight notches is a fast
+                // deliberate turn and already moves about half the
+                // window; anything above it is the input device, not the
+                // player.
+                constexpr float kMaxNotchesPerFrame = 8.0f;
+                const float notches =
+                    std::clamp(scroll, -kMaxNotchesPerFrame, kMaxNotchesPerFrame);
+                wrld.rotate_slice(notches * 0.003f, cam.position().z);
+            }
+
+            if (!opt.auto_w) {
+            if (input.key_down(core::key_of(core::Bind::SliceForward)) ||
+                input.key_down(GLFW_KEY_PERIOD)) w_axis += 1.0f;
+            if (input.key_down(core::key_of(core::Bind::SliceBack)) ||
+                input.key_down(GLFW_KEY_COMMA))  w_axis -= 1.0f;
+            }
+            if (w_axis != 0.0f) {
+                // Sprint applies here too, so the fourth axis handles like
+                // the other three.
+                const float w_speed = input.key_down(GLFW_KEY_LEFT_SHIFT)
+                    ? world::World::kSprintSpeedW : world::World::kWalkSpeedW;
+                // Position only. The rebuild is not driven from here any
+                // more - see stream_slice below, which runs every frame
+                // whether or not the player is moving, so chunks left
+                // behind by a budget-limited frame still catch up after
+                // the key is released.
+                wrld.advance_w(w_axis * w_speed * static_cast<float>(dt));
+            }
+        }
         if (input.key_pressed(core::key_of(core::Bind::Vsync))) {
             vsync_enabled = !vsync_enabled;
             win->set_vsync(vsync_enabled);
@@ -589,6 +889,20 @@ int main(int argc, char** argv) {
         if (input.key_pressed(core::key_of(core::Bind::Wireframe))) {
             wireframe = !wireframe;
             std::printf("[gfx] wireframe %s\n", wireframe ? "on" : "off");
+        }
+        if (opt.four_d && input.key_pressed(core::key_of(core::Bind::SlicePrisms))) {
+            wrld.set_prism_meshing(!wrld.prism_meshing());
+            // resample_slice re-requests the whole window at the current
+            // cut, which is exactly what a mesher change needs. The
+            // position scale lives on each chunk, so the window draws
+            // correctly while the new meshes are still arriving rather
+            // than crushing whichever half has not caught up.
+            wrld.resample_slice(terrain, pool);
+            std::printf("[world] blocks drawn as %s\n",
+                        wrld.prism_meshing()
+                            ? "4D cross-sections (hexagonal pillars at a "
+                              "compound tilt)"
+                            : "cubes");
         }
         if (input.key_pressed(core::key_of(core::Bind::Save))) {
             save_world_to_disk(wrld, terrain_seed);
@@ -624,10 +938,86 @@ int main(int argc, char** argv) {
         }
         // Scripted capture locks the pose: live mouse/keys would steer the
         // camera mid-run and make the shot non-reproducible.
+        // Pull the world toward the player's w, a bounded slice of it per
+        // frame. Runs every frame rather than on a key, so the terrain
+        // keeps converging after the player stops travelling.
+        // Tell the world which way the camera faces before it decides
+        // what to rebuild. A slice rotation invalidates the whole window,
+        // so the rebuild queue is never short and the only question is
+        // what comes off it first; without this it is whatever is nearest,
+        // including everything behind the player.
+        {
+            const glm::vec3 f = cam.forward();
+            wrld.set_view_forward(f.x, f.z);
+        }
+        if (wrld.is_4d()) wrld.stream_slice(terrain, pool);
+
         capture.shot_after = shot_after;  // counts down as the shot settles
+        // --warp-walk: the cut turns a little for every block walked, so
+        // the world is a different slice by the time you get there.
+        //
+        // Driven by distance MOVED rather than by time, so standing still
+        // is still: a timer would keep morphing the world while the
+        // player was reading the HUD, which is disorienting rather than
+        // four-dimensional. Horizontal distance only - jumping is not
+        // travel through the fourth dimension.
+        if (opt.warp_walk > 0.0f && wrld.is_4d() && !capture.scripted_camera()) {
+            static glm::vec3 warp_last = cam.position();
+            const glm::vec3 now = cam.position();
+            const float dx = now.x - warp_last.x;
+            const float dz = now.z - warp_last.z;
+            warp_last = now;
+            // BOTH planes, split by which way you moved: walking forward
+            // and back leans the cut in ZW, strafing leans it in XW.
+            //
+            // It used to be hypot(dx, dz) into ZW alone, which had the
+            // same gap the scroll wheel had before XW existed - one plane
+            // is reachable and the other is not, and a cut turned in one
+            // plane presents four-sided cells at every angle. So no
+            // amount of walking could ever make a block anything but a
+            // box, which is precisely the thing this flag exists to show.
+            //
+            // Signed rather than by distance travelled, so it is
+            // reversible: walk back the way you came and the cut unwinds
+            // to where it was. An unsigned magnitude turned the world
+            // further whichever way you moved, so there was no way to
+            // undo an accidental warp except to scroll it out by hand.
+            const float yaw = glm::radians(cam.yaw());
+            const float fx = std::cos(yaw), fz = std::sin(yaw);
+            const float forward = dx * fx + dz * fz;
+            const float strafe  = dx * -fz + dz * fx;
+            if (forward != 0.0f) {
+                wrld.rotate_slice(opt.warp_walk * forward, now.z);
+            }
+            if (strafe != 0.0f) {
+                wrld.rotate_slice_xw(opt.warp_walk * strafe, now.x);
+            }
+        }
+
+        // Held M, or the middle mouse button, turns the 4D cut with the
+        // mouse instead of turning the camera - vertical in the ZW plane,
+        // horizontal in XW. The wheel remains a ZW-only shortcut.
+        const bool slice_look =
+            wrld.is_4d() && !capture.scripted_camera() &&
+            (input.key_down(core::key_of(core::Bind::SliceLook)) ||
+             input.mouse_button_down(GLFW_MOUSE_BUTTON_MIDDLE));
         if (input.cursor_captured() && !capture.scripted_camera()) {
-            update_movement(input, dt, cam, player, wrld, walk_mode);
-            handle_block_interaction(input, cam, player, walk_mode, wrld, place_id);
+            update_movement(input, dt, cam, player, wrld, walk_mode, slice_look);
+            // Block interaction is suppressed while turning the cut: a
+            // middle-drag that also placed a block would be a trap.
+            if (!slice_look) {
+                handle_block_interaction(input, cam, player, walk_mode, wrld,
+                                         place_id);
+            }
+        }
+        if (slice_look && input.cursor_captured()) {
+            // Same per-notch scale as the wheel, so a pixel of mouse and a
+            // notch of wheel move the world by comparable amounts.
+            constexpr float kSliceLookScale = 0.0016f;
+            const float dz = input.mouse_dy() * kSliceLookScale;
+            const float dx = input.mouse_dx() * kSliceLookScale;
+            if (dz != 0.0f) wrld.rotate_slice(dz, cam.position().z);
+            if (dx != 0.0f) wrld.rotate_slice_xw(dx, cam.position().x);
         }
 
         // Scripted captures drive the camera themselves. Both step by frame
@@ -636,6 +1026,69 @@ int main(int argc, char** argv) {
         // height, always looking at the scene center; the cycle parks at
         // the orbit's start pose and spends the frames on one full day of
         // time-of-day instead.
+        // The tilt clip holds the camera and turns the 4D cut instead -
+        // the one capture where the world moves and the viewer does not.
+        //
+        // A ping-pong through sin, not a ramp: the sweep has to return to
+        // where it started or the GIF's last frame will not meet its
+        // first, and a rotation has no period short enough to loop on.
+        if (tilt_frames > 0 && world_settled) {
+            // --pose-at wins if given; otherwise park at the orbit's
+            // start, which looks across the spawn triple point.
+            if (!have_pose_at) {
+                const OrbitPose op = orbit_pose_at(0, 1, orbit_center);
+                cam.set_position(op.pos);
+                cam.set_yaw_pitch(op.yaw, op.pitch);
+            }
+            // Bigger than the stills' 0.08 on purpose. The pivot is the
+            // viewer, so the ground under the camera barely moves however
+            // far the cut turns - the change lives in the middle distance,
+            // and a sweep has to be wide enough to carry it there.
+            const float kTiltAmplitude =
+                (opt.slice_tilt != 0.0f) ? std::fabs(opt.slice_tilt) : 0.15f;
+            const float phase = 6.28318530718f *
+                static_cast<float>(capture_frame) /
+                static_cast<float>(tilt_frames);
+            const float want = kTiltAmplitude * std::sin(phase);
+            wrld.rotate_slice(want - wrld.slice_theta(), cam.position().z);
+        }
+        // The complement of the tilt clip: the cut is held and the
+        // CAMERA moves. On a flat cut that shows nothing changing, which
+        // is the control; on a tilted one the terrain reworks itself as
+        // you go, because the slice's own z axis leans into w and walking
+        // forward is travel along the fourth axis.
+        //
+        // A ping-pong, like the tilt sweep and for the same reason: a
+        // straight walk's last frame does not meet its first, and a GIF
+        // that jump-cuts back to the start reads as a glitch. Walking out
+        // and back also shows the return - the world you walk back into
+        // is the one you left, exactly.
+        if (walk_frames > 0 && world_settled) {
+            if (!walk_origin_set) {
+                if (!have_pose_at) {
+                    const OrbitPose op = orbit_pose_at(0, 1, orbit_center);
+                    cam.set_position(op.pos);
+                    cam.set_yaw_pitch(op.yaw, op.pitch);
+                }
+                // Captured once, from wherever the pose ended up, so
+                // every frame is an offset from the same point rather
+                // than from the previous frame - a walk that accumulated
+                // would drift with the frame count.
+                walk_origin = cam.position();
+                walk_origin_set = true;
+            }
+            // 24 blocks out and back. At a 0.45 rad tilt that is about
+            // ten 4D cells each way, which is enough for the middle
+            // distance to become somewhere else and back.
+            constexpr float kWalkBlocks = 24.0f;
+            const float phase = 6.28318530718f *
+                static_cast<float>(capture_frame) /
+                static_cast<float>(walk_frames);
+            const float along = kWalkBlocks * std::sin(phase);
+            const float yaw_rad = glm::radians(cam.yaw());
+            const glm::vec3 fwd{std::cos(yaw_rad), 0.0f, std::sin(yaw_rad)};
+            cam.set_position(walk_origin + fwd * along);
+        }
         if ((orbit_frames > 0 || cycle_frames > 0) && world_settled) {
             // Cycle parks at the orbit start (frame 0) and spends its
             // frames on time-of-day; orbit sweeps the full circle.
@@ -676,7 +1129,16 @@ int main(int argc, char** argv) {
             streamed_out_total += sstats.evicted;
             last_center = center;
         }
-        wrld.drain_finished(16);
+        // Drain harder while travelling along w.
+        //
+        // Uploading is the bottleneck when the whole window is being
+        // pulled toward a new w, not generating: nine workers produce
+        // chunks far faster than 16 a frame can be handed to the GPU, so
+        // the queue backs up and the far edge of the world visibly trails.
+        // Uploads are ~0.05 ms each, so 48 is well under a millisecond of
+        // frame time and only happens while the player is actually
+        // moving through the fourth dimension.
+        wrld.drain_finished(wrld.is_4d() && wrld.pending_async() > 32 ? 48 : 16);
         // Chunks meshed before their neighbours existed still carry the
         // boundary faces those neighbours hide. Driven here rather than
         // from update_streaming because it depends on chunks arriving, not
@@ -862,6 +1324,33 @@ int main(int argc, char** argv) {
         if ((frame_index & 3ull) == 1ull)        shadow_cascade_mask |= (1u << 2);
         // First frame: refresh everything so caches are valid.
         if (frame_index == 0ull) shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
+        // A scripted camera refreshes every cascade every frame, and that
+        // is a correctness fix rather than a quality one.
+        //
+        // The stagger above is keyed to frame_index, which counts every
+        // iteration of the render loop - including the settle frames
+        // before a capture starts and the frames each capture frame
+        // spends waiting for the world to converge. Both are wall-clock
+        // dependent. So which cascades a captured PNG was rendered with
+        // depended on how long streaming happened to take, and cascades 1
+        // and 2 can hold depth rendered from an OLDER camera position.
+        //
+        // Measured: --capture-walk 4 puts frames 0 and 2 at the same
+        // pose, and they came out byte-identical on two runs in three and
+        // different on the third, with no other input changing. That is
+        // the repo's byte-stable capture guarantee failing intermittently
+        // in every multi-frame mode - the orbit and day-cycle GIFs
+        // included, where it reads as shadows popping.
+        //
+        // A capture already waits seconds per frame for convergence, so
+        // three shadow passes instead of 1.75 costs it nothing, and it
+        // makes a frame a pure function of its pose. --bench-frame is
+        // deliberately NOT included: it is timing the engine, and giving
+        // it a shadow schedule the engine never runs would measure
+        // something else.
+        if (capture.scripted_camera()) {
+            shadow_cascade_mask = (1u << gfx::kNumCascades) - 1u;
+        }
         // When shadows just transitioned 0 -> active (sunrise), the cached
         // depth textures and matrices are stale from before the night
         // skip-pass - force-refresh all cascades to resync.
@@ -981,6 +1470,55 @@ int main(int argc, char** argv) {
             if (capture_settle < kCaptureSettleFrames) {
                 ++capture_settle;
             } else {
+                // The tilt clip changes the WHOLE window between frames,
+                // so it converges before the shot rather than riding the
+                // streaming budget the way a moving camera can. A GIF of
+                // a half-built world is worse than no GIF.
+                //
+                // Here, not next to the rotation at the top of the loop:
+                // there it ran on all 90 settle frames as well, and a
+                // convergence that fell back on its deadline burned
+                // twenty seconds ninety times before the first PNG was
+                // written. Six frames took over ten minutes.
+                if (tilt_frames > 0 || walk_frames > 0) {
+                    const auto deadline = std::chrono::steady_clock::now() +
+                                          std::chrono::seconds(10);
+                    bool converged = false;
+                    while (std::chrono::steady_clock::now() < deadline) {
+                        wrld.drain_finished(256);
+                        wrld.flush_pending_remeshes(pool, 256);
+                        if (wrld.pending_async() == 0 &&
+                            wrld.pending_remesh() == 0 &&
+                            wrld.stream_slice(terrain, pool, 256) == 0) {
+                            converged = true;
+                            break;
+                        }
+                        std::this_thread::yield();
+                    }
+                    if (!converged) {
+                        std::fprintf(stderr, "[capture] frame %d did not "
+                                     "converge; %d chunks stale\n",
+                                     capture_frame, wrld.slice_lag().stale);
+                    }
+                    // Behind an env var and off by default, but kept: this
+                    // is the instrument that found three separate defects
+                    // in the streaming path, none of which showed in the
+                    // image and none of which any counter already
+                    // reported. chunks=/pending=/remesh=/stale= say the
+                    // world converged; gpu= and short= say whether it
+                    // converged to the SAME world twice.
+                    if (std::getenv("VOXEL_CAPTURE_TRACE")) {
+                        std::fprintf(stderr, "[capture-trace] frame=%d "
+                                     "chunks=%zu pending=%d remesh=%zu "
+                                     "stale=%d gpu=%zu short=%d\n",
+                                     capture_frame, wrld.chunk_count(),
+                                     wrld.pending_async(),
+                                     wrld.pending_remesh(),
+                                     wrld.slice_lag().stale,
+                                     wrld.resident_gpu_bytes(),
+                                     wrld.chunks_meshed_short());
+                    }
+                }
                 char frame_name[32];
                 std::snprintf(frame_name, sizeof(frame_name),
                               "frame_%04d.png", capture_frame);
@@ -1049,14 +1587,81 @@ int main(int argc, char** argv) {
         // before their neighbours arrived are still owed a re-mesh, and
         // validating mid-convergence reports the pre-culling footprint.
         if (validate_mode && world_settled) {
-            const int bad = wrld.debug_validate_gpu_meshes();
+            // Measured BEFORE the switch test below, which re-meshes the
+            // window twice and leaves more chunks with neighbours to cull
+            // against than a first load has. The reported figure has to
+            // describe the world the flags asked for, not the world the
+            // validator left behind.
+            const int    bad    = wrld.debug_validate_gpu_meshes();
+            const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
+                                  / (1024.0 * 1024.0);
+
+            // In prism mode, validate the SWITCH as well as the state.
+            //
+            // The mesher can be toggled at runtime (P), and the position
+            // encoding is per chunk precisely so a half-switched window
+            // draws correctly. That is a claim about a transient, and a
+            // transient is exactly what no screenshot catches: flip the
+            // mesher, let the window refill part of the way, and validate
+            // the world that exists while both kinds are resident. A chunk
+            // built the wrong way round is crushed into a sixteenth of its
+            // footprint, which the range check sees.
+            if (wrld.prism_meshing()) {
+                wrld.set_prism_meshing(false);
+                wrld.resample_slice(terrain, pool);
+                // Drain part of the way, not all of it. A fully drained
+                // window is not mixed, and validating one would prove
+                // nothing - the counts below are what says this ran
+                // against a window that really did hold both encodings.
+                //
+                // Drained to a CONDITION rather than for a fixed number of
+                // rounds. A fixed count makes the mix a function of how
+                // fast the workers happen to be, which is a gate that
+                // passes on this machine and fails on a slower one for no
+                // reason anybody could act on.
+                int cube = 0, prism = 0;
+                for (int i = 0; i < 20000 && cube < 8; ++i) {
+                    wrld.drain_finished(8);
+                    wrld.mesh_encoding_mix(&cube, &prism);
+                    if (cube == 0) std::this_thread::yield();
+                }
+                const int mixed_bad = wrld.debug_validate_gpu_meshes();
+                std::printf("[validate] mid-switch: %d cube + %d prism "
+                            "meshes resident, %d flagged\n",
+                            cube, prism, mixed_bad);
+                wrld.set_prism_meshing(true);
+                wrld.resample_slice(terrain, pool);
+                for (int i = 0; i < 64; ++i) wrld.drain_finished(256);
+                if (mixed_bad > 0 || cube == 0 || prism == 0) {
+                    std::printf("\nVALIDATE prism switch FAILED (%s)\n",
+                                mixed_bad > 0
+                                    ? "flagged triangles"
+                                    : "the window never held both encodings, "
+                                      "so nothing was checked");
+                    return EXIT_FAILURE;
+                }
+            }
             // The engine's own resident mesh footprint, printed here
             // because this is the only headless mode that builds a real
             // world on a real GPU. --bench computes the same figure from
             // the mesher alone; the two agreeing is what says the
             // streaming path is uploading what the mesher produces.
-            const double gpu_mb = static_cast<double>(wrld.resident_gpu_bytes())
-                                  / (1024.0 * 1024.0);
+            // 11,528,256 bytes on the default seed and radius, and it
+            // reproduces exactly - better than twenty consecutive runs,
+            // including immediately after a full audit.
+            //
+            // It printed 11.00 twice during one session and never
+            // reproduced in isolation. Both times another process was
+            // building into the same build/ directory, so the likeliest
+            // explanation is that those runs used a binary that was being
+            // relinked underneath them rather than that the figure moves.
+            // Recorded rather than asserted, because the difference
+            // between "deterministic" and "deterministic except twice" is
+            // exactly the kind of thing this repo does not round off.
+            //
+            // The figure the CI gate actually bounds is world_mesh_mb from
+            // --bench, which check_invariance proves byte-identical across
+            // runs; this one corroborates it from the running engine.
             std::printf("\nVALIDATE chunks=%zu bad_triangles=%d "
                         "gpu_mesh_mb=%.2f %s\n",
                         wrld.chunk_count(), bad, gpu_mb,
@@ -1064,6 +1669,1201 @@ int main(int argc, char** argv) {
             if (bad > 0) {
                 return EXIT_FAILURE;
             }
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // Headless --verify-4d: prove the fourth axis is real and
+        // reversible.
+        //
+        // Three claims, in order. A step along w must CHANGE the world -
+        // otherwise the axis exists in the storage and does nothing.
+        // Stepping back must return the world to exactly what it was,
+        // which is the determinism the whole design rests on: slices are
+        // a pure function of (seed, w), so w=0 reached by stepping is
+        // w=0 reached by starting there. And the meshes have to be right
+        // at each stop, checked by the same GPU read-back --validate
+        // uses, because a slice change re-meshes every chunk in the
+        // window and that is the most likely thing to go wrong.
+        if (verify_4d && world_settled) {
+            auto settle = [&]() {
+                // Drain until every re-requested chunk has landed and the
+                // boundary re-meshes owed to it are flushed.
+                //
+                // Bounded by TIME, not by iteration count. The first
+                // version guarded with `for (guard < 100000)`, which is a
+                // spin count: the loop body is a few microseconds when
+                // there is nothing to drain, so it burned through all
+                // 100,000 iterations in milliseconds and returned while
+                // workers were still busy. The hash was then taken on a
+                // half-rebuilt world, and whether the check passed
+                // depended on how much unrelated work happened to run
+                // first - adding a debug print "fixed" it.
+                //
+                // Yielding matters as much as the deadline: the drain is
+                // main-thread work waiting on nine workers, and spinning
+                // without yielding steals the core they need.
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(60);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    wrld.drain_finished(256);
+                    wrld.flush_pending_remeshes(pool, 256);
+                    if (wrld.pending_async() == 0 &&
+                        wrld.pending_remesh() == 0) break;
+                    std::this_thread::yield();
+                }
+            };
+            auto world_hash = [&wrld]() {
+                std::uint64_t h = 1469598103934665603ull;
+                std::vector<world::ChunkCoord> coords;
+                wrld.for_each_chunk([&](world::ChunkCoord c, const world::Chunk&) {
+                    coords.push_back(c);
+                });
+                std::sort(coords.begin(), coords.end(),
+                          [](const world::ChunkCoord& a, const world::ChunkCoord& b) {
+                              return a.z != b.z ? a.z < b.z : a.x < b.x;
+                          });
+                for (const auto& c : coords)
+                    for (int y = 0; y < world::kChunkSizeY; ++y)
+                        for (int z = 0; z < world::kChunkSizeZ; ++z)
+                            for (int x = 0; x < world::kChunkSizeX; ++x) {
+                                const auto b = static_cast<std::uint8_t>(
+                                    wrld.block_at(c.x * world::kChunkSizeX + x, y,
+                                                  c.z * world::kChunkSizeZ + z));
+                                h = (h ^ b) * 1099511628211ull;
+                            }
+                return h;
+            };
+
+            // Travels to a target w and drives the rebuild until the
+            // geometry has caught up.
+            //
+            // move_w declines a rebuild while the previous one is still
+            // draining - that throttle is what stops a held key from
+            // saturating the pool with work it will discard - so a check
+            // that assumed one call rebuilds would be testing an engine
+            // that does not exist. This drives it the way the render loop
+            // does, without waiting for frames.
+            auto travel_to = [&](float target) {
+                wrld.move_w(target - wrld.slice_w(), 0.0f, terrain, pool);
+                for (int guard = 0; guard < 1000; ++guard) {
+                    settle();
+                    if (std::fabs(wrld.meshed_w() - wrld.slice_w()) < 1e-4f) break;
+                    wrld.resample_slice(terrain, pool);
+                }
+            };
+
+            const float w0 = wrld.slice_w();
+            const std::uint64_t hash_w0 = world_hash();
+            const int bad_w0 = wrld.debug_validate_gpu_meshes();
+
+            const auto step_t0 = std::chrono::steady_clock::now();
+            const int requested = wrld.move_w(+1.0f, 0.0f, terrain, pool);
+            travel_to(w0 + 1.0f);
+            const double step_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - step_t0).count();
+            const std::uint64_t hash_w1 = world_hash();
+            const int bad_w1 = wrld.debug_validate_gpu_meshes();
+
+            travel_to(w0);
+            const std::uint64_t hash_back = world_hash();
+            const int bad_back = wrld.debug_validate_gpu_meshes();
+
+            // There is no rapid-stepping phase, and its absence is
+            // deliberate rather than an omission.
+            //
+            // One used to sit here, asserting that several rebuilds in
+            // flight at once still leave the world byte-identical. Three
+            // measurements retired it:
+            //
+            //   - the scenario is unreachable through move_w. resample_slice
+            //     declines while any job is in flight, so 1 of 6 rapid
+            //     calls issued a rebuild and 5 were refused by the
+            //     throttle; there is only ever one rebuild in flight.
+            //   - the stale-result stamp it leaned on fired zero times
+            //     across a whole run. It IS reachable - oscillating the
+            //     stream window while under-draining hits it 195 times -
+            //     but every phase here settles first, so this mode never
+            //     gets near it.
+            //   - and even when reached, the stamp is not a content
+            //     invariant. With the guard removed, 287-302 stale
+            //     results were accepted and the settled world was still
+            //     byte-identical: drain_finished stamps each slot from
+            //     its own job's slice and stream_slice re-requests
+            //     anything that does not match, so it self-heals.
+            //
+            // So no world-hash check can fail when that guard is removed,
+            // and a phase asserting otherwise asserts something false.
+            // The stamp is an efficiency mechanism - do not apply work
+            // you would only redo - not a correctness one.
+
+            // Captured before the held-key phase below, which deliberately
+            // leaves the player somewhere else along w. Asserting it after
+            // that phase compared the post-travel position against the
+            // start and failed every run - the check was reporting a
+            // failure of its own bookkeeping while every real property
+            // passed.
+            const bool position_ok = std::fabs(wrld.slice_w() - w0) < 1e-4f;
+
+            // Rotating the slice, which is the motion that makes this look
+            // four-dimensional rather than merely indexed by a fourth
+            // number. Same three claims as travelling - it must change the
+            // world, it must be reversible, and the meshes must be right
+            // at the tilted stop - but along the axis that produces cross
+            // sections instead of swapping one axis-aligned world for
+            // another.
+            //
+            // This exists because the rotation shipped with generator-level
+            // tests and nothing at the engine level. The generator checks
+            // prove a tilted slice samples a different heightfield; they
+            // say nothing about whether World notices theta changed, whose
+            // per-chunk staleness is a separate mechanism with its own
+            // 32-block lever arm, and which was the part more likely to
+            // silently do nothing.
+            //
+            // Driven through stream_slice, which is the path the scroll
+            // wheel actually reaches, and NOT through resample_slice.
+            //
+            // The first version of this phase called resample_slice, and
+            // it passed with the per-chunk tilt staleness deleted -
+            // because resample_slice rebuilds the whole window
+            // unconditionally, so the world changed no matter what the
+            // staleness test said. It was checking that a tilted slice
+            // generates different terrain, which the generator tests
+            // already prove, rather than that World NOTICES a tilt. The
+            // fault injection is the only reason that surfaced.
+            //
+            // Rotation has no analogue of meshed_w to converge on, so the
+            // convergence test is the world's own: keep streaming until a
+            // settled world stops asking for chunks.
+            //
+            // An iteration guard is correct HERE, unlike in --bench-4d,
+            // and the difference is whether the body can no-op. Each pass
+            // calls settle() first, which is deadline-bounded and does not
+            // return until the pool has drained, so an iteration is a
+            // completed drain cycle rather than a spin. A guard around a
+            // body that can return in two microseconds is a spin count
+            // wearing a timeout's clothes.
+            // Records a failure to converge rather than spinning on it.
+            //
+            // A world that never converges used to make this loop run its
+            // full guard and return quietly, so the phases after it
+            // measured a half-built world - or, with the guard large
+            // enough, the run simply produced no VERIFY4D line at all and
+            // CI saw an opaque timeout. A check that hangs instead of
+            // failing tells you less than no check.
+            bool settle_timed_out = false;
+            auto settle_slice = [&]() {
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(30);
+                for (int guard = 0; guard < 4000; ++guard) {
+                    settle();
+                    if (wrld.stream_slice(terrain, pool) == 0) {
+                        settle();
+                        // The inner settle() has its own deadline and
+                        // returns quietly when it blows it - and a world
+                        // that is merely draining SLOWLY has every
+                        // outstanding chunk in requested_, which makes
+                        // stream_slice return 0. So the early return here
+                        // could report a settled world that never
+                        // drained. Checking the queues is what separates
+                        // "nothing left to ask for" from "nothing left to
+                        // do".
+                        if (wrld.pending_async() != 0 ||
+                            wrld.pending_remesh() != 0) {
+                            break;
+                        }
+                        return;
+                    }
+                    if (std::chrono::steady_clock::now() > deadline) break;
+                }
+                settle_timed_out = true;
+                std::fprintf(stderr, "[verify-4d] the world did not settle: "
+                             "%d of %d chunks stale, %d jobs in flight, "
+                             "%d re-meshes pending\n",
+                             wrld.slice_lag().stale, wrld.slice_lag().resident,
+                             wrld.pending_async(),
+                             static_cast<int>(wrld.pending_remesh()));
+            };
+            // 0.25 rad, about 14 degrees. Far past the 0.003 a scroll notch
+            // gives, so this is many notches of turning, and far short of
+            // the pi/2 where the slice's z axis becomes w outright.
+            constexpr float kTilt = 0.25f;
+            const float theta0 = wrld.slice_theta();
+            wrld.rotate_slice(+kTilt, 0.0f);
+            settle_slice();
+            const std::uint64_t hash_tilt = world_hash();
+            const int bad_tilt = wrld.debug_validate_gpu_meshes();
+            wrld.rotate_slice(-kTilt, 0.0f);
+            settle_slice();
+            const std::uint64_t hash_untilt = world_hash();
+            const int bad_untilt = wrld.debug_validate_gpu_meshes();
+
+            // One scroll notch, which is a much sharper check than the
+            // large tilt above and pins a different thing.
+            //
+            // 0.25 rad is far over every threshold, so it passes with the
+            // staleness lever arm removed - verified by injecting exactly
+            // that: 32.0f -> 1.0f still reported tilt_changed=1. A single
+            // notch is the case the lever arm exists for. 0.003 rad on its
+            // own is below kSliceStepMin and no chunk would ever be
+            // rebuilt; multiplied by the nominal 32-block arm it is 0.096
+            // and the world responds to the very first notch. That is the
+            // difference between a scroll wheel that works and one that
+            // appears dead until you spin it far enough.
+            constexpr float kNotch = 0.003f;   // main's scroll scale
+            wrld.rotate_slice(+kNotch, 0.0f);
+            settle_slice();
+            const bool notch_moves_world = world_hash() != hash_w0;
+            wrld.rotate_slice(-kNotch, 0.0f);
+            settle_slice();
+
+            // An edit must survive the SCROLL WHEEL, and this is a
+            // separate check from edit_survives_w rather than a variation
+            // on it, because it exercises a different code path.
+            //
+            // edit_survives_w drives travel_to -> move_w ->
+            // resample_slice, which stashes every edited chunk before
+            // rebuilding. The wheel drives stream_slice, which did not.
+            // So the engine had a check that said edits survive travel
+            // through the fourth dimension, passing, while one scroll
+            // notch deleted every edit in the world - drift after one
+            // notch is 0.003 * 32 = 0.096, six times kSliceStepMin, for
+            // every chunk at once. Found by adversarial review, not by
+            // this check, because this check did not exist.
+            wrld.rotate_slice(0.0f, 0.0f);
+            settle_slice();
+            int sx = 0, sy = 0, sz = 0;
+            bool scroll_placed = false;
+            for (int i = 0; i < 256 && !scroll_placed; ++i) {
+                sx = (i * 5) % 32;
+                sy = 78 + (i % 6);
+                sz = (i * 13) % 32;
+                scroll_placed = wrld.set_block(sx, sy, sz, world::BlockId::Glow);
+            }
+            settle_slice();
+            const bool scroll_edit_here =
+                wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
+            // One notch, the smallest thing the wheel can do.
+            wrld.rotate_slice(kNotch, 0.0f);
+            settle_slice();
+            const bool survives_notch =
+                wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
+            // And a long scroll, which crosses no integer slice boundary
+            // and so must not lose it either.
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, 0.0f);
+            settle_slice();
+            const bool survives_scroll =
+                wrld.block_at(sx, sy, sz) == world::BlockId::Glow;
+            wrld.rotate_slice(-kNotch * 41.0f, 0.0f);
+            settle_slice();
+            const bool edit_survives_scroll = scroll_placed && scroll_edit_here
+                                              && survives_notch
+                                              && survives_scroll;
+            // Leave no edit behind for the phases that follow.
+            wrld.set_block(sx, sy, sz, world::BlockId::Air);
+            settle_slice();
+
+            // The edit namespace must not move when the player does not.
+            //
+            // Edits are filed under an integer slice, and that used to be
+            // floor(slice_w_) - a float that rotation rewrites every
+            // notch. A round trip returns it to a residue rather than to
+            // zero, and floor is one-sided there, so a value of -1e-16
+            // read as slice -1 while every resident chunk still recorded
+            // slice 0. The lookup missed, the terrain regenerated without
+            // the edit, and the edit was filed under a key the player
+            // would never consult again.
+            //
+            // Seven notches out and back, fifty blocks from spawn - which
+            // is somebody trying the wheel out - was enough to trigger it.
+            // That is what this reproduces.
+            bool namespace_stable = true;
+            {
+                const std::int32_t before = wrld.edit_slice();
+                for (const float pz : {50.0f, 137.0f, 640.0f}) {
+                    for (const int n : {7, 40}) {
+                        for (int i = 0; i < n; ++i) wrld.rotate_slice(kNotch, pz);
+                        for (int i = 0; i < n; ++i) wrld.rotate_slice(-kNotch, pz);
+                        if (wrld.edit_slice() != before) namespace_stable = false;
+                    }
+                }
+                settle_slice();
+            }
+
+            // An edited chunk must keep rotating with the world.
+            //
+            // The edit stash used to hold the whole chunk and hand it
+            // back verbatim, which preserved the edit and froze
+            // everything around it: one placed block pinned its entire
+            // 16x256x16 chunk against every further turn of the wheel.
+            // Measured against an unedited control chunk at the same
+            // distance from the pivot, sixty notches:
+            //
+            //     before   edited 40 -> 40 (frozen)   control 52 -> 42
+            //     after    edited 40 -> 44            control 52 -> 42
+            //
+            // The control matters. A first version of this check compared
+            // a chunk at slice-z 7 against one at slice-z 45 and read the
+            // difference as a freeze - but a rotation displaces in
+            // proportion to distance from the pivot, so that gap was the
+            // pivot working correctly. Comparing at equal distance is
+            // what makes the result mean anything.
+            bool edit_rotates = false;
+            {
+                auto surface_of = [&](int wx, int wz) {
+                    for (int y = world::kChunkSizeY - 1; y > 0; --y)
+                        if (wrld.block_at(wx, y, wz) != world::BlockId::Air)
+                            return y;
+                    return 0;
+                };
+                // A whole chunk footprint, not one column.
+                //
+                // The first version compared a single column's integer
+                // surface height and required it to differ. Whether any
+                // ONE column's height changes is luck: the same check
+                // passed at radius 4 and 8 and failed at 6, because at 6
+                // the column it happened to pick landed on the same
+                // integer either side of the rotation. Counting how much
+                // of the chunk moved is the measurement that was meant.
+                auto profile = [&](int ox, int oz, std::vector<int>& out) {
+                    out.clear();
+                    for (int z = 0; z < world::kChunkSizeZ; ++z)
+                        for (int x = 0; x < world::kChunkSizeX; ++x)
+                            out.push_back(surface_of(ox + x, oz + z));
+                };
+                auto differing = [](const std::vector<int>& a,
+                                    const std::vector<int>& b) {
+                    int n = 0;
+                    for (std::size_t i = 0; i < a.size(); ++i)
+                        if (a[i] != b[i]) ++n;
+                    return n;
+                };
+                // Half the window, so this is well away from the pivot
+                // at any radius and inside the window at any radius.
+                //
+                // It was a fixed z = 80, which is outside a radius-4
+                // window: set_block returned false, put stayed false, and
+                // the check failed on CI while passing locally at radius
+                // 6. A check whose subject may not exist is worse than no
+                // check - it reports a failure of its own arithmetic.
+                const int half = (opt.stream_radius * world::kChunkSizeZ) / 2;
+                // Chunk-ALIGNED footprints, or the measurement straddles
+                // two chunks and only one of them is the subject.
+                //
+                // The first version profiled a 16x16 block starting at
+                // the edited column, which spanned two chunks in x: with
+                // the freeze injected, five columns of every row still
+                // belonged to the unedited neighbour and moved, which was
+                // enough to clear the threshold and pass. The check
+                // reported the feature working while the defect it exists
+                // for was present.
+                const int ez = (half / world::kChunkSizeZ) * world::kChunkSizeZ;
+                const int edited_x = 0;
+                const int control_x = edited_x + 2 * world::kChunkSizeX;
+                int py = 0;
+                bool put = false;
+                // Placed in the middle of the edited chunk, so the
+                // profile above is squarely the chunk that owns it.
+                const int edit_col_x = edited_x + world::kChunkSizeX / 2;
+                const int edit_col_z = ez + world::kChunkSizeZ / 2;
+                for (int i = 0; i < 64 && !put; ++i) {
+                    py = 80 + i;
+                    put = wrld.set_block(edit_col_x, py, edit_col_z,
+                                         world::BlockId::Glow);
+                }
+                if (!put) {
+                    std::fprintf(stderr, "[verify-4d] edit_rotates could not "
+                                 "place its block at (%d,*,%d) - window is "
+                                 "radius %d\n", edit_col_x, edit_col_z,
+                                 opt.stream_radius);
+                }
+                settle_slice();
+                std::vector<int> e0, c0, e1, c1;
+                profile(edited_x, ez, e0);
+                profile(control_x, ez, c0);
+                for (int i = 0; i < 60; ++i) wrld.rotate_slice(kNotch, 0.0f);
+                settle_slice();
+                profile(edited_x, ez, e1);
+                profile(control_x, ez, c1);
+                const int moved_edited = differing(e0, e1);
+                const int moved_control = differing(c0, c1);
+                // The edit itself must also still be there: replaying it
+                // over regenerated terrain is the whole mechanism, and a
+                // version that let the chunk rotate by dropping the edit
+                // would pass a terrain-only check.
+                const bool still_there =
+                    wrld.block_at(edit_col_x, py, edit_col_z)
+                        == world::BlockId::Glow;
+                // A quarter of the footprint is far above the noise floor
+                // and far below what a full rotation moves; the measured
+                // values are most of the 256 columns in both chunks.
+                constexpr int kMoved = 64;
+                edit_rotates = put && still_there &&
+                               moved_edited > kMoved && moved_control > kMoved;
+                if (!edit_rotates) {
+                    std::fprintf(stderr, "[verify-4d] edit_rotates: placed=%d "
+                                 "still_there=%d edited moved %d/256 "
+                                 "control moved %d/256\n",
+                                 put ? 1 : 0, still_there ? 1 : 0,
+                                 moved_edited, moved_control);
+                }
+                for (int i = 0; i < 60; ++i) wrld.rotate_slice(-kNotch, 0.0f);
+                settle_slice();
+                wrld.set_block(edit_col_x, py, edit_col_z, world::BlockId::Air);
+                settle_slice();
+            }
+
+            // Rotation must be EXACTLY reversible away from the origin,
+            // which is the case the tilt phase above cannot see.
+            //
+            // That phase rotates with player_z = 0 at w = 0, where the
+            // offset o is 0 and every formula returns 0 to 0 whatever it
+            // does in between. It passed while a notch out and a notch
+            // back left o at o*cos^2(delta) - so at any w != 0, scrolling
+            // to and fro slid the player along the fourth axis without
+            // them touching a travel key: 8.5% of their w after ten
+            // thousand notches, HUD counter drifting to match. A check
+            // that only ever runs where the quantity it guards is zero is
+            // not a check.
+            const float rev_w0 = wrld.slice_w();
+            const float rev_shift0 = wrld.slice().z_shift;
+            constexpr float kRevPlayerZ = 640.0f;   // well away from 0
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(kNotch, kRevPlayerZ);
+            for (int i = 0; i < 40; ++i) wrld.rotate_slice(-kNotch, kRevPlayerZ);
+            // The tolerance is 1e-4 and cannot usefully be tighter: at
+            // player_z = 640, eighty float32 rotations of a value that
+            // size accumulate about 1e-5 of rounding, and that is
+            // arithmetic rather than a defect.
+            //
+            // Which is exactly why the edit namespace must not be derived
+            // from this number. A residue a hundred times smaller than
+            // this tolerance was enough to move floor(slice_w_) from 0 to
+            // -1 and strand every edit in the world; the check would have
+            // passed while it happened. edit_slice() reads travel_w_ now,
+            // and edit_ns_stable pins that separately.
+            const bool zw_reversible =
+                std::fabs(wrld.slice_w() - rev_w0) < 1e-4f &&
+                std::fabs(wrld.slice().z_shift - rev_shift0) < 1e-3f &&
+                std::fabs(wrld.slice_theta() - theta0) < 1e-4f;
+            // The same round trip in the other plane. Both planes fold
+            // the pivot into slice_w_, so both can lose it the same way -
+            // and a check that only ever ran on one of them would be the
+            // "only runs where the quantity is zero" mistake again, one
+            // plane over.
+            const float rev_phi0 = wrld.slice_phi();
+            const float rev_xshift0 = wrld.slice().x_shift;
+            const float rev_w1 = wrld.slice_w();
+            for (int i = 0; i < 40; ++i)
+                wrld.rotate_slice_xw(kNotch, kRevPlayerZ);
+            for (int i = 0; i < 40; ++i)
+                wrld.rotate_slice_xw(-kNotch, kRevPlayerZ);
+            const bool xw_reversible =
+                std::fabs(wrld.slice_w() - rev_w1) < 1e-4f &&
+                std::fabs(wrld.slice().x_shift - rev_xshift0) < 1e-3f &&
+                std::fabs(wrld.slice_phi() - rev_phi0) < 1e-4f;
+            const bool reversible_away = zw_reversible && xw_reversible;
+            if (!reversible_away) {
+                std::fprintf(stderr, "[verify-4d] reversibility away from the "
+                             "origin: zw=%d xw=%d\n",
+                             zw_reversible ? 1 : 0, xw_reversible ? 1 : 0);
+            }
+            settle_slice();
+
+            // An edit made WHILE a rebuild is in flight must survive.
+            //
+            // Every other edit check settles first, so none of them place
+            // a block at the one moment a player most often does: while
+            // scrolling the wheel or holding a travel key, when jobs are
+            // in flight for the very chunk being edited.
+            //
+            // The stale-result guard cannot catch this, and that is worth
+            // stating because it looks like the guard's job. The job was
+            // issued BEFORE the edit, so its stamp still matches and the
+            // result is accepted - carrying a copy of the replay list
+            // from submit time, without the new edit. Measured before the
+            // fix: idle placement survived, placement at 24 jobs in
+            // flight did not.
+            bool edit_survives_inflight = false;
+            {
+                travel_to(w0);
+                settle_slice();
+                // Make the whole window stale, then edit without draining
+                // - this is the in-flight state, not a simulation of it.
+                for (int i = 0; i < 8; ++i) wrld.rotate_slice(kNotch, 0.0f);
+                wrld.stream_slice(terrain, pool, 64);
+                const int inflight = wrld.pending_async();
+                int rx = 4, ry = 0, rz = 4;
+                bool placed_racing = false;
+                for (int i = 0; i < 64 && !placed_racing; ++i) {
+                    ry = 76 + i;
+                    placed_racing =
+                        wrld.set_block(rx, ry, rz, world::BlockId::Glow);
+                }
+                settle_slice();
+                const bool still =
+                    wrld.block_at(rx, ry, rz) == world::BlockId::Glow;
+                edit_survives_inflight = placed_racing && inflight > 0 && still;
+                if (!edit_survives_inflight) {
+                    std::fprintf(stderr, "[verify-4d] an edit placed with %d "
+                                 "jobs in flight was lost (placed=%d)\n",
+                                 inflight, placed_racing ? 1 : 0);
+                }
+                wrld.set_block(rx, ry, rz, world::BlockId::Air);
+                for (int i = 0; i < 8; ++i) wrld.rotate_slice(-kNotch, 0.0f);
+                settle_slice();
+            }
+
+            // The XW plane, through World rather than the generator.
+            //
+            // The generator tests prove a phi-tilted slice samples a
+            // different field. They say nothing about whether World
+            // notices - staleness, the pivot and the shift are separate
+            // machinery with their own bugs, and that is exactly how
+            // z_shift shipped with no coverage: its generator half was
+            // tested and its engine half was not.
+            //
+            // Same three claims the ZW plane gets: it changes the world,
+            // it is exactly reversible, and the ground under the player
+            // does not move when the world turns about them.
+            bool xw_ok = false;
+            {
+                const float phi0 = wrld.slice_phi();
+                const std::uint64_t before = world_hash();
+                // About x = 0, for the same reason the ZW hash checks
+                // rotate about z = 0: away from the origin the pivot
+                // folds a large offset into slice_w_ and thirty float
+                // rotations of it do not return bit-identically, so a
+                // hash comparison would be measuring rounding. Exactness
+                // away from the origin is reversible_away's job, with a
+                // tolerance; this one is about content.
+                constexpr float kXwPlayer = 0.0f;
+                for (int i = 0; i < 30; ++i)
+                    wrld.rotate_slice_xw(kNotch, kXwPlayer);
+                settle_slice();
+                const std::uint64_t turned = world_hash();
+                const int bad_xw = wrld.debug_validate_gpu_meshes();
+                for (int i = 0; i < 30; ++i)
+                    wrld.rotate_slice_xw(-kNotch, kXwPlayer);
+                settle_slice();
+                const std::uint64_t back = world_hash();
+                xw_ok = turned != before && back == before && bad_xw == 0 &&
+                        std::fabs(wrld.slice_phi() - phi0) < 1e-4f;
+                if (!xw_ok) {
+                    std::fprintf(stderr, "[verify-4d] XW plane: changed=%d "
+                                 "returned=%d bad_tris=%d phi=%.6f\n",
+                                 turned != before ? 1 : 0,
+                                 back == before ? 1 : 0, bad_xw,
+                                 wrld.slice_phi());
+                }
+            }
+
+            // A tilt must survive travelling along w.
+            //
+            // Every hash check in this mode runs at theta = 0 and every
+            // rotation check runs at w = 0, so the two axes were never
+            // combined and nothing noticed a travel that silently threw
+            // the tilt away. Setting slice_theta_ = 0 at the top of
+            // resample_slice passed the whole suite with every field 1.
+            bool tilt_survives_travel = false;
+            {
+                const float t0 = wrld.slice_theta();
+                for (int i = 0; i < 30; ++i) wrld.rotate_slice(kNotch, 0.0f);
+                const float tilted = wrld.slice_theta();
+                travel_to(w0 + 1.0f);
+                const float after_out = wrld.slice_theta();
+                travel_to(w0);
+                const float after_back = wrld.slice_theta();
+                tilt_survives_travel =
+                    std::fabs(tilted - t0) > 1e-4f &&
+                    std::fabs(after_out - tilted) < 1e-4f &&
+                    std::fabs(after_back - tilted) < 1e-4f;
+                if (!tilt_survives_travel) {
+                    std::fprintf(stderr, "[verify-4d] travel changed the tilt: "
+                                 "%.4f -> %.4f -> %.4f\n",
+                                 tilted, after_out, after_back);
+                }
+                for (int i = 0; i < 30; ++i) wrld.rotate_slice(-kNotch, 0.0f);
+                settle_slice();
+            }
+
+            // Turning about the player must leave the player's own
+            // terrain EXACTLY where it was.
+            //
+            // This is the pivot's other half, and it had no coverage at
+            // all: pivot_ok compares staleness COUNTS through
+            // slice_drift, and slice_w_ still moves with player_z in
+            // rotate_slice, so the counts stay comparable even when the
+            // sampling is wrong. Deleting z_shift from to_4d - the line
+            // that actually carries the pivot into the generator - passed
+            // the entire suite with pivot=1, while the ground under the
+            // player slid out from under them:
+            //
+            //     player's own row   pristine 0/128 moved, fault 69/128
+            //     control row        pristine 103/128,     fault 106/128
+            //
+            // So this reads the terrain, not the bookkeeping.
+            bool player_ground_fixed = false;
+            {
+                const int pz = 400;                  // away from the origin
+                const int cz = (pz / world::kChunkSizeZ) * world::kChunkSizeZ;
+                wrld.update_streaming(
+                    world::ChunkCoord{0, cz / world::kChunkSizeZ}, 4,
+                    terrain, pool);
+                settle_slice();
+                auto row = [&](std::vector<int>& out) {
+                    out.clear();
+                    for (int x = 0; x < world::kChunkSizeX; ++x) {
+                        int top = 0;
+                        for (int y = world::kChunkSizeY - 1; y > 0; --y)
+                            if (wrld.block_at(x, y, cz) != world::BlockId::Air) {
+                                top = y; break;
+                            }
+                        out.push_back(top);
+                    }
+                };
+                std::vector<int> before, after;
+                row(before);
+                const float pivot_z =
+                    static_cast<float>(cz) + world::kChunkSizeZ / 2.0f;
+                for (int i = 0; i < 20; ++i) wrld.rotate_slice(kNotch, pivot_z);
+                settle_slice();
+                row(after);
+                int moved = 0;
+                for (std::size_t i = 0; i < before.size(); ++i)
+                    if (before[i] != after[i]) ++moved;
+                // Not a tolerance: the player's own row is the fixed point
+                // of the rotation, so it must not move at all.
+                player_ground_fixed = (moved == 0);
+                if (!player_ground_fixed) {
+                    std::fprintf(stderr, "[verify-4d] the ground under the "
+                                 "player moved under a rotation about them: "
+                                 "%d of %zu columns\n", moved, before.size());
+                }
+                for (int i = 0; i < 20; ++i) wrld.rotate_slice(-kNotch, pivot_z);
+                wrld.update_streaming(world::ChunkCoord{0, 0}, opt.stream_radius,
+                                      terrain, pool);
+                settle_slice();
+            }
+
+            // The wheel must do the same thing wherever the player is
+            // standing, and that is a property of the PIVOT rather than
+            // of the rotation.
+            //
+            // Turning the slice about the world origin makes the effect
+            // scale with how far the player has walked, because a tilt
+            // displaces a point in proportion to its distance from the
+            // axis. Measured at one notch, before the pivot moved to the
+            // player: 7.0% of columns changed at spawn, 62.7% after a
+            // hundred seconds of walking, 95.8% far out - and the row at
+            // z=0 was exactly invariant at every angle, so at spawn,
+            // looking down the x axis, the wheel did nothing at all.
+            //
+            // Checked through staleness rather than through content,
+            // because staleness is what the engine acts on: one notch
+            // must leave the chunks NEAREST the player alone, and that
+            // has to stay true a long way from the origin. With the pivot
+            // at the origin every chunk around a distant player is far
+            // from the axis, so all of them go stale at once.
+            auto near_stale_after_a_notch = [&](int centre_chunk_z) {
+                const world::ChunkCoord centre{0, centre_chunk_z};
+                wrld.update_streaming(centre, 4, terrain, pool);
+                settle_slice();
+                const float pz = static_cast<float>(
+                    centre_chunk_z * world::kChunkSizeZ + world::kChunkSizeZ / 2);
+                wrld.rotate_slice(kNotch, pz);
+                const auto lag = wrld.slice_lag();
+                wrld.rotate_slice(-kNotch, pz);
+                settle_slice();
+                return lag;
+            };
+            const auto near_home = near_stale_after_a_notch(0);
+            const auto near_away = near_stale_after_a_notch(400);   // 6400 blocks
+            // Some chunks must be spared in both places - the wheel is a
+            // fine control, not a full rebuild - and the two must be
+            // comparable, which is the part that fails when the pivot is
+            // in the wrong place.
+            const bool pivot_ok =
+                near_home.stale < near_home.resident &&
+                near_away.stale < near_away.resident &&
+                near_away.stale <= near_home.stale * 2 + 2;
+            wrld.update_streaming(world::ChunkCoord{0, 0}, opt.stream_radius,
+                                  terrain, pool);
+            settle_slice();
+
+            // No resident chunk may be left permanently stale.
+            //
+            // The claim this used to make - that it catches
+            // enqueue_decoded_chunk failing to stamp the slice - is
+            // false, and was checked: deleting that stamping still passes
+            // the whole suite. Stale drains monotonically under that
+            // fault because a chunk already meshed against a neighbour is
+            // not re-dirtied, so the bad stamp lands once per pair and
+            // never bounces back.
+            //
+            // What it does pin is narrower and real: that stream_slice's
+            // SELECTION covers its own staleness predicate. slice_lag
+            // counts every resident chunk; held_geometry only looks
+            // within four chunks of the camera, and `settled` only
+            // asserts stream_slice returned nothing more to ask for. When
+            // selection and predicate diverge - a chunk stale but never
+            // re-requested, from starvation, a budget bug, an ordering
+            // bug, a skip at the window edge - this is the only field
+            // with global reach. Verified by starving the far ring:
+            // `converges` fired alone, with settled=1 and ground_fixed=1
+            // beside it.
+            wrld.rotate_slice(kNotch * 3.0f, 0.0f);
+            settle_slice();
+            const auto after_rotate = wrld.slice_lag();
+            const bool converges = after_rotate.stale == 0;
+            wrld.rotate_slice(-kNotch * 3.0f, 0.0f);
+            settle_slice();
+
+            const bool tilt_ok = !settle_timed_out &&
+                                 edit_survives_scroll && converges &&
+                                 pivot_ok && player_ground_fixed &&
+                                 tilt_survives_travel && xw_ok &&
+                                 edit_survives_inflight &&
+                                 reversible_away &&
+                                 edit_rotates && namespace_stable &&
+                                 hash_tilt != hash_w0 &&
+                                 hash_untilt == hash_w0 &&
+                                 bad_tilt == 0 && bad_untilt == 0 &&
+                                 notch_moves_world &&
+                                 std::fabs(wrld.slice_theta() - theta0) < 1e-6f;
+
+            // Simulated held key: the interactive path, driven exactly as
+            // the render loop drives it - move_w once per frame with a
+            // frame's worth of dt, then the same per-frame drain the loop
+            // does. Everything above tests one big jump; this tests the
+            // thing the player actually does, and it is the only check
+            // that would notice the throttle refusing every rebuild.
+            travel_to(w0);
+            const float held_w0 = wrld.near_meshed_w();
+            int rebuilds = 0;
+            constexpr int kFrames = 120;          // two seconds at 60 Hz
+            constexpr float kDt = 1.0f / 60.0f;
+            for (int f = 0; f < kFrames; ++f) {
+                const auto frame_end = std::chrono::steady_clock::now() +
+                    std::chrono::microseconds(16667);
+                // Exactly what the render loop does: advance the player,
+                // pull a bounded slice of the world toward them, drain.
+                // This used to call move_w, which is the whole-window
+                // rebuild the interactive path no longer uses - so the
+                // check was passing on a code path the player never
+                // touches.
+                wrld.advance_w(world::World::kWalkSpeedW * kDt);
+                if (wrld.stream_slice(terrain, pool) > 0) ++rebuilds;
+                // The render loop's own adaptive budget, copied exactly.
+                // Mirroring it matters: with a flat 16 the check requested
+                // 24 chunks a frame and uploaded 16, so the queue grew all
+                // run and the world could never catch up. That is a
+                // property of the test, not of the engine, and it made a
+                // large radius look broken.
+                wrld.drain_finished(wrld.pending_async() > 32 ? 48 : 16);
+                wrld.flush_pending_remeshes(pool, 4);
+                // Real frame pacing, and it is load-bearing rather than
+                // cosmetic. Without it this loop ran all 120 iterations in
+                // microseconds while claiming a 1/60 dt, so the worker
+                // pool never got wall-clock time to finish a single
+                // rebuild - in-flight sat at a full window forever and the
+                // check reported the geometry frozen. That looked exactly
+                // like the engine bug it was meant to find, and cost a
+                // round of tuning the wrong constant.
+                while (std::chrono::steady_clock::now() < frame_end) {
+                    std::this_thread::yield();
+                }
+            }
+            const float held_travelled = wrld.slice_w() - w0;
+            // The near field, not the global worst. At a large radius the
+            // most-stale chunk is past the fog and its lag says more about
+            // window size than about what the player sees - judging by it
+            // failed this check at radius 12 while the visible world was
+            // entirely current.
+            const float held_geometry  = wrld.near_meshed_w() - held_w0;
+            // Two seconds of walking must move the player and must move
+            // the geometry with them, and once the walking stops the
+            // geometry must arrive exactly.
+            //
+            // The second half is the gate; the first half used to be, and
+            // it should not have been. It was `held_geometry > half the
+            // distance travelled`, which is a claim about WORKER
+            // THROUGHPUT at 60 Hz - it measures how many chunks nine
+            // threads can rebuild in two seconds of wall clock. On an idle
+            // machine that fraction is 0.96; at load average 34 the same
+            // binary produced 0.77, 0.77 and 0.43 on three consecutive
+            // runs, so the audit failed on machine load rather than on
+            // anything about the engine.
+            //
+            // What is actually worth gating is load-independent: the
+            // geometry follows w while the key is held (any progress at
+            // all, plus rebuilds actually happening), and it converges to
+            // the player's w once they stop. A throttle refusing every
+            // rebuild - the bug this check exists to catch - fails both,
+            // at any load.
+            //
+            // The fraction is still measured and printed, because how far
+            // the world lags while you walk is worth knowing. It is a
+            // timing figure and it is reported as one.
+            // Drained here rather than through settle_slice(), on
+            // purpose. settle_slice sets the shared settle_timed_out flag,
+            // which tilt_ok has already been computed from and which the
+            // `settled` field reports - calling it again from down here
+            // would rewrite the verdict of a check that already ran.
+            bool held_converged = false;
+            {
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(30);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    wrld.drain_finished(256);
+                    wrld.flush_pending_remeshes(pool, 16);
+                    const int more = wrld.stream_slice(terrain, pool, 64);
+                    if (more == 0 && wrld.pending_async() == 0 &&
+                        wrld.pending_remesh() == 0) {
+                        held_converged = true;
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+            }
+            // Convergence means "no chunk is stale", not "every chunk was
+            // rebuilt at exactly this w". Streaming re-requests a chunk
+            // only once its own w has drifted past kSliceRemeshStep, so a
+            // settled world legitimately holds geometry up to one rebuild
+            // step behind the player - demanding equality would fail on
+            // the design rather than on a defect. This is the same
+            // definition `converges` uses after a rotation.
+            const int held_stale = wrld.slice_lag().stale;
+            const bool held_settled = held_converged && held_stale == 0;
+            const bool held_ok = rebuilds > 0 &&
+                                 held_travelled > 0.5f &&
+                                 held_geometry > 0.0f &&
+                                 held_settled;
+
+            // Building across the fourth dimension: an edit made on one
+            // slice must survive travelling away and coming back, and must
+            // NOT appear on the slice next door.
+            //
+            // Both halves matter. Without the first, nothing you build
+            // persists and w is a sightseeing axis. Without the second, a
+            // hole dug into a hillside at w=0 turns up in mid-air at w=5,
+            // where the terrain around it means something else entirely.
+            travel_to(w0);
+            int ex = 0, ey = 0, ez = 0;
+            bool placed = false;
+            for (int i = 0; i < 256 && !placed; ++i) {
+                ex = (i * 7) % 32;
+                ey = 70 + (i % 8);
+                ez = (i * 11) % 32;
+                placed = wrld.set_block(ex, ey, ez, world::BlockId::Glow);
+            }
+            settle();
+            const bool edit_here = wrld.block_at(ex, ey, ez) == world::BlockId::Glow;
+            travel_to(w0 + 3.0f);
+            const bool absent_away =
+                wrld.block_at(ex, ey, ez) != world::BlockId::Glow;
+            travel_to(w0);
+            const bool back_again =
+                wrld.block_at(ex, ey, ez) == world::BlockId::Glow;
+            const bool edit_ok = placed && edit_here && absent_away && back_again;
+
+            const bool ok = edit_ok && held_ok && tilt_ok && requested > 0 &&
+                            hash_w1 != hash_w0 &&      // w is a real axis
+                            hash_back == hash_w0 &&    // and a reversible one
+                            position_ok &&
+                            bad_w0 == 0 && bad_w1 == 0 &&
+                            bad_back == 0;
+
+            std::printf("\nVERIFY4D w=%.2f chunks=%d step_ms=%.1f "
+                        "changed=%d returned=%d "
+                        "held_rebuilds=%d held_travelled=%.2f held_geometry=%.2f "
+                        "held_keepup=%.2f held_settled=%d held_stale=%d "
+                        "edit_survives_w=%d tilt_changed=%d tilt_returned=%d "
+                        "notch=%d edit_survives_scroll=%d converges=%d "
+                        "pivot=%d ground_fixed=%d tilt_survives_travel=%d "
+                        "xw=%d edit_survives_inflight=%d "
+                        "reversible_away=%d "
+                        "edit_rotates=%d settled=%d "
+                        "edit_ns_stable=%d "
+                        "bad_tris=%d/%d/%d %s\n",
+                        w0, requested, step_ms,
+                        hash_w1 != hash_w0 ? 1 : 0,
+                        hash_back == hash_w0 ? 1 : 0,
+                        rebuilds, held_travelled, held_geometry,
+                        held_travelled > 0.0f ? held_geometry / held_travelled : 0.0f,
+                        held_settled ? 1 : 0, held_stale,
+                        edit_ok ? 1 : 0,
+                        hash_tilt != hash_w0 ? 1 : 0,
+                        (hash_untilt == hash_w0 && bad_tilt == 0
+                         && bad_untilt == 0) ? 1 : 0,
+                        notch_moves_world ? 1 : 0,
+                        edit_survives_scroll ? 1 : 0,
+                        converges ? 1 : 0,
+                        pivot_ok ? 1 : 0,
+                        player_ground_fixed ? 1 : 0,
+                        tilt_survives_travel ? 1 : 0,
+                        xw_ok ? 1 : 0,
+                        edit_survives_inflight ? 1 : 0,
+                        reversible_away ? 1 : 0,
+                        edit_rotates ? 1 : 0,
+                        settle_timed_out ? 0 : 1,
+                        namespace_stable ? 1 : 0,
+                        bad_w0, bad_w1, bad_back,
+                        ok ? "ok" : "FAILED");
+            if (!ok) return EXIT_FAILURE;
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        // --bench-4d: what does moving through the fourth dimension cost?
+        //
+        // The engine's other benches measure a STATIC world - how fast it
+        // draws, how much memory the meshes take. Neither says anything
+        // about the thing that makes a 4D engine hard, which is that
+        // moving along the fourth axis invalidates geometry rather than
+        // just moving the camera through it. A step along w changes what
+        // is in every chunk; a rotation changes it more.
+        //
+        // So this measures the two motions the same way, under the same
+        // 60 Hz pacing the render loop uses, and reports what each costs
+        // per unit of world change rather than per unit of input. Input
+        // units are not comparable: 0.003 rad and 0.003 w are wildly
+        // different amounts of new world (63.8% of columns against under
+        // 1%), so a bench that reported "ms per radian" against "ms per w"
+        // would be measuring two different things and inviting the
+        // comparison anyway.
+        if (opt.bench_4d && world_settled) {
+            struct Phase { const char* name; float w_rate; float theta_rate; };
+            // Rates a player can actually produce. 0.4 w/s is the walk
+            // speed along w; 0.18 rad/s is a steady scroll, about 60
+            // notches a second.
+            // Rates a player can actually produce, and a range of them
+            // for the wheel rather than one number.
+            //
+            // A single rotation rate was misleading. The bench used 0.18
+            // rad/s, which is sixty scroll notches a second - a rate no
+            // hand sustains - and reported the whole window permanently
+            // stale, which said more about the chosen rate than about the
+            // engine. The useful question is where the wheel stops
+            // outrunning the stream, and that needs a sweep.
+            //
+            // 0.003 rad is one notch, so the rates below are 1, 5, 15 and
+            // 60 notches a second. Fifteen is a brisk deliberate turn;
+            // sixty is a trackpad flick.
+            const Phase phases[] = {
+                {"translate",  world::World::kWalkSpeedW,  0.0f},
+                {"sprint w",   world::World::kSprintSpeedW, 0.0f},
+                {"scroll 1/s",  0.0f, 0.003f},
+                {"scroll 5/s",  0.0f, 0.015f},
+                {"scroll 15/s", 0.0f, 0.045f},
+                {"scroll 60/s", 0.0f, 0.180f},
+            };
+            constexpr int   kFrames = 300;        // five seconds each
+            constexpr float kDt = 1.0f / 60.0f;
+            // World::stream_slice's own default, named here so the report
+            // can say what the issued count is being measured against.
+            constexpr int   kStreamBudget = 24;
+
+            std::printf("\n4D motion cost, radius %d, %d frames per phase "
+                        "at 60 Hz\n\n", opt.stream_radius, kFrames);
+            // No chunks/sec column, deliberately. The first version had
+            // one and it reported 1430 for translation and 1439 for
+            // rotation - which is 24 x 60, the per-frame streaming budget
+            // times the frame rate, to three digits. Both phases saturate
+            // the budget every frame, so that column was reporting the
+            // CONSTANT and would have been quoted as a measured
+            // throughput. What the budget leaves is reported instead:
+            // whether the world keeps up at it, and how long it takes to
+            // converge once the motion stops.
+            std::printf("  %-11s %10s %10s %12s %12s %10s %12s\n", "motion",
+                        "mean ms", "p99 ms", "issued/frame", "behind",
+                        "ahead ms", "settle ms");
+
+            for (const Phase& ph : phases) {
+                // Start each phase from the SAME slice, not just a
+                // converged one.
+                //
+                // The phases run in sequence and each one moves the
+                // world: translate and sprint leave w at 8 between them.
+                // A rotation about the player displaces distant terrain
+                // in proportion to the slice's offset, so the scroll rows
+                // were measuring their own motion plus however far the
+                // travel rows had already gone - the 60/s row read 255 ms
+                // to settle against 187 for sprinting, and most of that
+                // gap was inherited w rather than the wheel. Resetting
+                // makes the rows comparable, which is the only reason to
+                // put them in one table.
+                wrld.set_slice_source(&terrain4d, 0.0f);
+                const auto warm_t0 = std::chrono::steady_clock::now();
+                bool warmed = false;
+                const auto warm_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(20);
+                while (std::chrono::steady_clock::now() < warm_deadline) {
+                    wrld.drain_finished(256);
+                    wrld.flush_pending_remeshes(pool, 256);
+                    if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
+                        && wrld.stream_slice(terrain, pool, 256) == 0) {
+                        warmed = true;
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+                // Only when it fails, and it must not fail: a phase that
+                // starts from a half-built world measures the warm-up
+                // rather than the motion. This loop streams 256 chunks an
+                // iteration rather than the default 24 for exactly that
+                // reason - it breaks only when nothing is in flight AND
+                // nothing is stale in the same pass, and at 24 a
+                // freshly-reset 625-chunk world almost never satisfies
+                // both at once. It timed out, and the scroll rows read
+                // 4 ms a frame and two seconds to settle: the reset, not
+                // the wheel.
+                if (!warmed) {
+                    std::fprintf(stderr, "[warm] %s did not converge in %.0f "
+                                 "ms, %d chunks still stale - the row below "
+                                 "measures the warm-up, not the motion\n",
+                                 ph.name,
+                                 std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now() - warm_t0)
+                                     .count(),
+                                 wrld.slice_lag().stale);
+                }
+                std::vector<double> frame_ms;
+                frame_ms.reserve(kFrames);
+                int chunks = 0;
+
+                const auto phase_t0 = std::chrono::steady_clock::now();
+                for (int f = 0; f < kFrames; ++f) {
+                    const auto frame_end = std::chrono::steady_clock::now() +
+                        std::chrono::microseconds(16667);
+                    const auto t0 = std::chrono::steady_clock::now();
+                    // Exactly the render loop's per-frame slice work.
+                    if (ph.w_rate != 0.0f) wrld.advance_w(ph.w_rate * kDt);
+                    if (ph.theta_rate != 0.0f)
+                        wrld.rotate_slice(ph.theta_rate * kDt, 0.0f);
+                    chunks += wrld.stream_slice(terrain, pool);
+                    wrld.drain_finished(wrld.pending_async() > 32 ? 48 : 16);
+                    wrld.flush_pending_remeshes(pool, 4);
+                    frame_ms.push_back(
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - t0).count());
+                    // Real pacing, for the same reason --verify-4d needs
+                    // it: without wall-clock time between frames the nine
+                    // workers never run, and the main thread measures
+                    // itself waiting on work that has not started.
+                    while (std::chrono::steady_clock::now() < frame_end)
+                        std::this_thread::yield();
+                }
+                const double elapsed_s =
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - phase_t0).count();
+
+                // How much of the resident world was behind the current
+                // slice at the moment the motion stopped. Captured HERE,
+                // before the settle loop below, or it would report a
+                // converged world every time and always read 0.
+                //
+                // The first version reported a w lag from near_meshed_w,
+                // and it read 0.000 for every rotate phase - not because
+                // rotation is free but because rotating does not change
+                // slice_w, so a w-based lag is zero by construction. It
+                // was a tautology in a results column. This counts stale
+                // chunks, which means the same thing on both axes.
+                const auto lag = wrld.slice_lag();
+
+                // Then: how long to converge once the motion STOPS. This
+                // is the number a player feels as the world catching up,
+                // and it is the one a whole-world rebuild would blow out.
+                const auto settle_t0 = std::chrono::steady_clock::now();
+                // Whether it actually converged, or ran out of guard.
+                //
+                // This is reported rather than assumed because the
+                // difference was invisible once: with the slice-stamp
+                // defect, restored and re-meshed chunks landed claiming
+                // slice (0, 0), so they were instantly stale again and
+                // this loop never converged - it exhausted the guard and
+                // reported the time that took, which looked like a settle
+                // time and was published as one. A settle that times out
+                // must not be able to masquerade as a fast settle.
+                // Bounded by TIME, not by iteration count, and this is
+                // the second time that distinction has bitten in this
+                // file. An iteration guard is a spin count: the body is a
+                // couple of microseconds when there is nothing finished to
+                // drain, so 4000 of them elapse in 8 ms while the nine
+                // workers have barely started. The loop then exits with
+                // most of the window still stale, having measured how long
+                // it takes to spin 4000 times - which is a number, is
+                // stable, looks like a settle time, and is not one.
+                bool converged = false;
+                double ahead_settle_ms = -1.0;
+                const auto settle_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(20);
+                while (std::chrono::steady_clock::now() < settle_deadline) {
+                    wrld.drain_finished(48);
+                    wrld.flush_pending_remeshes(pool, 4);
+                    // When the half of the window the camera faces goes
+                    // clean. That is the number a player feels: the world
+                    // behind them can stay stale for another second
+                    // without anyone being able to tell.
+                    if (ahead_settle_ms < 0.0 &&
+                        wrld.slice_lag_ahead().stale == 0) {
+                        ahead_settle_ms =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - settle_t0).count();
+                    }
+                    if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0
+                        && wrld.stream_slice(terrain, pool) == 0) {
+                        converged = true;
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+                if (ahead_settle_ms < 0.0) ahead_settle_ms = 0.0;
+                if (!converged) {
+                    const auto l = wrld.slice_lag();
+                    std::fprintf(stderr, "[settle] %s did not converge: "
+                                 "stale=%d/%d async=%d remesh=%d issued=%d\n",
+                                 ph.name, l.stale, l.resident,
+                                 wrld.pending_async(),
+                                 static_cast<int>(wrld.pending_remesh()),
+                                 wrld.stream_slice(terrain, pool));
+                }
+                const double settle_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - settle_t0).count();
+                char ahead[24];
+                std::snprintf(ahead, sizeof ahead, "%.0f", ahead_settle_ms);
+
+                std::sort(frame_ms.begin(), frame_ms.end());
+                double sum = 0.0;
+                for (const double v : frame_ms) sum += v;
+                const double mean = sum / static_cast<double>(frame_ms.size());
+                const double p99 = frame_ms[static_cast<std::size_t>(
+                    (frame_ms.size() - 1) * 0.99)];
+                const double issued_per_frame =
+                    static_cast<double>(chunks) / kFrames;
+                char behind[32];
+                std::snprintf(behind, sizeof behind, "%d / %d",
+                              lag.stale, lag.resident);
+                char settle[24];
+                if (converged) {
+                    std::snprintf(settle, sizeof settle, "%.0f", settle_ms);
+                } else {
+                    std::snprintf(settle, sizeof settle, "NEVER (%.0f)",
+                                  settle_ms);
+                }
+                std::printf("  %-11s %10.2f %10.2f %6.1f / %-5d %12s %10s %12s\n",
+                            ph.name, mean, p99, issued_per_frame, kStreamBudget,
+                            behind, ahead, settle);
+                (void)elapsed_s;
+            }
+            std::printf("\nmain-thread cost only; chunk generation and "
+                        "meshing run on the %d-worker pool.\n"
+                        "issued/frame at the budget means the motion "
+                        "invalidates geometry faster than the stream\n"
+                        "replaces it, so the figures to read are behind - "
+                        "how much of the resident world was\nstale when the "
+                        "motion stopped - and settle, how long it then took "
+                        "to converge.\n",
+                        static_cast<int>(pool.worker_count()));
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
@@ -1086,6 +2886,7 @@ int main(int argc, char** argv) {
             bool ok = prev != world::BlockId::Air;
             world::World::StreamStats away{}, back{};
             bool evicted = false;
+            bool survived_in_session = false;
             if (ok) {
                 wrld.set_block(ex, ey, ez, world::BlockId::Air);
                 const world::ChunkCoord home{0, 0};
@@ -1099,15 +2900,125 @@ int main(int argc, char** argv) {
                 while (wrld.pending_async() > 0) wrld.drain_finished(64);
                 // has_chunk guards the survival check: block_at reports Air
                 // for an unloaded chunk too, which would pass vacuously.
-                ok = evicted && away.stashed >= 1 && back.restored >= 1 &&
+                // The edit must come back, and it must come back through
+                // the REPLAY path rather than by the chunk being handed
+                // back whole.
+                //
+                // This used to assert stashed >= 1 && restored >= 1,
+                // which pinned the mechanism instead of the outcome - and
+                // the mechanism was the defect: a stashed chunk is
+                // restored verbatim, so it stops being generated at all,
+                // and once the slice could rotate that froze the chunk
+                // against every further turn of the wheel. Whole-chunk
+                // stashing is now only for chunks that came off disk,
+                // which the generator genuinely cannot reproduce.
+                // Either mechanism is correct, and which one applies
+                // says something real about the world's provenance:
+                //
+                //   generated   the chunk is regenerated and the edit is
+                //               replayed on top, so it keeps changing
+                //               with the slice
+                //   from disk   the generator cannot reproduce it, so it
+                //               is stashed whole and handed back verbatim
+                //
+                // Asserting exactly one of them fires is what stops this
+                // passing on a world that quietly took the wrong path.
+                const bool via_replay = back.replayed >= 1 &&
+                                        away.stashed == 0 &&
+                                        back.restored == 0;
+                const bool via_stash  = away.stashed >= 1 &&
+                                        back.restored >= 1 &&
+                                        back.replayed == 0;
+                ok = evicted && (via_replay != via_stash) &&
                      wrld.has_chunk(home) &&
                      wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+                // Captured HERE, not read again at print time. The two
+                // legs below deliberately move the world - one reloads it
+                // from disk, the other wipes it - so a field read at the
+                // end reports whatever those left behind rather than what
+                // this leg measured. It printed survived=0 on a passing
+                // run for exactly that reason.
+                survived_in_session =
+                    wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+            }
+
+            // And it must reach DISK from out of view.
+            //
+            // The check above only proves the edit comes back within the
+            // session. When edits moved from a whole-chunk stash to a
+            // replay list, save_world kept writing the stash and nothing
+            // wrote the replay list, so an edit made outside the stream
+            // window was simply absent from the save file - dig a hole,
+            // walk past the radius, save, reload, and the hole is gone.
+            // In-session everything looked right, which is why this needs
+            // its own leg rather than an extra assertion on the one above.
+            bool survives_disk = false;
+            if (ok) {
+                const world::ChunkCoord home{0, 0};
+                const world::ChunkCoord far_off{home.x + 3 * stream_radius,
+                                                home.z};
+                // Evict it again, so the save has to find it somewhere
+                // other than the resident set.
+                wrld.update_streaming(far_off, stream_radius, terrain, pool);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                const std::string dir = "/tmp/voxel_edit_disk_check";
+                std::filesystem::remove_all(dir);
+                const auto saved = world::save_world(wrld, dir, terrain_seed);
+                wrld.clear_all();
+                const auto loaded = world::load_world(wrld, dir, pool,
+                                                      terrain_seed);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                survives_disk = saved.ok && loaded.ok &&
+                                wrld.has_chunk(home) &&
+                                wrld.block_at(ex, ey, ez) == world::BlockId::Air;
+                std::filesystem::remove_all(dir);
+                if (!survives_disk) {
+                    std::fprintf(stderr, "[edit-persist] save/load lost the "
+                                 "edit: saved=%d loaded=%d resident=%d\n",
+                                 saved.ok ? 1 : 0, loaded.ok ? 1 : 0,
+                                 wrld.has_chunk(home) ? 1 : 0);
+                }
+                ok = survives_disk;
+            }
+
+            // And a wipe must actually wipe.
+            //
+            // clear_all() clears the resident chunks and the whole-chunk
+            // stash, but the replay list was added later and was not
+            // added here - so request_terrain_chunk replayed the
+            // DISCARDED world's edits over the new one's terrain. F6 and
+            // --bench-io both reach it.
+            //
+            // This needs its own leg because the save/load check above
+            // cannot see it: there the edit is supposed to come back, so
+            // a leak and a correct load look identical. Here nothing is
+            // loaded, so the only right answer is the terrain the
+            // generator makes.
+            bool wipe_is_clean = false;
+            if (ok) {
+                const world::ChunkCoord home{0, 0};
+                wrld.clear_all();
+                wrld.update_streaming(home, stream_radius, terrain, pool);
+                while (wrld.pending_async() > 0) wrld.drain_finished(64);
+                wipe_is_clean = wrld.has_chunk(home) &&
+                                wrld.block_at(ex, ey, ez) == prev;
+                if (!wipe_is_clean) {
+                    std::fprintf(stderr, "[edit-persist] a cleared world kept "
+                                 "the old one's edit: expected %d, got %d\n",
+                                 static_cast<int>(prev),
+                                 static_cast<int>(wrld.block_at(ex, ey, ez)));
+                }
+                ok = wipe_is_clean;
             }
             std::printf("\nEDIT_PERSIST block=(%d,%d,%d) prev_id=%d evicted=%d "
-                        "stashed=%d restored=%d survived=%d %s\n",
+                        "stashed=%d restored=%d replayed=%d survived=%d "
+                        "survives_disk=%d wipe_clean=%d %s\n",
                         ex, ey, ez, static_cast<int>(prev),
                         evicted ? 1 : 0, away.stashed, back.restored,
-                        wrld.block_at(ex, ey, ez) == world::BlockId::Air ? 1 : 0,
+                        back.replayed,
+                        survived_in_session ? 1 : 0,
+                        survives_disk ? 1 : 0,
+                        wipe_is_clean ? 1 : 0,
                         ok ? "ok" : "FAILED");
             if (!ok) {
                 return EXIT_FAILURE;
@@ -1205,6 +3116,13 @@ int main(int argc, char** argv) {
         pf.worker_count    = worker_count;
         pf.streamed_in     = streamed_in_total;
         pf.streamed_out    = streamed_out_total;
+        pf.four_d          = wrld.is_4d();
+        pf.slice_w         = wrld.slice_w();
+        pf.slice_theta     = wrld.slice_theta();
+        pf.slice_phi       = wrld.slice_phi();
+        pf.prisms          = wrld.prism_meshing();
+        pf.prism_cells_per_column = wrld.prism_cells_per_column();
+        pf.meshed_w        = wrld.near_meshed_w();
         pf.edit_count      = wrld.edit_count();
         pf.edit_last_ms    = wrld.edit_last_ms();
         pf.edit_avg_ms     = wrld.edit_avg_ms();
