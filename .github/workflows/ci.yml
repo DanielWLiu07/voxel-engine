@@ -99,7 +99,7 @@ jobs:
         run: xvfb-run -a ./build/voxel_engine --verify-4d --radius 4
 
       - name: 4D cross-section blocks
-        # The same 21 properties with blocks drawn as their 4D
+        # The same 20 properties with blocks drawn as their 4D
         # cross-section rather than as cubes. Not a duplicate of the step
         # above: it is a different mesher, a different vertex encoding and
         # a different order of operations (cells first, the voxel grid

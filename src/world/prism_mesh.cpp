@@ -33,7 +33,17 @@ inline float snap_xz(float v) {
 // has to be matched to voxel storage - block light is flood-filled on the
 // grid, not on the lattice. The centroid is interior to a convex polygon
 // with area, so it lands in the cell it came from.
+//
+// Only ever called on a polygon that still has area. A cell whose corners
+// collapsed under the vertex snap keeps its lattice identity but has
+// count == 0, and averaging nothing is 0/0: UBSan caught
+// `static_cast<int>(nan)` here, reached from build_prism_chunk_from_blocks
+// re-deriving a centroid the cell had already stored. The caller uses the
+// stored one now, and this asserts rather than quietly returning a voxel
+// no reasoning supports.
 inline void centroid_voxel(const SlicePolygon& p, int& vx, int& vz) {
+    assert(p.count > 0 && "centroid of a collapsed cell has no meaning");
+    if (p.count == 0) { vx = 0; vz = 0; return; }
     float cx = 0.0f, cz = 0.0f;
     for (int v = 0; v < p.count; ++v) { cx += p.x[v]; cz += p.z[v]; }
     cx /= static_cast<float>(p.count);
@@ -350,8 +360,13 @@ PrismChunk build_prism_chunk_from_blocks(const Chunk& chunk, ChunkCoord coord,
     ZoneScopedN("build_prism_chunk_from_blocks");
     PrismChunk pc = tile_footprint(coord, s);
     for (auto& cell : pc.cells) {
-        int vx = 0, vz = 0;
-        centroid_voxel(cell.poly, vx, vz);
+        // cell.vx/vz, not a fresh centroid of cell.poly. They are the same
+        // number for every cell that survived the snap, and for the ones
+        // that did not they are the only correct answer: tile_footprint
+        // takes them from the polygon BEFORE snapping, so a cell whose
+        // corners have since merged away still knows which voxel column it
+        // came from. Re-deriving them here instead averaged zero vertices.
+        const int vx = cell.vx, vz = cell.vz;
         for (int y = 0; y < kChunkSizeY; ++y) {
             cell.blocks[static_cast<std::size_t>(y)] =
                 static_cast<std::uint8_t>(chunk.get(vx, y, vz));
