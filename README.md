@@ -589,7 +589,9 @@ world of 625 chunks.
 **Largest configuration tested, radius 16:** a **71-million-voxel** world
 (1,089 chunks) at 4.8 ms, **3.5x inside the same budget** (208 fps), 54 M
 triangles/sec, 429 MB peak RSS, 18.9 MB of GPU mesh, and **zero frames
-over budget** across 300. A 1.7x larger world costs 5% of the frame rate,
+over budget** across 300 on an idle machine - a loaded one shows a
+handful, which the bench separates out as `descheduled_frames` and
+`stolen_ms` so OS preemption is not read as engine cost. A 1.7x larger world costs 5% of the frame rate,
 which is the scaling claim the sweep table below exists to support. Radius 16 needs the full 300-frame window to
 reach steady state; a shorter bench reports a lower RSS because the world
 has not finished streaming in.
@@ -601,6 +603,37 @@ sweep; a single figure here is a snapshot of one machine's mood. Per-frame work:
 frustum + occlusion cull), 167k triangles rendered, post-process the largest
 single pass. Inside a cave, occlusion culling alone cuts drawn sections
 **70.8x** (283 -> 4).
+
+**The same world as a 4D cross-section.** Every figure above is the cube
+path. Drawing blocks as the shape a 4D cell presents to the cut costs
+more - more cells per chunk, and caps that cannot merge across cells -
+so the honest comparison is the same 71-million-voxel world at the same
+radius, meshed three ways:
+
+| radius 16, 300 frames | avg ms, four runs | mean | inside 16.7 ms | triangles | GPU mesh |
+|---|---|---|---|---|---|
+| cube blocks | 4.95, 5.02, 5.11, 5.13 | 5.05 | **3.3x** | 260,018 | 19.1 MB |
+| 4D cross-section, default cut | 5.82, 6.15, 6.67, 7.10 | **6.4** | **2.6x** | 470,810 | 33.0 MB |
+| 4D cross-section, both planes turned 0.45 rad | 7.54, 7.89, 8.46, 8.48 | 8.09 | **2.1x** | 1,110,444 | 79.3 MB |
+
+Four runs rather than one, and the spread quoted rather than a mean
+alone, because these are timings: they move with what else the machine
+is doing, and this README has had to correct a bare millisecond figure
+before. The counts either side of them do not move - triangles and GPU
+mesh are byte-identical run to run, which is why those are the columns
+to trust. The turned cut is the expensive one and that is the point of
+it: a hyperplane meeting the lattice at an angle passes through more
+cells per unit area, so it presents 4.3x the triangles of the cube path
+and still lands twice inside the budget.
+
+Reproduce:
+
+```
+./build/voxel_engine --bench-frame 300 --radius 16
+./build/voxel_engine --bench-frame 300 --radius 16 --slice-prisms
+./build/voxel_engine --bench-frame 300 --radius 16 --slice-prisms \
+                     --slice-tilt 0.45 --slice-tilt-xw 0.45
+```
 
 Reproduce:
 ```
