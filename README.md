@@ -533,6 +533,30 @@ Pass `--bench` to run the mesher benchmark instead of opening a window:
 
 Apple M4 (10 cores), macOS 26.2 arm64, OpenGL 4.1 Apple renderer.
 
+### What the fourth dimension costs
+
+One engine, two modes. Cubes are the default; `--slice-prisms` (or `P`
+at runtime) draws each block as the polygon its 4D cell presents to the
+cut. Same world, same seed, same camera, radius 12:
+
+| | triangles | GPU mesh | frame | inside 60 Hz |
+| :--- | ---: | ---: | ---: | ---: |
+| cubes - the 3D engine | 145,418 | 10.99 MB | 4.58 ms | **3.6x** |
+| 4D cross-sections, flat cut | 272,802 (1.9x) | 19.10 MB (1.7x) | 4.94 ms (1.08x) | **3.4x** |
+| 4D cross-sections, both planes at 0.45 | 620,856 (**4.3x**) | 44.54 MB (4.1x) | 6.04 ms (**1.3x**) | **2.8x** |
+
+The last row is the one to read: a turned cut presents **4.3x the
+triangles for 1.3x the frame**. The renderer absorbs more than four
+times the geometry for a third more time, which is the useful way round
+for that ratio to point. Frame times are medians of three runs and move
+with machine load; the triangle and byte columns do not move at all.
+
+Going 4D costs nothing in the 3D path - it is opt-in, and every
+hardware-independent 3D figure below is unchanged by its existence.
+Larger worlds and the per-pass split are in
+[Frame cost](#frame-cost-on-an-m4); the meshing ratios behind the
+triangle column are in [A fourth spatial dimension](#a-fourth-spatial-dimension).
+
 ### The numbers that do not depend on the machine
 
 The numbers worth reading first are the ones that do not depend on the
