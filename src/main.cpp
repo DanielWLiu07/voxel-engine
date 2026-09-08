@@ -5,6 +5,7 @@
 #include "bench/frame_report.h"
 #include "bench/mesher_bench.h"
 #include "core/cli_options.h"
+#include "core/slice_ease.h"
 #include "core/cpu_time.h"
 #include "core/frame_stats.h"
 #include "core/capture_mode.h"
@@ -653,6 +654,10 @@ int main(int argc, char** argv) {
     bool walk_mode = false;
     world::BlockId place_id = world::BlockId::Stone;
 
+    // The wheel's angle debt. See core/slice_ease.h for why the cut no
+    // longer turns by a whole notch on the frame the notch arrives.
+    core::SliceEase slice_ease_zw;
+
     float time_of_day = 0.35f;
     // A capture can pin the sun; interactive runs keep the default.
     if (opt.time_of_day >= 0.0f) time_of_day = opt.time_of_day;
@@ -859,7 +864,15 @@ int main(int argc, char** argv) {
                 constexpr float kMaxNotchesPerFrame = 8.0f;
                 const float notches =
                     std::clamp(scroll, -kMaxNotchesPerFrame, kMaxNotchesPerFrame);
-                wrld.rotate_slice(notches * 0.003f, cam.position().z);
+                slice_ease_zw.request(notches * 0.003f);
+            }
+
+            // Pay down whatever the wheel is owed. Runs every frame, not
+            // only on the frames a notch arrives, which is the whole
+            // point: the turn continues smoothly after the input stops.
+            if (const float step = slice_ease_zw.step(static_cast<float>(dt));
+                step != 0.0f) {
+                wrld.rotate_slice(step, cam.position().z);
             }
 
             if (!opt.auto_w) {

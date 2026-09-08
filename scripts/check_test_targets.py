@@ -45,6 +45,7 @@ EXPECTED = {
     "terrain4d",            # 4D terrain generation, caves, structures
     "cli_options",          # argv -> options
     "mpmc_queue",           # lock-free queue + worker pool under stress
+    "slice_ease",           # the wheel's angle debt: exact, and never a visible jump
 }
 
 

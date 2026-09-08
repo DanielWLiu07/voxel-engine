@@ -313,6 +313,18 @@ if(VOXEL_BUILD_TESTS)
   endif()
   add_test(NAME cli_options COMMAND cli_tests)
 
+  # The wheel's angle debt. Header-only and dependency-free, and its own
+  # binary because what it guarantees is exactness - the angle asked for
+  # is the angle turned, and a rotation and its reverse net to zero - and
+  # that deserves to fail on its own line rather than inside a suite about
+  # something else.
+  add_executable(ease_tests tests/test_slice_ease.cpp)
+  target_include_directories(ease_tests PRIVATE src)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(ease_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME slice_ease COMMAND ease_tests)
+
   # Concurrency correctness (lock-free queue + worker pool stress, no GL, no
   # voxel deps). Also built under TSan / ASan+UBSan in CI (sanitizers job).
   add_executable(mpmc_tests tests/test_mpmc_queue.cpp src/core/thread_pool.cpp)
