@@ -890,15 +890,26 @@ same M4. `over` counts frames that missed a 60 Hz deadline.
 | 20 | 1,681 | 110 M |   414,760 |  5.78 | 13.45 | **2.9x** |   2 |   613 MB |
 | 24 | 2,401 | 157 M |   586,794 |  6.50 | 21.73 | **2.6x** |   3 |   848 MB |
 | 28 | 3,249 | 213 M |   773,010 |  7.51 | 15.26 | **2.2x** |   1 | 1,075 MB |
-| 32 | 4,225 | **277 M** |   988,436 |  8.18 | 14.98 | **2.0x** | **0** | 1,364 MB |
+| 32 | 4,225 | **277 M** |   988,436 |  8.18 | 14.98 | **2.0x** | 0-3 | 1,364 MB |
 | 40 | 6,561 | 430 M | 1,536,578 | 10.01 | 17.64 | 1.7x |   5 | 1,798 MB |
 
-**Radius 32 is the largest size that never misses.** 276,889,600 voxels
-across 4,225 chunks, every one of 300 frames inside the budget, worst
-frame 15.87 ms - and `--validate --radius 32` reads the meshes back off
-the GPU and reports `bad_triangles=0`, so that is correct geometry and
-not merely fast geometry. A 6.8x larger world than radius 12 costs 1.8x
-the frame.
+**Radius 32 is the largest size that stays comfortable.** 276,889,600
+voxels across 4,225 chunks, and `--validate --radius 32` reads the
+meshes back off the GPU and reports `bad_triangles=0`, so that is
+correct geometry and not merely fast geometry. A 6.8x larger world than
+radius 12 costs 1.8x the frame.
+
+Four runs: 7.83, 7.89, 8.18 and 8.53 ms, missing 0, 0, 1 and 3 frames of
+300. The first draft of this paragraph said "every one of 300 frames
+inside the budget" on the strength of a single run, which is the same
+mistake the rest of this README exists to catch - one run is not a
+property of the setting.
+
+What does hold across all four is more specific and more interesting:
+`over_budget` equalled `descheduled_frames` every time. Every frame that
+missed had lost at least half its wall time off-CPU to something else on
+the machine; the engine's own work never exceeded the budget at this
+size. That is the distinction the bench instruments rather than asserts.
 
 Radius 40 reaches 430 M voxels and still averages 10 ms, but it misses 5
 frames of 300 and wants 1.8 GB, so it is the demonstration rather than
