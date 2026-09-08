@@ -300,12 +300,24 @@ rotation never touches, so every cell in a column shares one polygon and
 runs of the same block collapse into a single prism exactly.
 
 It does not reach parity with greedy at a flat cut, and the reason is
-worth stating rather than rounding off: a merged wall has to span one
-uniform y range, so two cells whose exposed heights differ never share a
-quad, where the cube mesher's sweep splits them into two rectangles and
-merges what overlaps. Closing that needs a 3D box decomposition over
-(two lattice axes, y) rather than the 2D sweep here. 1.41x is what the 2D
-sweep gets.
+worth stating rather than rounding off - and worth checking rather than
+asserting, because the obvious explanation turned out to be wrong.
+
+The obvious explanation: a merged wall spans one uniform y range, so two
+cells whose exposed heights differ never share a quad, where the cube
+mesher's sweep splits them into two rectangles and merges what overlaps.
+Closing that would need a 3D box decomposition over (two lattice axes,
+y) rather than the 2D sweep here.
+
+Measured, that is worth **0.8%**. Dropping the pin on the third
+dimension and re-merging in 3D - for walls over `(a, b, y)`, for caps
+over `(i, k, l)` - recovers about **1%** of the quads at any cut, and
+removing the light term from the grouping entirely does not move it.
+The merge is at its optimum; see [docs/bench/merge-headroom.md](docs/bench/merge-headroom.md).
+
+So 1.41x is not slack in the sweep. It is the cut presenting more cells,
+each with its own polygon and its own edges - the geometry of a
+hyperplane meeting a lattice at an angle, which no sweep recovers.
 
 In the running engine at radius 12, on an M4:
 
@@ -860,6 +872,49 @@ longer existed, which is the exact failure this repo audits for:
 | 12 |   625 | 396 | 145,418 | 4.58 | 4.45 |  8.92 | 218.3 | 31.7M | 289 MB |
 | 14 |   841 | 531 | 200,886 | 4.88 | 4.61 |  9.92 | 204.9 | 41.2M | 363 MB |
 | 16 | 1,089 | 687 | 260,018 | 4.81 | 4.64 |  9.37 | 208.0 | 54.1M | 429 MB |
+
+### How large a world this actually holds
+
+The table above stops at radius 16 because that was the largest size the
+engine had been asked for, not the largest it manages. It manages a good
+deal more, and the reason is the culler: a bigger radius loads more
+chunks but only draws what a camera can reach, so frame time grows far
+slower than the world does.
+
+Each row is a separate 300-frame run, `center` pose, vsync off, on the
+same M4. `over` counts frames that missed a 60 Hz deadline.
+
+| Radius | Chunks | Voxels | Tris drawn | Avg ms | p99 ms | inside 16.7 ms | over/300 | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 | 1,089 |  71 M |   260,018 |  5.05 |  9.37 | **3.3x** | 0-2 |   429 MB |
+| 20 | 1,681 | 110 M |   414,760 |  5.78 | 13.45 | **2.9x** |   2 |   613 MB |
+| 24 | 2,401 | 157 M |   586,794 |  6.50 | 21.73 | **2.6x** |   3 |   848 MB |
+| 28 | 3,249 | 213 M |   773,010 |  7.51 | 15.26 | **2.2x** |   1 | 1,075 MB |
+| 32 | 4,225 | **277 M** |   988,436 |  8.18 | 14.98 | **2.0x** | **0** | 1,364 MB |
+| 40 | 6,561 | 430 M | 1,536,578 | 10.01 | 17.64 | 1.7x |   5 | 1,798 MB |
+
+**Radius 32 is the largest size that never misses.** 276,889,600 voxels
+across 4,225 chunks, every one of 300 frames inside the budget, worst
+frame 15.87 ms - and `--validate --radius 32` reads the meshes back off
+the GPU and reports `bad_triangles=0`, so that is correct geometry and
+not merely fast geometry. A 6.8x larger world than radius 12 costs 1.8x
+the frame.
+
+Radius 40 reaches 430 M voxels and still averages 10 ms, but it misses 5
+frames of 300 and wants 1.8 GB, so it is the demonstration rather than
+the setting to quote.
+
+The 4D cross-section path does **not** scale this far as cleanly: at
+radius 32 it averages 9.49 ms but its p99 is 34 ms and it misses 9
+frames of 300, because a turned cut multiplies cells rather than
+reusing a cube's geometry. Quote radius 16 for the 4D path and radius
+32 for cubes; pairing the larger world with the 4D frame time would be
+describing two different runs as one.
+
+```
+./build/voxel_engine --bench-frame 300 --radius 32
+./build/voxel_engine --validate --radius 32
+```
 
 `BENCH_FRAME` also reports the numbers an average hides: `low1_fps` is
 the mean of the worst 1% of frames expressed as fps, and `over_budget`
