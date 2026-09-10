@@ -176,6 +176,66 @@ float Noise4D::sample(float x, float y, float z, float w) const {
     return lerp(c2[0], c2[1], t) * kNormalize;
 }
 
+// The z = 0 slice of sample(), with the corners that vanish left out.
+//
+// Derivation, since "half the work disappears" deserves to be checkable
+// rather than asserted. In sample(), corner c has its z-offset in bit 2,
+// and the interpolation collapses x, then y, then z, then w:
+//
+//     c2[i] = lerp(b[2i], b[2i+1], s)      s = fade(dz)
+//
+// At z = 0: floor(0) is 0, so dz = 0, and fade(0) = 6*0^5 - 15*0^4 +
+// 10*0^3 = 0 exactly. lerp(a, b, 0) is a + 0 * (b - a), which is a for
+// any finite b. So c2[i] = b[2i], and b[1] and b[3] - everything built
+// from the eight corners with bit 2 set - are multiplied away.
+//
+// What survives is the eight corners with oz = 0, three lerp levels
+// instead of four, and eight hashes instead of sixteen.
+float Noise4D::sample_xyw(float x, float y, float w) const {
+    const float fx = std::floor(x), fy = std::floor(y), fw = std::floor(w);
+    const auto ix = static_cast<std::int32_t>(fx);
+    const auto iy = static_cast<std::int32_t>(fy);
+    const auto iw = static_cast<std::int32_t>(fw);
+
+    const float dx = x - fx, dy = y - fy, dw = w - fw;
+    const float u = fade(dx), v = fade(dy), t = fade(dw);
+
+    // Indexed ox | oy<<1 | ow<<2. The z offset is always 0, so the third
+    // hash argument and the third distance component are both 0 - which
+    // is what sample() passes for iz + oz and dz - oz at these corners.
+    float q[8];
+    for (int c = 0; c < 8; ++c) {
+        const int ox = (c >> 0) & 1, oy = (c >> 1) & 1, ow = (c >> 2) & 1;
+        q[c] = grad_dot(
+            hash4(ix + ox, iy + oy, 0, iw + ow, seed_),
+            dx - static_cast<float>(ox), dy - static_cast<float>(oy),
+            0.0f, dw - static_cast<float>(ow));
+    }
+
+    const float a0 = lerp(q[0], q[1], u);   // oy 0, ow 0
+    const float a1 = lerp(q[2], q[3], u);   // oy 1, ow 0
+    const float a2 = lerp(q[4], q[5], u);   // oy 0, ow 1
+    const float a3 = lerp(q[6], q[7], u);   // oy 1, ow 1
+    const float b0 = lerp(a0, a1, v);
+    const float b1 = lerp(a2, a3, v);
+    return lerp(b0, b1, t) * kNormalize;
+}
+
+float Noise4D::fbm_xyw(float x, float y, float w, int octaves,
+                       float frequency, float lacunarity, float gain) const {
+    float sum = 0.0f;
+    float amplitude = 1.0f;
+    float norm = 0.0f;
+    for (int o = 0; o < octaves; ++o) {
+        sum += amplitude * sample_xyw(x * frequency, y * frequency,
+                                      w * frequency);
+        norm += amplitude;
+        frequency *= lacunarity;
+        amplitude *= gain;
+    }
+    return norm > 0.0f ? sum / norm : 0.0f;
+}
+
 float Noise4D::fbm(float x, float y, float z, float w, int octaves,
                    float frequency, float lacunarity, float gain) const {
     float sum = 0.0f;

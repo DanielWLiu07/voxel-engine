@@ -35,6 +35,28 @@ public:
               float frequency = 1.0f, float lacunarity = 2.0f,
               float gain = 0.5f) const;
 
+    // sample() and fbm() with the third axis pinned at zero.
+    //
+    // Every heightfield in the 4D generator - the domain warp, the three
+    // octave stacks behind height_at_4d, temperature and biome - reads a
+    // 3D slice of the 4D field: world x, world z, and w, with the noise's
+    // remaining axis held at 0. Fourteen of these run per world column.
+    //
+    // At z = 0 the sample collapses. The interpolation weight for that
+    // axis is fade(0), which is exactly 0, and lerp(a, b, 0) is exactly a,
+    // so the eight hypercube corners on the far side of that axis are
+    // computed and then multiplied away. Skipping them halves the hashes
+    // and the gradient dot products.
+    //
+    // Exactly equal to sample(x, y, 0, w), not approximately: no term is
+    // dropped that was not already being multiplied by zero. noise4d_tests
+    // pins that over random inputs rather than leaving it to the argument
+    // above.
+    float sample_xyw(float x, float y, float w) const;
+    float fbm_xyw(float x, float y, float w, int octaves,
+                  float frequency = 1.0f, float lacunarity = 2.0f,
+                  float gain = 0.5f) const;
+
     std::uint32_t seed() const { return seed_; }
 
 private:

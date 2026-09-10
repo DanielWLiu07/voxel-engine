@@ -577,6 +577,55 @@ void test_a_fixed_w_gives_a_usable_3d_field() {
 
 }  // namespace
 
+// The z = 0 fast path must be EXACTLY the general sample, not close to
+// it. Every heightfield in the 4D generator goes through it, and the
+// engine gates a byte-identical --bench on both CI architectures, so a
+// last-bit difference here would surface as a CI failure a long way from
+// its cause.
+//
+// Equality rather than a tolerance, deliberately. The claim is not "the
+// shortcut is accurate", it is "the terms it skips were already being
+// multiplied by zero" - and only == tests that claim.
+void test_the_z_zero_fast_path_is_exact() {
+    world::Noise4D n(20260909u);
+    std::mt19937 rng(7u);
+    std::uniform_real_distribution<float> coord(-4000.0f, 4000.0f);
+
+    bool all = true;
+    for (int i = 0; i < 20000 && all; ++i) {
+        const float x = coord(rng), y = coord(rng), w = coord(rng);
+        if (n.sample_xyw(x, y, w) != n.sample(x, y, 0.0f, w)) all = false;
+    }
+    EXPECT(all, "sample_xyw equals sample at z = 0 over 20k random points");
+
+    // Lattice points and exact half cells, where fade() hits its exact
+    // values and any sign-of-zero difference would show.
+    all = true;
+    for (int ix = -3; ix <= 3 && all; ++ix)
+        for (int iy = -3; iy <= 3 && all; ++iy)
+            for (int iw = -3; iw <= 3 && all; ++iw)
+                for (float off : {0.0f, 0.5f, 0.25f}) {
+                    const float x = static_cast<float>(ix) + off;
+                    const float y = static_cast<float>(iy) + off;
+                    const float w = static_cast<float>(iw) + off;
+                    if (n.sample_xyw(x, y, w) != n.sample(x, y, 0.0f, w)) {
+                        all = false; break;
+                    }
+                }
+    EXPECT(all, "sample_xyw exact on lattice points and half cells");
+
+    // And through the octave stack, where a per-octave difference would
+    // accumulate rather than cancel.
+    all = true;
+    for (int oct = 1; oct <= 6 && all; ++oct)
+        for (int i = 0; i < 500 && all; ++i) {
+            const float x = coord(rng), y = coord(rng), w = coord(rng);
+            if (n.fbm_xyw(x, y, w, oct, 0.003f) !=
+                n.fbm(x, y, 0.0f, w, oct, 0.003f)) all = false;
+        }
+    EXPECT(all, "fbm_xyw equals fbm at z = 0 for 1 through 6 octaves");
+}
+
 int main() {
     std::printf("noise4d_tests: running...\n\n");
     test_noise_is_exactly_zero_at_lattice_points();
@@ -597,6 +646,7 @@ int main() {
     test_the_field_keeps_its_detail_out_to_a_million_units();
     test_the_field_never_returns_nan_or_infinity();
     test_a_fixed_w_gives_a_usable_3d_field();
+    test_the_z_zero_fast_path_is_exact();
 
     std::printf("\nnoise4d_tests: %d checks, %d failure%s\n",
                 g_checks, g_failures, g_failures == 1 ? "" : "s");

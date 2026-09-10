@@ -228,14 +228,14 @@ int TerrainGen4D::height_at_4d(float x, float z, float fw) const {
     // here said the opposite. Nothing depends on which axis carries what,
     // since the field is isotropic, but a reader tracing the heightfield
     // should not have to discover that the labels are shuffled.
-    const float ox = warp_.sample(x * kWarpFreq, z * kWarpFreq, 0.0f,
-                                  fw * kWarpFreq) * 60.0f;
-    const float oz = warp_.sample((x + 113.0f) * kWarpFreq,
-                                  (z + 271.0f) * kWarpFreq, 0.0f,
-                                  fw * kWarpFreq) * 60.0f;
-    const float c = continents_.fbm(x + ox, z + oz, 0.0f, fw, 4, kContinentFreq);
-    const float h = hills_.fbm(x, z, 0.0f, fw, 4, kHillsFreq);
-    const float d = detail_.fbm(x, z, 0.0f, fw, 2, kDetailFreq);
+    const float ox = warp_.sample_xyw(x * kWarpFreq, z * kWarpFreq,
+                                      fw * kWarpFreq) * 60.0f;
+    const float oz = warp_.sample_xyw((x + 113.0f) * kWarpFreq,
+                                      (z + 271.0f) * kWarpFreq,
+                                      fw * kWarpFreq) * 60.0f;
+    const float c = continents_.fbm_xyw(x + ox, z + oz, fw, 4, kContinentFreq);
+    const float h = hills_.fbm_xyw(x, z, fw, 4, kHillsFreq);
+    const float d = detail_.fbm_xyw(x, z, fw, 2, kDetailFreq);
     const float n = c * 0.65f + h * 0.25f + d * 0.10f;
 
     return std::clamp(
@@ -260,8 +260,8 @@ void TerrainGen4D::fill_column(float x4, float z4, float fw,
     const int height = height_at_4d(x4, z4, fw);
     out.guide_height = height;
 
-    const float temp = temp_.sample(x4 * kTempFreq, z4 * kTempFreq,
-                                    0.0f, fw * kTempFreq);
+    const float temp = temp_.sample_xyw(x4 * kTempFreq, z4 * kTempFreq,
+                                        fw * kTempFreq);
     // 0.24, not the 3D generator's 0.35.
     //
     // Same class of mistake as the height amplitude, in a place nobody
@@ -277,8 +277,8 @@ void TerrainGen4D::fill_column(float x4, float z4, float fw,
     // not Gaussian, so a stddev ratio is only an approximation of the
     // tail. Measuring the value with the same tail mass gives 0.2114.
     out.is_desert = (temp > 0.21f) && (height < kSnowBand);
-    out.biome = biome_.sample(x4 * kBiomeFreq, z4 * kBiomeFreq,
-                              0.0f, fw * kBiomeFreq);
+    out.biome = biome_.sample_xyw(x4 * kBiomeFreq, z4 * kBiomeFreq,
+                                  fw * kBiomeFreq);
 
     auto put = [&out](int y, BlockId b) {
         out.blocks[static_cast<std::size_t>(y)] = static_cast<std::uint8_t>(b);
