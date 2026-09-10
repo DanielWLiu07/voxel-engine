@@ -38,6 +38,48 @@ void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
     if (any_bound) shadow_map.end_pass(fv.window_w, fv.window_h);
 }
 
+void draw_motes(const gfx::Shader& motes_shader, GLuint vao,
+                const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("motes_pass");
+    if (fv.motes <= 0.0f) return;
+
+    // How many, and how far they reach. 3000 in a 48 m half-box is dense
+    // enough to read as a field at night and invisible enough by day; the
+    // whole pass is one draw call either way.
+    constexpr int  kCount = 9000;
+    // Wide and thin: the band of air a player is actually standing in.
+    // A cube of the same reach puts most of them overhead, where they
+    // read as stray pixels against the sky instead of as fireflies.
+    const glm::vec3 kBoxHalfExtent(30.0f, 6.0f, 30.0f);
+
+    motes_shader.use();
+    motes_shader.set_mat4("u_view", fv.view);
+    motes_shader.set_mat4("u_proj", fv.proj);
+    motes_shader.set_vec3("u_camera_pos", fv.camera_pos);
+    motes_shader.set_float("u_time", fv.time_seconds);
+    motes_shader.set_float("u_night", light.star_fade);
+    motes_shader.set_vec3("u_box", kBoxHalfExtent);
+    motes_shader.set_float("u_viewport_h", static_cast<float>(fv.window_h));
+    motes_shader.set_float("u_strength", fv.motes);
+
+    // Depth TEST on, depth WRITE off: terrain in front of a mote hides it,
+    // but a mote never occludes anything behind it - two overlapping ones
+    // should both show.
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);      // additive
+    glDepthMask(GL_FALSE);
+
+    glBindVertexArray(vao);
+    glDrawArrays(GL_POINTS, 0, kCount);
+    glBindVertexArray(0);
+
+    glDepthMask(GL_TRUE);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+    glDisable(GL_PROGRAM_POINT_SIZE);
+}
+
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light,
               bool depth_test) {

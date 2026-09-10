@@ -30,6 +30,8 @@ struct FrameView {
     // Wind strength for foliage sway, 0 disables. A multiplier rather
     // than a flag so it can be dialled without touching the shader.
     float     wind = 1.0f;
+    // Mote density scale, 0 disables the pass entirely.
+    float     motes = 1.0f;
 };
 
 // cascade_update_mask: bit c set => redraw cascade c's depth this frame.
@@ -53,6 +55,15 @@ world::DrawStats draw_terrain_wireframe(const gfx::Shader& wire_shader,
                                         const FrameView& fv,
                                         const gfx::Frustum& frustum,
                                         const glm::vec3& color);
+
+// Drifting motes - fireflies at night, dust by day. Drawn into the HDR
+// target after the world so terrain occludes them, with depth writes off
+// and additive blending so a bright core reaches the bloom pass.
+//
+// No vertex data: the shader derives every position from gl_VertexID and
+// the clock, so this is one draw call and no CPU work at all.
+void draw_motes(const gfx::Shader& motes_shader, GLuint vao,
+                const FrameView& fv, const LightingFrame& light);
 
 void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,

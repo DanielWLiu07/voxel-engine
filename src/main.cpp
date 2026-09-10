@@ -1340,6 +1340,7 @@ int main(int argc, char** argv) {
                               ? 100.0f
                               : static_cast<float>(now);
         fv.wind = opt.wind;
+        fv.motes = opt.motes;
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
 
@@ -1464,6 +1465,10 @@ int main(int argc, char** argv) {
                                static_cast<float>(world::kSeaLevel));
         }
         sampler.end_pass(sampler.passes().water);
+
+        // After the world, still inside the HDR target: terrain occludes a
+        // mote, and a mote's bright core reaches the bloom pass.
+        render::draw_motes(shaders.motes, sky_vao, fv, light);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.

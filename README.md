@@ -129,7 +129,13 @@ Windows build clean on CI.
 ./build/voxel_engine --slice-prisms   # blocks as 4D cross-sections
 ./build/voxel_engine --3d             # the ordinary three-dimensional world
 ./build/voxel_engine --wind 0         # still air; 1 is the default breeze
+./build/voxel_engine --motes 0        # no fireflies or dust
 ```
+
+Fireflies drift through the trees after dark and fade to faint dust in
+daylight. They have no vertex buffer and no CPU state: the shader derives
+every position from `gl_VertexID` and the clock, so the whole field is
+one draw call.
 
 Leaves sway. The offset is a function of world position and time, so
 coincident vertices move together and no seam opens along a greedy-merged

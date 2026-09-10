@@ -128,6 +128,9 @@ struct CliOptions {
     // still at --wind 0 and one at --wind 12 differ only where leaves
     // are, which is how the sway is checked without a video.
     float wind = 1.0f;
+    // --motes S: drifting particle density, 1 default, 0 off. Fireflies
+    // after dark, faint dust in daylight.
+    float motes = 1.0f;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
     // --slice-tilt-xw R: the second rotation plane, for captures.

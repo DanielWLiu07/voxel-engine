@@ -406,6 +406,28 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_motes() {
+    // Same shape as --wind: a scale with 0 meaning off, rejected rather
+    // than clamped when it is out of range.
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->motes == 1.0f, "--motes defaults on");
+    }
+    {
+        const auto r = parse({"--motes", "0"});
+        EXPECT(r.opts && r.opts->motes == 0.0f, "--motes 0 turns them off");
+    }
+    {
+        const auto r = parse({"--motes", "2"});
+        EXPECT(r.opts && r.opts->motes == 2.0f, "--motes takes a scale");
+    }
+    EXPECT(!parse({"--motes", "-1"}).opts.has_value(),
+           "--motes rejects a negative");
+    EXPECT(!parse({"--motes", "50"}).opts.has_value(),
+           "--motes rejects an absurd value");
+    EXPECT(!parse({"--motes"}).opts.has_value(), "--motes needs a value");
+}
+
 void test_wind() {
     // A scale, not a flag: 0 is still air and the default is a breeze.
     {
@@ -453,6 +475,7 @@ int main() {
     test_help_stops_the_program_successfully();
     test_help_lists_every_flag_these_tests_use();
     test_wind();
+    test_motes();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -26,8 +26,9 @@ struct ShaderSet {
     gfx::Shader tonemap;
     gfx::Shader wireframe;
     gfx::Shader crosshair;
+    gfx::Shader motes;
 
-    // Compiles all ten out of `root`/shaders. Returns false at the first
+    // Compiles all of them out of `root`/shaders. Returns false at the first
     // failure, having already named the program and let gfx::Shader report
     // the compiler log. Stops rather than continuing so the error a reader
     // sees first is the one that actually broke the boot.
