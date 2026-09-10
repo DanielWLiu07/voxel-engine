@@ -27,6 +27,9 @@ struct FrameView {
     float     fog_start;
     float     fog_end;
     float     time_seconds;
+    // Wind strength for foliage sway, 0 disables. A multiplier rather
+    // than a flag so it can be dialled without touching the shader.
+    float     wind = 1.0f;
 };
 
 // cascade_update_mask: bit c set => redraw cascade c's depth this frame.

@@ -146,6 +146,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --slice-tilt-xw R        the same in the XW plane\n"
                 "  voxel_engine --warp-walk R            the cut turns R rad per block walked\n"
                 "  voxel_engine --slice-prisms           draw 4D cross-sections, not cubes\n"
+                "  voxel_engine --wind S                 foliage sway strength, 1 default, 0 still\n"
                 "  voxel_engine --capture-walk N         N frames walking, cut held, one PNG each\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
@@ -187,6 +188,14 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
         if (arg == "--wireframe") { o.start_wireframe = true; continue; }
         if (arg == "--validate") { o.validate_mode = true; continue; }
         if (arg == "--4d") { o.four_d = true; continue; }
+        if (arg == "--wind") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 20.0f, "--wind",
+                                   &o.wind, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
         if (arg == "--slice-tilt") {
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, -3.2f, 3.2f, "--slice-tilt",

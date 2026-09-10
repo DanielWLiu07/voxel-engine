@@ -1339,6 +1339,7 @@ int main(int argc, char** argv) {
         fv.time_seconds = capture.scripted_camera()
                               ? 100.0f
                               : static_cast<float>(now);
+        fv.wind = opt.wind;
 
         render::LightingFrame light = render::compute_lighting(time_of_day);
 

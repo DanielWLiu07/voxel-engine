@@ -128,7 +128,13 @@ Windows build clean on CI.
 ./build/voxel_engine --validate       # read meshes back off the GPU and check them
 ./build/voxel_engine --slice-prisms   # blocks as 4D cross-sections
 ./build/voxel_engine --3d             # the ordinary three-dimensional world
+./build/voxel_engine --wind 0         # still air; 1 is the default breeze
 ```
+
+Leaves sway. The offset is a function of world position and time, so
+coincident vertices move together and no seam opens along a greedy-merged
+quad or where a canopy meets its trunk - and the shadow pass applies the
+same offset, or the shadow would stay where the leaves no longer are.
 
 ## Controls
 
@@ -218,9 +224,9 @@ a worker pool; GL calls run on the main thread only.
 </p>
 
 Cascaded shadow maps, a bloom pyramid over an HDR target, per-block light
-that floods on placement, and a sky drawn entirely in a fragment shader -
-starfield, moon on the sun's own arc, and a cloud deck that goes slate at
-night. Every still above regenerates from a command; poses, seeds, and
+that floods on placement, foliage that moves in the wind, and a sky drawn
+entirely in a fragment shader - starfield, moon on the sun's own arc, and
+a cloud deck that goes slate at night. Every still above regenerates from a command; poses, seeds, and
 the hour are all CLI arguments.
 
 Block textures are AI-generated and disclosed in [TEXTURES.md](TEXTURES.md).

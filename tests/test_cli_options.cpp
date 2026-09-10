@@ -406,6 +406,30 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_wind() {
+    // A scale, not a flag: 0 is still air and the default is a breeze.
+    {
+        const auto r = parse({});
+        EXPECT(r.opts.has_value(), "no --wind parses");
+        EXPECT(r.opts && r.opts->wind == 1.0f, "and defaults to a breeze");
+    }
+    {
+        const auto r = parse({"--wind", "0"});
+        EXPECT(r.opts && r.opts->wind == 0.0f, "--wind 0 is still air");
+    }
+    {
+        const auto r = parse({"--wind", "2.5"});
+        EXPECT(r.opts && r.opts->wind == 2.5f, "--wind takes a scale");
+    }
+    // Out of range is rejected rather than clamped, like every other
+    // float option here.
+    EXPECT(!parse({"--wind", "-1"}).opts.has_value(),
+           "--wind rejects a negative");
+    EXPECT(!parse({"--wind", "999"}).opts.has_value(),
+           "--wind rejects an absurd value");
+    EXPECT(!parse({"--wind"}).opts.has_value(), "--wind needs a value");
+}
+
 int main() {
     std::printf("cli_tests: running...\n\n");
     test_every_value_flag_accepts_its_own_good_value();
@@ -428,6 +452,7 @@ int main() {
     test_three_dimensions_and_a_four_dimensional_check_are_contradictory();
     test_help_stops_the_program_successfully();
     test_help_lists_every_flag_these_tests_use();
+    test_wind();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

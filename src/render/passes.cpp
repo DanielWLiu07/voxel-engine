@@ -20,6 +20,10 @@ void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
     if ((cascade_update_mask & ((1u << gfx::kNumCascades) - 1u)) == 0u) return;
 
     depth_shader.use();
+    // The same wind the colour pass applies, or the canopy's shadow stays
+    // where the canopy no longer is.
+    depth_shader.set_float("u_time", fv.time_seconds);
+    depth_shader.set_float("u_wind", fv.wind);
     bool any_bound = false;
     for (int c = 0; c < gfx::kNumCascades; ++c) {
         if ((cascade_update_mask & (1u << c)) == 0u) continue;
@@ -118,6 +122,8 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     // prism mesher. An unset uniform is zero, which would collapse every
     // texture coordinate to a single texel, so this is not optional.
     terrain_shader.set_float("u_uv_scale", wrld.mesh_uv_scale());
+    terrain_shader.set_float("u_time", fv.time_seconds);
+    terrain_shader.set_float("u_wind", fv.wind);
 
     terrain_shader.set_mat4_array("u_light_vp", fv.light_vp, gfx::kNumCascades);
     terrain_shader.set_float_array("u_cascade_far", fv.cascade_far,

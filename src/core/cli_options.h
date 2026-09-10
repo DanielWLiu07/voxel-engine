@@ -122,6 +122,12 @@ struct CliOptions {
     // assert it is a clip where nothing but the camera position changes.
     int  capture_walk = 0;
     int  slice_w = 0;
+    // --wind S: foliage sway strength, 1 is the default breeze, 0 still.
+    //
+    // A scale rather than a flag because it is also the test hook: a
+    // still at --wind 0 and one at --wind 12 differ only where leaves
+    // are, which is how the sway is checked without a video.
+    float wind = 1.0f;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
     // --slice-tilt-xw R: the second rotation plane, for captures.
