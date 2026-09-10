@@ -62,3 +62,8 @@ TRACY_NO_EXIT=1 ./build-tracy/voxel_engine --bench-frame 600 --pose center &
 build-tracy-tools/capture/tracy-capture -o docs/bench/frame_capture.tracy -a 127.0.0.1 -f
 build-tracy-tools/csvexport/tracy-csvexport docs/bench/frame_capture.tracy > docs/bench/frame_zones.csv
 ```
+
+- [terrain-cost.md](terrain-cost.md) - where 4D terrain generation spends its
+  time: the density field is three quarters of it, the heightfield 3%.
+  Also corrects two figures that came from reading --bench-4d's summary
+  rather than measuring directly.

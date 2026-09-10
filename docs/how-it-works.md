@@ -646,8 +646,10 @@ Depends where you stand and what you measure. On the whole frame at
 radius 16, post-processing is the largest single pass. On the 4D
 cross-section path, the terrain and shadow passes are - all of the extra
 cost there is geometry. Chunk loading is bound by worker throughput, and
-about two thirds of a 4D chunk rebuild is terrain noise
-generation, not meshing - 3.5 ms of 5.1 ms, measured.
+about two thirds of a 4D chunk rebuild is terrain
+generation, not meshing - and within that, three quarters is the density
+field, not the heightfield. Measured in
+[bench/terrain-cost.md](bench/terrain-cost.md).
 
 **"How do you know greedy meshing is correct?"**
 The differential fuzz: 180 cases, every quad from both meshers decomposed
@@ -667,11 +669,19 @@ The 4D generator is roughly eight times more expensive per chunk than
 the 3D one, so there is room. Not the mesher - I measured the remaining
 merge headroom at about 1%.
 
-One piece of that is already done: every heightfield in the 4D
-generator reads a 3D slice of the 4D field with one axis pinned at
-zero, where half the sixteen hypercube corners are computed and then
-multiplied away by an interpolation weight of exactly zero. Skipping
-them made `height_at_4d` 1.94x faster with bit-identical output.
+One piece is done, and it is a useful thing to be able to describe
+honestly: every heightfield in the 4D generator reads a 3D slice of the
+4D field with one axis pinned at zero, where half the sixteen hypercube
+corners are computed and then multiplied away by an interpolation weight
+of exactly zero. Skipping them made `height_at_4d` **1.94x faster with
+bit-identical output**.
+
+It also barely moved the engine, and that is the more interesting half.
+`height_at_4d` turned out to be 3% of a chunk fill, so a 2x win on it is
+worth about 1% of a rebuild - below what an engine-level A/B can even
+resolve. The measurement that found this also found the real hot spot:
+the density field, at roughly 42,000 noise samples per chunk against the
+heightfield's 3,584.
 
 **"What went wrong?"**
 Have one ready. Good candidates: the cross-chunk culling that revealed
