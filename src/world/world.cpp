@@ -858,7 +858,13 @@ int World::drain_finished(int max_per_frame) {
         slot_it->second->light = fc.light;
         // Anything already resident beside this chunk was meshed without
         // it and is still drawing the faces it now hides.
-        mark_neighbors_dirty(fc.coord);
+        // Only when this chunk's BLOCKS are new. A boundary re-mesh
+        // re-packs geometry the chunk already held, and a neighbour's
+        // mesh is a function of these blocks rather than of this mesh, so
+        // marking them here re-derives geometry that cannot have changed.
+        // It also cascades: each re-mesh landing marked four more, which
+        // is how 625 chunks came to be re-meshed 2,149 times.
+        if (!fc.blocks_unchanged) mark_neighbors_dirty(fc.coord);
         // And this chunk itself, if it landed meshed against fewer
         // neighbours than are resident now.
         //
@@ -1017,7 +1023,9 @@ int World::flush_pending_remeshes(core::ThreadPool& pool, int max_jobs) {
                               {it->second->slice_w, it->second->slice_theta,
                                it->second->slice_z_shift,
                                it->second->slice_phi,
-                               it->second->slice_x_shift});
+                               it->second->slice_x_shift},
+                              /*from_disk=*/false,
+                              /*blocks_unchanged=*/true);
         ++issued;
     }
     return issued;
@@ -1029,7 +1037,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
                                   core::ThreadPool& pool,
                                   bool preserve_on_evict,
                                   TerrainGen4D::Slice stamp,
-                                  bool from_disk) {
+                                  bool from_disk, bool blocks_unchanged) {
     const std::uint64_t seq = ++request_seq_;
     requested_[c] = seq;
     jobs_in_flight_.fetch_add(1);
@@ -1040,7 +1048,8 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
     const bool prisms = prisms_;
     const TerrainGen4D* slice_gen = slice_gen_;
     NeighborLight nlight = neighbor_light_for(c);
-    pool.submit([this, c, gen, seq, stamp, preserve_on_evict, from_disk, mask, kind,
+    pool.submit([this, c, gen, seq, stamp, preserve_on_evict, from_disk,
+                 blocks_unchanged, mask, kind,
                  prisms, slice_gen,
                  planes = std::move(planes),
                  nlight = std::move(nlight),
@@ -1064,6 +1073,7 @@ void World::enqueue_decoded_chunk(ChunkCoord c, Chunk chunk,
         fc.chunk = std::move(chunk);
         fc.preserve_on_evict = preserve_on_evict;
         fc.from_disk = from_disk;
+        fc.blocks_unchanged = blocks_unchanged;
         // terrain step is skipped on the load path; the chunk came off disk
         // already populated, so worker time is just the mesh build.
         fc.terrain_ms = 0.0;

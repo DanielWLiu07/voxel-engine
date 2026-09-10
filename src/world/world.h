@@ -275,7 +275,8 @@ public:
     void enqueue_decoded_chunk(ChunkCoord c, Chunk chunk, core::ThreadPool& pool,
                                bool preserve_on_evict,
                                TerrainGen4D::Slice stamp,
-                               bool from_disk = false);
+                               bool from_disk = false,
+                               bool blocks_unchanged = false);
     void request_terrain_chunk(ChunkCoord c, const TerrainGen& terrain,
                                core::ThreadPool& pool);
 
@@ -878,6 +879,17 @@ private:
         bool            preserve_on_evict = false;
         // Which neighbours the worker actually meshed against.
         std::uint8_t    neighbor_mask = 0;
+        // True when this job re-packed geometry from blocks the chunk
+        // already held, rather than bringing new blocks in.
+        //
+        // A neighbour's mesh is a function of THIS chunk's blocks - the
+        // four boundary layers a mesher job is handed - and not of this
+        // chunk's mesh. So a boundary re-mesh cannot make a neighbour
+        // stale, and marking them on its arrival is work that produces
+        // the same geometry it started from. Measured: doing so re-meshed
+        // 625 chunks 2,149 times, with 94 of them meshed five to eight
+        // times despite having four neighbours.
+        bool            blocks_unchanged = false;
         LightGrid       light;
     };
 
