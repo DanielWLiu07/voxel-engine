@@ -131,6 +131,14 @@ struct CliOptions {
     // --motes S: drifting particle density, 1 default, 0 off. Fireflies
     // after dark, faint dust in daylight.
     float motes = 1.0f;
+    // --weather S: pin the weather to strength S, 0 clear .. 1 downpour.
+    //
+    // Negative means "not given", and then the engine runs its own slow
+    // cycle instead - dry most of the time, with spells. The override
+    // exists because a scripted capture pins the clock the cycle is
+    // derived from, so without it a still could only ever show whatever
+    // weather t=100 happens to land on, which is a drizzle of 0.06.
+    float weather = -1.0f;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
     // --slice-tilt-xw R: the second rotation plane, for captures.

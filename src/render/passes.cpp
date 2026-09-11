@@ -80,6 +80,46 @@ void draw_motes(const gfx::Shader& motes_shader, GLuint vao,
     glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
+void draw_precip(const gfx::Shader& precip_shader, GLuint vao,
+                 const FrameView& fv) {
+    ZoneScopedN("precip_pass");
+    if (fv.precip <= 0.001f) return;
+
+    // Snow is sparser and slower, so fewer of them read as more. Rain
+    // costs two vertices a drop because each one is a line segment.
+    const int kDrops = fv.precip_snow ? 4500 : 7000;
+    const glm::vec3 kBoxHalfExtent = fv.precip_snow
+                                         ? glm::vec3(26.0f, 20.0f, 26.0f)
+                                         : glm::vec3(22.0f, 22.0f, 22.0f);
+
+    precip_shader.use();
+    precip_shader.set_mat4("u_view", fv.view);
+    precip_shader.set_mat4("u_proj", fv.proj);
+    precip_shader.set_vec3("u_camera_pos", fv.camera_pos);
+    precip_shader.set_float("u_time", fv.time_seconds);
+    precip_shader.set_vec3("u_box", kBoxHalfExtent);
+    precip_shader.set_float("u_viewport_h", static_cast<float>(fv.window_h));
+    precip_shader.set_float("u_strength", fv.precip);
+    precip_shader.set_int("u_snow", fv.precip_snow ? 1 : 0);
+
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    glBindVertexArray(vao);
+    if (fv.precip_snow) {
+        glDrawArrays(GL_POINTS, 0, kDrops);
+    } else {
+        glDrawArrays(GL_LINES, 0, kDrops * 2);
+    }
+    glBindVertexArray(0);
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_PROGRAM_POINT_SIZE);
+}
+
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light,
               bool depth_test) {

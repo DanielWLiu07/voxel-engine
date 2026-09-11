@@ -124,6 +124,18 @@ of them are one draw call and nothing to keep in sync. Leaves sway in the
 same breeze, and the shadow pass applies the same offset, or a canopy's
 shadow would stay where the canopy no longer is.
 
+![Rain over a lake, with the sun behind an overcast sky](docs/media/rain.jpg)
+
+    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
+        --time-of-day 0.40 --radius 8 --weather 0.85 --screenshot-after 100
+
+Weather comes and goes on its own - dry most of the time, with spells of
+rain below the snow line and snow above it. It is a lighting change
+first: the sun drops, shadows soften toward none, and the sky and its fog
+grey over. The first version left the sun blazing and the drops were
+invisible, which is the whole lesson. `--weather 0..1` pins it, because a
+capture pins the clock the cycle is read from.
+
 <p align="center">
   <img src="docs/media/vista_sunset.jpg" width="49%" alt="Sunset over dunes and hills">
   <img src="docs/media/cave.jpg" width="49%" alt="Underground, lit by placed glow blocks">
@@ -161,6 +173,7 @@ Windows build clean on CI.
 ./build/voxel_engine --3d             # the ordinary three-dimensional world
 ./build/voxel_engine --wind 0         # still air; 1 is the default breeze
 ./build/voxel_engine --motes 0        # no fireflies or dust
+./build/voxel_engine --weather 0.9    # pin a downpour; omit for the natural cycle
 ```
 
 ## Controls

@@ -32,6 +32,11 @@ struct FrameView {
     float     wind = 1.0f;
     // Mote density scale, 0 disables the pass entirely.
     float     motes = 1.0f;
+    // Weather. `precip` is how hard it is coming down this frame, 0..1,
+    // and `precip_snow` picks flakes over drops. Both are decided on the
+    // CPU (see main) so the shader stays a pure function of them.
+    float     precip = 0.0f;
+    bool      precip_snow = false;
 };
 
 // cascade_update_mask: bit c set => redraw cascade c's depth this frame.
@@ -64,6 +69,12 @@ world::DrawStats draw_terrain_wireframe(const gfx::Shader& wire_shader,
 // the clock, so this is one draw call and no CPU work at all.
 void draw_motes(const gfx::Shader& motes_shader, GLuint vao,
                 const FrameView& fv, const LightingFrame& light);
+
+// Rain or snow. Same procedural plan as the motes, but rain is drawn as
+// line segments - a streak is what rain looks like, and a point sprite
+// cannot be one.
+void draw_precip(const gfx::Shader& precip_shader, GLuint vao,
+                 const FrameView& fv);
 
 void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,

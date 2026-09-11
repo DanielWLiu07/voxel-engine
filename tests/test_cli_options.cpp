@@ -406,6 +406,31 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_weather() {
+    // Unlike --wind and --motes this is an OVERRIDE, not a scale, so its
+    // default is negative: "not given, run the cycle". A test that only
+    // checked the range would not notice that distinction disappearing.
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->weather < 0.0f,
+               "no --weather leaves the engine's own cycle running");
+    }
+    {
+        const auto r = parse({"--weather", "0"});
+        EXPECT(r.opts && r.opts->weather == 0.0f,
+               "--weather 0 pins it clear, which is not the same as absent");
+    }
+    {
+        const auto r = parse({"--weather", "0.85"});
+        EXPECT(r.opts && r.opts->weather == 0.85f, "--weather pins a strength");
+    }
+    EXPECT(!parse({"--weather", "-0.5"}).opts.has_value(),
+           "--weather rejects a negative, which is the absent sentinel");
+    EXPECT(!parse({"--weather", "2"}).opts.has_value(),
+           "--weather rejects above a downpour");
+    EXPECT(!parse({"--weather"}).opts.has_value(), "--weather needs a value");
+}
+
 void test_motes() {
     // Same shape as --wind: a scale with 0 meaning off, rejected rather
     // than clamped when it is out of range.
@@ -476,6 +501,7 @@ int main() {
     test_help_lists_every_flag_these_tests_use();
     test_wind();
     test_motes();
+    test_weather();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

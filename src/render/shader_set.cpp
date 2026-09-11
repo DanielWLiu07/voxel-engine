@@ -21,6 +21,7 @@ bool ShaderSet::load(const std::filesystem::path& root) {
     return compile(terrain,    root, "basic.vert",        "basic.frag",          "terrain")
         && compile(sky,        root, "sky.vert",          "sky.frag",            "sky")
         && compile(motes,      root, "motes.vert",        "motes.frag",          "motes")
+        && compile(precip,     root, "precip.vert",       "precip.frag",         "precip")
         && compile(shadow,     root, "shadow_depth.vert", "shadow_depth.frag",   "shadow")
         && compile(water,      root, "water.vert",        "water.frag",          "water")
         && compile(bright,     root, "fullscreen.vert",   "bright_extract.frag", "bright")

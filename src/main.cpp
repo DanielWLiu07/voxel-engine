@@ -1342,7 +1342,55 @@ int main(int argc, char** argv) {
         fv.wind = opt.wind;
         fv.motes = opt.motes;
 
+        // Weather, decided here so the shader stays a pure function of it.
+        //
+        // A slow cycle rather than a constant: a world where it always
+        // rains is as static as one where it never does, and the point of
+        // weather is that the place looks different on the way back than
+        // it did on the way out. Two sines with periods that do not divide
+        // each other give spells of a minute or so, dry most of the time.
+        //
+        // Driven by the same clock everything else animates on, so a
+        // scripted capture - which pins that clock - gets the same weather
+        // every run.
+        {
+            if (opt.weather >= 0.0f) {
+                fv.precip = opt.weather;          // pinned from the command line
+            } else {
+                const float wt = fv.time_seconds;
+                const float cycle = std::sin(wt / 57.0f) * 0.6f
+                                  + std::sin(wt / 23.0f + 1.3f) * 0.4f;
+                fv.precip = std::clamp((cycle - 0.35f) / 0.5f, 0.0f, 1.0f);
+            }
+            // Snow where snow lies. kSnowBand is the altitude the terrain
+            // generator turns grass to snow at, so the sky agrees with the
+            // ground under it. Plus a couple of blocks for eye height, or
+            // standing on the last grass below the band gives you a
+            // snowstorm over green.
+            fv.precip_snow = cam.position().y
+                           >= static_cast<float>(world::kSnowBand) + 3.0f;
+        }
+
         render::LightingFrame light = render::compute_lighting(time_of_day);
+
+        // Overcast. Precipitation with the sun still blazing reads as
+        // confetti: the first version put white flakes over a white
+        // snowfield at noon and they were invisible, and rain over a lit
+        // blue sky was barely there either.
+        //
+        // Weather is a lighting change first and particles second. The sun
+        // goes down hard, shadows soften towards none, and the sky and its
+        // fog grey out - which is what makes the drops readable against
+        // it, and what makes a wet day look like one.
+        if (fv.precip > 0.0f) {
+            const float o = fv.precip;
+            const glm::vec3 slate(0.62f, 0.65f, 0.70f);
+            light.sun_color       *= 1.0f - 0.60f * o;
+            light.ambient         *= 1.0f - 0.20f * o;
+            light.shadow_strength *= 1.0f - 0.75f * o;
+            light.sky_top     = glm::mix(light.sky_top,     slate * 0.85f, 0.75f * o);
+            light.sky_horizon = glm::mix(light.sky_horizon, slate,         0.75f * o);
+        }
 
         // Stagger: refresh cascade c only every (1 << c) frames. The far
         // cascade is hundreds of meters wide and barely changes frame to
@@ -1469,6 +1517,7 @@ int main(int argc, char** argv) {
         // After the world, still inside the HDR target: terrain occludes a
         // mote, and a mote's bright core reaches the bloom pass.
         render::draw_motes(shaders.motes, sky_vao, fv, light);
+        render::draw_precip(shaders.precip, sky_vao, fv);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.
