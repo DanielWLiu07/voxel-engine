@@ -110,6 +110,37 @@ Full sweeps, pass breakdowns, and the reasoning behind each gate:
 The same terrain meshed both ways, in wireframe. Left is one quad per
 block face; right is the same surface after coplanar faces merge.
 
+## What it looks like
+
+![Fireflies over a treeline at night](docs/media/fireflies.jpg)
+
+    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
+        --time-of-day 0.82 --radius 8 --screenshot-after 100
+
+Fireflies drift through the trees after dark and thin to faint dust by
+day. They have no vertex buffer and no CPU state at all: the shader
+derives every position from `gl_VertexID` and the clock, so nine thousand
+of them are one draw call and nothing to keep in sync. Leaves sway in the
+same breeze, and the shadow pass applies the same offset, or a canopy's
+shadow would stay where the canopy no longer is.
+
+<p align="center">
+  <img src="docs/media/vista_sunset.jpg" width="49%" alt="Sunset over dunes and hills">
+  <img src="docs/media/cave.jpg" width="49%" alt="Underground, lit by placed glow blocks">
+</p>
+<p align="center">
+  <img src="docs/media/moonrise.jpg" width="49%" alt="Night: a hashed starfield and a crescent moon">
+  <img src="docs/media/block_light.jpg" width="49%" alt="Block light propagating through a structure">
+</p>
+
+Cascaded shadow maps, a bloom pyramid over an HDR target, per-block light
+that floods out from a placed Glow block, and a sky drawn entirely in a
+fragment shader - hashed starfield, a moon riding the sun's own arc, and
+a cloud deck that goes slate after dark.
+
+Every still here regenerates from a command. Pose, seed, and hour are all
+arguments, which is the only reason the captions can carry them.
+
 ## Build
 
 ```
@@ -131,16 +162,6 @@ Windows build clean on CI.
 ./build/voxel_engine --wind 0         # still air; 1 is the default breeze
 ./build/voxel_engine --motes 0        # no fireflies or dust
 ```
-
-Fireflies drift through the trees after dark and fade to faint dust in
-daylight. They have no vertex buffer and no CPU state: the shader derives
-every position from `gl_VertexID` and the clock, so the whole field is
-one draw call.
-
-Leaves sway. The offset is a function of world position and time, so
-coincident vertices move together and no seam opens along a greedy-merged
-quad or where a canopy meets its trunk - and the shadow pass applies the
-same offset, or the shadow would stay where the leaves no longer are.
 
 ## Controls
 
@@ -218,21 +239,6 @@ and never reaches into gameplay. `game/` is the only layer that
 coordinates world, player, and input. Chunk generation and meshing run on
 a worker pool; GL calls run on the main thread only.
 
-## What it looks like
-
-<p align="center">
-  <img src="docs/media/vista_sunset.jpg" width="49%" alt="Sunset over dunes and hills">
-  <img src="docs/media/cave.jpg" width="49%" alt="Underground, lit by placed glow blocks">
-</p>
-<p align="center">
-  <img src="docs/media/moonrise.jpg" width="49%" alt="Night: a hashed starfield and a crescent moon">
-  <img src="docs/media/block_light.jpg" width="49%" alt="Block light propagating through a structure">
-</p>
-
-Cascaded shadow maps, a bloom pyramid over an HDR target, per-block light
-that floods on placement, foliage that moves in the wind, and a sky drawn
-entirely in a fragment shader - starfield, moon on the sun's own arc, and
-a cloud deck that goes slate at night. Every still above regenerates from a command; poses, seeds, and
-the hour are all CLI arguments.
+---
 
 Block textures are AI-generated and disclosed in [TEXTURES.md](TEXTURES.md).
