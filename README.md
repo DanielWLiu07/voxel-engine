@@ -220,6 +220,10 @@ making the measurements hard to fake.
   that actually registered against a written-down list, after an unclosed
   `if(APPLE)` once left Linux running six tests of eight and reporting
   100% passed
+- **Conventional Commits**, checked on every pull request by
+  `check_commit_messages.py`. Its rules were derived from this repo's own
+  311 commits rather than copied off the spec, so the two that would have
+  rejected a quarter of that history are deliberately not enforced
 - **TSan and ASan/UBSan** over the full logic suite in CI
 - `--validate` reads meshes back off the GPU and checks every triangle
   against the voxel data that produced it

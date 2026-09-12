@@ -7,6 +7,28 @@ on:
     branches: [main]
 
 jobs:
+  commit-messages:
+    name: commit messages
+    runs-on: ubuntu-latest
+    # Pull requests only. On a push to main the commits are already
+    # published, and four of them predate this guard - failing a branch
+    # nobody can make pass is how a guard gets ignored.
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The build jobs keep their shallow clone; this one needs the
+          # history to diff against the base.
+          fetch-depth: 0
+
+      - name: Conventional Commits
+        # The rules were derived from this repo's own history rather than
+        # copied off the spec - see the script's own note for which of the
+        # usual ones are deliberately not enforced and why.
+        run: ./scripts/check_commit_messages.py
+             "${{ github.event.pull_request.base.sha }}..HEAD"
+
   build-and-bench:
     name: build + bench (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
