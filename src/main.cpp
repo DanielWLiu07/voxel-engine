@@ -1341,6 +1341,11 @@ int main(int argc, char** argv) {
                               : static_cast<float>(now);
         fv.wind = opt.wind;
         fv.motes = opt.motes;
+        // Mist sits a little above the waterline: that is where the low
+        // ground is, and it puts the effect where a valley actually is
+        // rather than at a fixed height the terrain may not reach.
+        fv.mist = opt.mist;
+        fv.mist_level = static_cast<float>(world::kSeaLevel) + 6.0f;
 
         // Weather, decided here so the shader stays a pure function of it.
         //

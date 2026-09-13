@@ -16,6 +16,15 @@ uniform vec3  u_camera_pos;
 uniform vec3  u_fog_color;
 uniform float u_fog_start;
 uniform float u_fog_end;
+
+// Ground mist. Distance fog alone flattens a landscape: everything far
+// away fades by the same amount whether it is a peak or a valley floor,
+// so depth reads as one wash. Mist that pools by ALTITUDE separates them -
+// the low ground goes milky while the ridges above it stay sharp, which is
+// what makes a view look like it has layers in it.
+uniform vec3  u_mist_color;
+uniform float u_mist;        // 0 disables
+uniform float u_mist_level;  // altitude the mist thins out at
 uniform vec3  u_palette[8];
 
 uniform sampler2DArray       u_atlas;
@@ -102,6 +111,21 @@ void main() {
     float d = length(v_world_pos - u_camera_pos);
     float f = clamp((d - u_fog_start) / max(u_fog_end - u_fog_start, 1e-4), 0.0, 1.0);
     vec3 final = mix(lit, u_fog_color, f);
+
+    // Mist, applied before the distance fog has finished taking over, so a
+    // valley floor a hundred metres out is milky rather than simply faint.
+    //
+    // Two terms multiplied: how low this fragment sits, and how much air
+    // the eye is looking through to reach it. Depth alone would fog a
+    // mountainside as hard as the valley beside it; altitude alone would
+    // put a wall of white on the ground at your feet.
+    if (u_mist > 0.0) {
+        float low  = 1.0 - smoothstep(u_mist_level - 7.0,
+                                      u_mist_level + 5.0, v_world_pos.y);
+        float thru = 1.0 - exp(-d * 0.014);
+        final = mix(final, u_mist_color,
+                    clamp(low * thru * u_mist, 0.0, 0.88));
+    }
 
     frag_color = vec4(final, 1.0);
 }

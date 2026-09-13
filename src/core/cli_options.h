@@ -139,6 +139,10 @@ struct CliOptions {
     // derived from, so without it a still could only ever show whatever
     // weather t=100 happens to land on, which is a drizzle of 0.06.
     float weather = -1.0f;
+
+    // --mist S: ground mist strength, 0 off. It pools by altitude around
+    // the waterline, so valleys go milky while ridges stay sharp.
+    float mist = 1.0f;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
     // --slice-tilt-xw R: the second rotation plane, for captures.

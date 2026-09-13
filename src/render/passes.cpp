@@ -206,6 +206,11 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.set_float("u_uv_scale", wrld.mesh_uv_scale());
     terrain_shader.set_float("u_time", fv.time_seconds);
     terrain_shader.set_float("u_wind", fv.wind);
+    terrain_shader.set_float("u_mist", fv.mist);
+    terrain_shader.set_float("u_mist_level", fv.mist_level);
+    // The mist takes its colour from the horizon, so it agrees with the
+    // sky it fades into and greys over with the weather along with it.
+    terrain_shader.set_vec3("u_mist_color", light.sky_horizon);
 
     terrain_shader.set_mat4_array("u_light_vp", fv.light_vp, gfx::kNumCascades);
     terrain_shader.set_float_array("u_cascade_far", fv.cascade_far,

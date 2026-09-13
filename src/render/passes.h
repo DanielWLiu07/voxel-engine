@@ -35,6 +35,9 @@ struct FrameView {
     // Weather. `precip` is how hard it is coming down this frame, 0..1,
     // and `precip_snow` picks flakes over drops. Both are decided on the
     // CPU (see main) so the shader stays a pure function of them.
+    // Ground mist: strength, and the altitude it thins out at.
+    float     mist = 0.0f;
+    float     mist_level = 0.0f;
     float     precip = 0.0f;
     bool      precip_snow = false;
 };

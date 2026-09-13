@@ -149,6 +149,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --wind S                 foliage sway strength, 1 default, 0 still\n"
                 "  voxel_engine --motes S                fireflies at night / dust by day, 0 off\n"
                 "  voxel_engine --weather S              pin weather 0 clear..1 downpour (default: a cycle)\n"
+                "  voxel_engine --mist S                 ground mist in the valleys, 0 off\n"
                 "  voxel_engine --capture-walk N         N frames walking, cut held, one PNG each\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
@@ -194,6 +195,14 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, 0.0f, 20.0f, "--wind",
                                    &o.wind, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--mist") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 3.0f, "--mist",
+                                   &o.mist, exit_code)) {
                 return std::nullopt;
             }
             continue;

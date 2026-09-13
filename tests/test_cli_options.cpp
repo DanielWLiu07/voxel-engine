@@ -406,6 +406,20 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_mist() {
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->mist == 1.0f, "--mist defaults on");
+    }
+    {
+        const auto r = parse({"--mist", "0"});
+        EXPECT(r.opts && r.opts->mist == 0.0f, "--mist 0 clears the valleys");
+    }
+    EXPECT(!parse({"--mist", "-1"}).opts.has_value(), "--mist rejects a negative");
+    EXPECT(!parse({"--mist", "99"}).opts.has_value(), "--mist rejects an absurd value");
+    EXPECT(!parse({"--mist"}).opts.has_value(), "--mist needs a value");
+}
+
 void test_weather() {
     // Unlike --wind and --motes this is an OVERRIDE, not a scale, so its
     // default is negative: "not given, run the cycle". A test that only
@@ -502,6 +516,7 @@ int main() {
     test_wind();
     test_motes();
     test_weather();
+    test_mist();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
