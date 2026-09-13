@@ -36,6 +36,8 @@ struct FrameView {
     // and `precip_snow` picks flakes over drops. Both are decided on the
     // CPU (see main) so the shader stays a pure function of them.
     // Ground mist: strength, and the altitude it thins out at.
+    // Flocks circling overhead by day, 0 disables.
+    float     birds = 1.0f;
     float     mist = 0.0f;
     float     mist_level = 0.0f;
     float     precip = 0.0f;
@@ -78,6 +80,11 @@ void draw_motes(const gfx::Shader& motes_shader, GLuint vao,
 // cannot be one.
 void draw_precip(const gfx::Shader& precip_shader, GLuint vao,
                  const FrameView& fv);
+
+// Flocks circling overhead. Four vertices a bird, two line segments
+// forming a V, billboarded so one never turns edge-on and flickers out.
+void draw_birds(const gfx::Shader& birds_shader, GLuint vao,
+                const FrameView& fv, const LightingFrame& light);
 
 void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,

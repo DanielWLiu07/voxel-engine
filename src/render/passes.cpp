@@ -120,6 +120,34 @@ void draw_precip(const gfx::Shader& precip_shader, GLuint vao,
     glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
+void draw_birds(const gfx::Shader& birds_shader, GLuint vao,
+                const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("birds_pass");
+    const float day = 1.0f - light.star_fade;
+    if (fv.birds <= 0.0f || day <= 0.01f) return;
+
+    // 60 birds in flocks of 12. Enough that the sky is not empty, few
+    // enough that they stay birds rather than a swarm.
+    constexpr int kBirds = 60;
+
+    birds_shader.use();
+    birds_shader.set_mat4("u_view", fv.view);
+    birds_shader.set_mat4("u_proj", fv.proj);
+    birds_shader.set_vec3("u_camera_pos", fv.camera_pos);
+    birds_shader.set_float("u_time", fv.time_seconds);
+    birds_shader.set_float("u_day", day);
+    birds_shader.set_float("u_strength", fv.birds);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glBindVertexArray(vao);
+    glDrawArrays(GL_LINES, 0, kBirds * 4);
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light,
               bool depth_test) {

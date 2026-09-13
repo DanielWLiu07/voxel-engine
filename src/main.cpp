@@ -1344,6 +1344,7 @@ int main(int argc, char** argv) {
         // Mist sits a little above the waterline: that is where the low
         // ground is, and it puts the effect where a valley actually is
         // rather than at a fixed height the terrain may not reach.
+        fv.birds = opt.birds;
         fv.mist = opt.mist;
         fv.mist_level = static_cast<float>(world::kSeaLevel) + 6.0f;
 
@@ -1523,6 +1524,7 @@ int main(int argc, char** argv) {
         // mote, and a mote's bright core reaches the bloom pass.
         render::draw_motes(shaders.motes, sky_vao, fv, light);
         render::draw_precip(shaders.precip, sky_vao, fv);
+        render::draw_birds(shaders.birds, sky_vao, fv, light);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.

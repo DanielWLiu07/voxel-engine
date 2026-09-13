@@ -406,6 +406,20 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_birds() {
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->birds == 1.0f, "--birds defaults on");
+    }
+    {
+        const auto r = parse({"--birds", "0"});
+        EXPECT(r.opts && r.opts->birds == 0.0f, "--birds 0 empties the sky");
+    }
+    EXPECT(!parse({"--birds", "-1"}).opts.has_value(), "--birds rejects a negative");
+    EXPECT(!parse({"--birds", "40"}).opts.has_value(), "--birds rejects an absurd value");
+    EXPECT(!parse({"--birds"}).opts.has_value(), "--birds needs a value");
+}
+
 void test_mist() {
     {
         const auto r = parse({});
@@ -517,6 +531,7 @@ int main() {
     test_motes();
     test_weather();
     test_mist();
+    test_birds();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

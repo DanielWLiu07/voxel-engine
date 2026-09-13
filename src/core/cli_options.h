@@ -142,6 +142,8 @@ struct CliOptions {
 
     // --mist S: ground mist strength, 0 off. It pools by altitude around
     // the waterline, so valleys go milky while ridges stay sharp.
+    // --birds S: flocks circling overhead by day, 0 off.
+    float birds = 1.0f;
     float mist = 1.0f;
     // --slice-tilt R: start with the cut rotated R radians, for captures.
     float slice_tilt = 0.0f;
