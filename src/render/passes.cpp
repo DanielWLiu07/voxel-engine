@@ -148,6 +148,64 @@ void draw_birds(const gfx::Shader& birds_shader, GLuint vao,
     glDisable(GL_BLEND);
 }
 
+void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
+                    const game::Creatures& creatures,
+                    const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("creatures_pass");
+    if (creatures.live_count() == 0) return;
+
+    shader.use();
+    shader.set_mat4("u_view", fv.view);
+    shader.set_mat4("u_proj", fv.proj);
+    shader.set_vec3("u_light_dir", light.light_dir);
+    shader.set_vec3("u_light_color", light.sun_color);
+    shader.set_vec3("u_ambient_color", light.ambient);
+    shader.set_vec3("u_camera_pos", fv.camera_pos);
+    shader.set_vec3("u_fog_color", light.sky_horizon);
+    shader.set_float("u_fog_start", fv.fog_start);
+    shader.set_float("u_fog_end", fv.fog_end);
+
+    glBindVertexArray(cube_vao);
+    for (int i = 0; i < creatures.live_count(); ++i) {
+        const game::Creature& c = creatures.all()[static_cast<std::size_t>(i)];
+        const bool hopper = (c.kind == 0);
+
+        // Two boxes: a body and a head. Enough to read as a creature at
+        // the distance one is ever seen from, and it keeps the whole
+        // population inside a few dozen draw calls.
+        const float lift = hopper ? c.bob * 0.30f : 0.0f;   // hop
+        const float rock = hopper ? 0.0f : (c.bob - 0.5f) * 0.10f;  // amble
+
+        // Sized and coloured to read against snow, grass and stone alike.
+        // The first pass made them half a block and tinted the strider
+        // pale blue: on a snowfield that is camouflage, and at half a
+        // block a creature is a speck rather than an animal.
+        const glm::vec3 tint = hopper ? glm::vec3(0.85f, 0.38f, 0.18f)
+                                      : glm::vec3(0.24f, 0.34f, 0.26f);
+        shader.set_vec3("u_tint", tint);
+        shader.set_float("u_yaw", c.heading);
+
+        const glm::vec3 body_size = hopper ? glm::vec3(0.70f, 0.62f, 0.95f)
+                                           : glm::vec3(0.85f, 0.90f, 1.35f);
+        shader.set_vec3("u_size", body_size);
+        shader.set_vec3("u_origin",
+                        c.pos + glm::vec3(0.0f, body_size.y * 0.5f + lift + rock, 0.0f));
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+
+        const glm::vec3 head_size = hopper ? glm::vec3(0.52f, 0.50f, 0.52f)
+                                           : glm::vec3(0.62f, 0.58f, 0.62f);
+        shader.set_vec3("u_size", head_size);
+        // Forward is +z before the yaw rotation, which the shader applies.
+        const float fwd = body_size.z * 0.5f + head_size.z * 0.35f;
+        const glm::vec3 head_local(std::sin(c.heading) * fwd,
+                                   body_size.y + head_size.y * 0.30f + lift,
+                                   std::cos(c.heading) * fwd);
+        shader.set_vec3("u_origin", c.pos + head_local);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+    }
+    glBindVertexArray(0);
+}
+
 void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
                      const FrameView& fv, const LightingFrame& light) {
     ZoneScopedN("atmosphere");

@@ -29,6 +29,7 @@ struct ShaderSet {
     gfx::Shader motes;
     gfx::Shader precip;
     gfx::Shader birds;
+    gfx::Shader creature;
 
     // Compiles all of them out of `root`/shaders. Returns false at the first
     // failure, having already named the program and let gfx::Shader report

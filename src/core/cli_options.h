@@ -145,6 +145,8 @@ struct CliOptions {
     // --birds S: flocks circling overhead by day, 0 off.
     // --aurora S: aurora on the night sky, 0 off.
     // --cloud-shadow S: clouds dapple the ground, 0 off.
+    // --creatures S: wandering creatures, 0 off.
+    float creatures = 1.0f;
     float cloud_shadow = 1.0f;
     float aurora = 1.0f;
     float birds = 1.0f;

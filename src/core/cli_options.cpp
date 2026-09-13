@@ -153,6 +153,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --birds S                flocks circling overhead by day, 0 off\n"
                 "  voxel_engine --aurora S               aurora on the night sky, 0 off\n"
                 "  voxel_engine --cloud-shadow S         clouds dapple the ground, 0 off\n"
+                "  voxel_engine --creatures S            wandering creatures, 0 off\n"
                 "  voxel_engine --capture-walk N         N frames walking, cut held, one PNG each\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
@@ -198,6 +199,14 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, 0.0f, 20.0f, "--wind",
                                    &o.wind, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--creatures") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 4.0f, "--creatures",
+                                   &o.creatures, exit_code)) {
                 return std::nullopt;
             }
             continue;

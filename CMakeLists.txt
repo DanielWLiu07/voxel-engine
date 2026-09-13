@@ -104,6 +104,7 @@ add_executable(voxel_engine
   src/core/key_bindings.cpp
   src/core/thread_pool.cpp
   src/core/window.cpp
+  src/game/creatures.cpp
   src/game/player.cpp
   src/gfx/camera.cpp
   src/gfx/frustum.cpp

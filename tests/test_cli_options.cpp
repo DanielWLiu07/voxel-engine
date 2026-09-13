@@ -406,6 +406,22 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_creatures() {
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->creatures == 1.0f, "--creatures defaults on");
+    }
+    {
+        const auto r = parse({"--creatures", "0"});
+        EXPECT(r.opts && r.opts->creatures == 0.0f, "--creatures 0 empties the world");
+    }
+    EXPECT(!parse({"--creatures", "-1"}).opts.has_value(),
+           "--creatures rejects a negative");
+    EXPECT(!parse({"--creatures", "40"}).opts.has_value(),
+           "--creatures rejects an absurd value");
+    EXPECT(!parse({"--creatures"}).opts.has_value(), "--creatures needs a value");
+}
+
 void test_cloud_shadow() {
     {
         const auto r = parse({});
@@ -566,6 +582,7 @@ int main() {
     test_birds();
     test_aurora();
     test_cloud_shadow();
+    test_creatures();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

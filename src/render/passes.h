@@ -6,6 +6,7 @@
 #include "gfx/water.h"
 #include "gfx/wireframe_cube.h"
 #include "render/lighting.h"
+#include "game/creatures.h"
 #include "world/world.h"
 
 #include <glad/gl.h>
@@ -105,6 +106,13 @@ struct AtmosphereShaders {
 
 void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
                      const FrameView& fv, const LightingFrame& light);
+
+// Creatures, as a handful of lit boxes each. Drawn with the world rather
+// than with the atmosphere: they are solid, they occlude, and they take
+// the same sun and the same fog the terrain does.
+void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
+                    const game::Creatures& creatures,
+                    const FrameView& fv, const LightingFrame& light);
 
 // Flocks circling overhead. Four vertices a bird, two line segments
 // forming a V, billboarded so one never turns edge-on and flickers out.

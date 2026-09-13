@@ -14,6 +14,7 @@
 #include "core/profiler.h"
 #include "core/thread_pool.h"
 #include "core/window.h"
+#include "game/creatures.h"
 #include "game/player.h"
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
@@ -400,6 +401,55 @@ int main(int argc, char** argv) {
 
     GLuint sky_vao = 0;
     glGenVertexArrays(1, &sky_vao);
+
+    // A unit cube, position and normal, for the creatures. One buffer for
+    // all of them: a creature is a couple of boxes scaled and placed by
+    // uniform, so there is nothing per-creature to upload.
+    GLuint cube_vao = 0, cube_vbo = 0;
+    {
+        // 6 faces x 2 triangles x 3 vertices, each (pos, normal), the cube
+        // centred on the origin so a uniform scale grows it both ways.
+        static const float kFaces[6][6] = {
+            { 0, 0, 1,  0, 0, 1}, { 0, 0,-1,  0, 0,-1},
+            { 1, 0, 0,  1, 0, 0}, {-1, 0, 0, -1, 0, 0},
+            { 0, 1, 0,  0, 1, 0}, { 0,-1, 0,  0,-1, 0},
+        };
+        std::vector<float> verts;
+        verts.reserve(36 * 6);
+        for (const auto& f : kFaces) {
+            const glm::vec3 n(f[3], f[4], f[5]);
+            // Two vectors spanning the face, from the normal.
+            const glm::vec3 up = (std::fabs(n.y) > 0.5f) ? glm::vec3(0, 0, 1)
+                                                         : glm::vec3(0, 1, 0);
+            const glm::vec3 t = glm::normalize(glm::cross(up, n));
+            const glm::vec3 b = glm::cross(n, t);
+            const glm::vec3 c = n * 0.5f;
+            const glm::vec3 quad[4] = {
+                c - t * 0.5f - b * 0.5f, c + t * 0.5f - b * 0.5f,
+                c + t * 0.5f + b * 0.5f, c - t * 0.5f + b * 0.5f,
+            };
+            const int order[6] = {0, 1, 2, 0, 2, 3};
+            for (int k : order) {
+                verts.insert(verts.end(),
+                             {quad[k].x, quad[k].y, quad[k].z, n.x, n.y, n.z});
+            }
+        }
+        glGenVertexArrays(1, &cube_vao);
+        glGenBuffers(1, &cube_vbo);
+        glBindVertexArray(cube_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, cube_vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                     verts.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glBindVertexArray(0);
+    }
+    game::Creatures creatures;
 
     // Procedural texture atlas for blocks. Generated once at boot.
     int ai_texture_tiles = 0;
@@ -1528,6 +1578,14 @@ int main(int argc, char** argv) {
         // what is in the air, and a firefly's bright core reaches the
         // bloom pass. See render::draw_atmosphere for why the three are
         // one call and what decides their order.
+        // Creatures walk on the terrain, so they need the world and they
+        // are drawn with it - solid, occluding, lit by the same sun.
+        if (opt.creatures > 0.0f) {
+            creatures.update(wrld, fv.camera_pos, fv.time_seconds);
+            render::draw_creatures(shaders.creature, cube_vao, creatures,
+                                   fv, light);
+        }
+
         sampler.begin_pass();
         render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds},
                                 sky_vao, fv, light);

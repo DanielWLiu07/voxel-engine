@@ -117,7 +117,10 @@ block face; right is the same surface after coplanar faces merge.
     ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
         --time-of-day 0.82 --radius 8 --screenshot-after 100
 
-Seven effects share that one idea, and each has a scale with 0 to turn it
+Creatures wander the terrain too, following the ground over hills and
+onto whatever landscape the 4D cut leaves beneath them.
+
+Eight effects share that one idea, and each has a scale with 0 to turn it
 off: foliage that sways (the shadow pass applies the same offset, or a
 canopy's shadow stays where the canopy no longer is), fireflies at night
 thinning to dust by day, rain and snow, mist pooling in the valleys,
@@ -188,6 +191,7 @@ Windows build clean on CI.
 ./build/voxel_engine --wind 0         # still air; 1 is the default breeze
 ./build/voxel_engine --motes 0        # no fireflies or dust
 ./build/voxel_engine --weather 0.9    # pin a downpour; omit for the natural cycle
+./build/voxel_engine --creatures 0    # empty the world of wildlife
 ./build/voxel_engine --aurora 0       # ... and every other effect has a scale, 0 off
 ```
 
