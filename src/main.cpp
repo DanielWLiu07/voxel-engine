@@ -1344,6 +1344,7 @@ int main(int argc, char** argv) {
         // Mist sits a little above the waterline: that is where the low
         // ground is, and it puts the effect where a valley actually is
         // rather than at a fixed height the terrain may not reach.
+        fv.cloud_shadow = opt.cloud_shadow;
         fv.aurora = opt.aurora;
         fv.birds = opt.birds;
         fv.mist = opt.mist;

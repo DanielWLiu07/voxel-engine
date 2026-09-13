@@ -235,6 +235,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.set_float("u_uv_scale", wrld.mesh_uv_scale());
     terrain_shader.set_float("u_time", fv.time_seconds);
     terrain_shader.set_float("u_wind", fv.wind);
+    terrain_shader.set_float("u_cloud_shadow", fv.cloud_shadow);
     terrain_shader.set_float("u_mist", fv.mist);
     terrain_shader.set_float("u_mist_level", fv.mist_level);
     // The mist takes its colour from the horizon, so it agrees with the

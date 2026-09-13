@@ -38,6 +38,8 @@ struct FrameView {
     // Ground mist: strength, and the altitude it thins out at.
     // Flocks circling overhead by day, 0 disables.
     // Aurora strength on the night sky, 0 disables.
+    // Cloud shadows dappling the ground, 0 disables.
+    float     cloud_shadow = 1.0f;
     float     aurora = 1.0f;
     float     birds = 1.0f;
     float     mist = 0.0f;

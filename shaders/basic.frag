@@ -25,6 +25,39 @@ uniform float u_fog_end;
 uniform vec3  u_mist_color;
 uniform float u_mist;        // 0 disables
 uniform float u_mist_level;  // altitude the mist thins out at
+
+// Cloud shadows. The sky has had a cloud deck for a while and it cast
+// nothing, so on a bright day the ground was uniformly lit under a sky
+// that plainly was not. Dapples crossing a hillside are most of what
+// makes a landscape look like it is under weather rather than under a
+// light.
+//
+// Sampled from world XZ rather than projected from the real deck. An
+// exact projection would need the deck's geometry down here and would
+// buy nothing a viewer can check: what reads is soft shadow shapes of
+// roughly cloud size drifting at roughly cloud speed, in the direction
+// the sky's own clouds drift.
+uniform float u_cloud_shadow;   // 0 disables
+uniform float u_time;
+
+float cs_hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float cs_noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(cs_hash(i),                cs_hash(i + vec2(1, 0)), f.x),
+               mix(cs_hash(i + vec2(0, 1)),   cs_hash(i + vec2(1, 1)), f.x), f.y);
+}
+
+// Three octaves. The fourth is below a pixel at the distance this is
+// visible from and only sparkles.
+float cs_fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 3; ++i) { v += a * cs_noise(p); p *= 2.03; a *= 0.5; }
+    return v;
+}
 uniform vec3  u_palette[8];
 
 uniform sampler2DArray       u_atlas;
@@ -90,7 +123,23 @@ void main() {
 
     float diffuse = max(dot(N, L), 0.0);
     float shadow  = mix(1.0, sample_csm(N, L), u_shadow_strength);
-    vec3 lighting = u_ambient_color + u_light_color * diffuse * shadow;
+
+    // Cloud shadow multiplies the SUN only, never the ambient. A cloud
+    // passing over darkens the direct light and leaves the sky light it
+    // scatters, which is why the shaded ground still reads blue rather
+    // than going flat grey.
+    float cloud = 1.0;
+    if (u_cloud_shadow > 0.0 && u_shadow_strength > 0.0) {
+        vec2 cp = v_world_pos.xz * 0.018 + vec2(u_time * 0.010, 0.0);
+        float n = cs_fbm(cp);
+        // Same shape as the sky's coverage threshold: most of the ground
+        // is lit, with defined shadows where the deck is thick.
+        float cover = smoothstep(0.50, 0.72, n);
+        cloud = 1.0 - cover * 0.55 * u_cloud_shadow * u_shadow_strength;
+    }
+
+    vec3 lighting = u_ambient_color
+                  + u_light_color * diffuse * shadow * cloud;
 
     int id = clamp(v_block_id, 0, 8);
     int tile = tile_for_face(id, N);

@@ -406,6 +406,24 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_cloud_shadow() {
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->cloud_shadow == 1.0f, "--cloud-shadow defaults on");
+    }
+    {
+        const auto r = parse({"--cloud-shadow", "0"});
+        EXPECT(r.opts && r.opts->cloud_shadow == 0.0f,
+               "--cloud-shadow 0 leaves the ground evenly lit");
+    }
+    EXPECT(!parse({"--cloud-shadow", "-1"}).opts.has_value(),
+           "--cloud-shadow rejects a negative");
+    EXPECT(!parse({"--cloud-shadow", "9"}).opts.has_value(),
+           "--cloud-shadow rejects an absurd value");
+    EXPECT(!parse({"--cloud-shadow"}).opts.has_value(),
+           "--cloud-shadow needs a value");
+}
+
 void test_aurora() {
     {
         const auto r = parse({});
@@ -547,6 +565,7 @@ int main() {
     test_mist();
     test_birds();
     test_aurora();
+    test_cloud_shadow();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
