@@ -1364,6 +1364,8 @@ int main(int argc, char** argv) {
         {
             if (opt.weather >= 0.0f) {
                 fv.precip = opt.weather;          // pinned from the command line
+            } else if (capture.pins_weather()) {
+                fv.precip = 0.0f;                 // a bench measures fixed work
             } else {
                 const float wt = fv.time_seconds;
                 const float cycle = std::sin(wt / 57.0f) * 0.6f

@@ -65,6 +65,22 @@ struct CaptureMode {
     // lighting between two frames meant to be compared.
     bool pins_time_of_day() const { return suppresses_interface(); }
 
+    // The weather cycle is held clear, so a benchmark measures a fixed
+    // amount of work.
+    //
+    // --bench-frame does NOT pin the clock - it times the live loop, which
+    // is the point of it - and the weather cycle reads that clock. So a
+    // bench was quietly rendering light rain whose strength depended on
+    // how long the world had taken to load: 0.07 at the moment GLFW
+    // starts, 0.10 a second later, 0.20 by five seconds. A slower load
+    // meant more rain meant a different frame time, and nothing said so.
+    //
+    // Only the frame bench. Image captures pin the clock already, so
+    // their weather is deterministic without this, and changing it would
+    // move every still this repo has committed away from the command its
+    // caption carries.
+    bool pins_weather() const { return bench_frames > 0; }
+
     // Frames of a multi-frame PNG capture, or 0 when this is not one.
     // Orbit wins if both are somehow set, which matches the order the
     // camera path is chosen in.
