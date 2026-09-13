@@ -178,6 +178,7 @@ void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
     sky_shader.set_vec3("u_moon_dir", light.moon_dir);
     sky_shader.set_float("u_star_fade", light.star_fade);
     sky_shader.set_float("u_time", fv.time_seconds);
+    sky_shader.set_float("u_aurora", fv.aurora);
     sky_shader.set_mat3("u_star_rot", light.star_rot);
     glBindVertexArray(sky_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);

@@ -17,6 +17,7 @@ uniform vec3  u_sun_dir;      // points toward sun, normalized
 uniform vec3  u_sun_color;
 uniform vec3  u_moon_dir;     // points toward moon, normalized
 uniform float u_star_fade;    // 0 by day, 1 at night
+uniform float u_aurora;       // aurora strength, 0 disables
 uniform float u_time;         // seconds, for cloud drift and twinkle
 uniform mat3  u_star_rot;     // rotates the fixed stars onto the night sky
 
@@ -106,6 +107,44 @@ void main() {
         float stars = starfield(sdir);
         sky += (vec3(0.72, 0.78, 1.0) * stars * 1.6 +
                 vec3(0.55, 0.60, 0.85) * haze) * u_star_fade;
+
+        // Aurora: curtains over one quarter of the sky.
+        //
+        // Built from the view direction alone, so it costs a handful of
+        // sines per sky pixel and nothing anywhere else - there is no
+        // geometry, no pass, and nothing for the CPU to know about.
+        //
+        // Three things together are what stop it reading as a green
+        // smear. Vertical structure, because a curtain is banded along one
+        // horizontal axis and nearly uniform up its length. A hard
+        // horizon cutoff, because an aurora that reaches down past the
+        // skyline looks like fog. And a slow drift on two different
+        // frequencies, so the bands shift against each other rather than
+        // sliding as one sheet.
+        if (u_aurora > 0.0 && dir.y > 0.02) {
+            // Confined to one side of the sky. One overhead everywhere at
+            // once is a lightshow, not a latitude.
+            float side = smoothstep(0.10, 0.75, -dir.z);
+
+            float band = sin(dir.x * 7.0 + u_time * 0.10)
+                       + sin(dir.x * 13.0 - u_time * 0.07) * 0.6
+                       + sin(dir.x * 23.0 + u_time * 0.13) * 0.3;
+            float curtain = pow(max(0.0, 0.55 + band * 0.35), 3.0);
+
+            // Bright along the lower edge and fading upward, the way a
+            // curtain hangs.
+            float height = smoothstep(0.02, 0.10, dir.y)
+                         * (1.0 - smoothstep(0.12, 0.62, dir.y));
+
+            float a = curtain * height * side * u_star_fade * u_aurora;
+            // Green at the base going violet at the top, which is the
+            // ordinary oxygen/nitrogen split and reads as an aurora
+            // rather than as a coloured light.
+            vec3 tint = mix(vec3(0.25, 1.00, 0.55),
+                            vec3(0.45, 0.35, 0.95),
+                            smoothstep(0.03, 0.45, dir.y));
+            sky += tint * a * 0.55;
+        }
 
         // Moon: a disc with a crescent bitten out of it by a second disc
         // offset along the moon's own tangent, plus a soft halo.

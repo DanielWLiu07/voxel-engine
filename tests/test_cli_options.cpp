@@ -406,6 +406,20 @@ void test_help_lists_every_flag_these_tests_use() {
 
 }  // namespace
 
+void test_aurora() {
+    {
+        const auto r = parse({});
+        EXPECT(r.opts && r.opts->aurora == 1.0f, "--aurora defaults on");
+    }
+    {
+        const auto r = parse({"--aurora", "0"});
+        EXPECT(r.opts && r.opts->aurora == 0.0f, "--aurora 0 leaves a plain night");
+    }
+    EXPECT(!parse({"--aurora", "-1"}).opts.has_value(), "--aurora rejects a negative");
+    EXPECT(!parse({"--aurora", "40"}).opts.has_value(), "--aurora rejects an absurd value");
+    EXPECT(!parse({"--aurora"}).opts.has_value(), "--aurora needs a value");
+}
+
 void test_birds() {
     {
         const auto r = parse({});
@@ -532,6 +546,7 @@ int main() {
     test_weather();
     test_mist();
     test_birds();
+    test_aurora();
 
     std::printf("\ncli_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

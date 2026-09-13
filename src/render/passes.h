@@ -37,6 +37,8 @@ struct FrameView {
     // CPU (see main) so the shader stays a pure function of them.
     // Ground mist: strength, and the altitude it thins out at.
     // Flocks circling overhead by day, 0 disables.
+    // Aurora strength on the night sky, 0 disables.
+    float     aurora = 1.0f;
     float     birds = 1.0f;
     float     mist = 0.0f;
     float     mist_level = 0.0f;
