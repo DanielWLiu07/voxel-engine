@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if the README documents a flag the engine does not have.
+"""Fail if the prose documents a flag the engine does not have.
 
 Written after a week of finding documentation that had quietly stopped
 being true: the controls table listed seven blocks when there were eight,
@@ -11,7 +11,7 @@ Those share a shape. Nothing in the build reads the prose, so prose is the
 only part of the project with no failure mode - it just gets quietly wrong
 and stays that way until a person happens to read it next to the code.
 
-This closes the cheapest slice of that: every --flag the README mentions
+This closes the cheapest slice of that: every --flag the prose mentions
 has to appear in --help. It does not check that the surrounding sentence
 is true, which is the larger and unautomatable half. It checks the part a
 machine can.
@@ -49,7 +49,15 @@ def main():
     if build.is_file():
         build = build.parent
     root = pathlib.Path(__file__).resolve().parent.parent
-    readme = (root / "README.md").read_text(encoding="utf-8")
+    # The README is not the only prose that names flags any more. Every
+    # doc that does is a place a renamed or deleted one can rot, and
+    # docs/atmosphere.md shipped with seven of them the day this was
+    # widened - which is exactly when a guard is cheapest to extend.
+    sources = [root / "README.md"]
+    sources += sorted((root / "docs").glob("*.md"))
+    prose = "\n".join(p.read_text(encoding="utf-8")
+                      for p in sources if p.exists())
+    readme = prose
 
     help_text = ""
     for name in BINARIES:
@@ -70,21 +78,21 @@ def main():
 
     missing = sorted(in_readme - in_help)
     for f in missing:
-        print(f"  README documents {f}, which --help does not list")
+        print(f"  the docs mention {f}, which --help does not list")
 
     # The reverse is a note, not a failure: a flag can reasonably exist
     # without being in the README, and several deliberately do.
     undocumented = sorted(in_help - in_readme)
 
-    print(f"\n{len(in_readme)} flags in README, {len(in_help)} across "
+    print(f"\n{len(in_readme)} flags in the docs, {len(in_help)} across "
           f"{len(BINARIES)} binaries")
     if undocumented:
-        print(f"not mentioned in the README (fine, listed for awareness): "
+        print(f"not mentioned in the docs (fine, listed for awareness): "
               f"{' '.join(undocumented)}")
     if missing:
         print(f"\nFAIL: {len(missing)} documented flag(s) do not exist")
         return 1
-    print("ok: every flag the README documents exists")
+    print("ok: every flag the docs mention exists")
     return 0
 
 
