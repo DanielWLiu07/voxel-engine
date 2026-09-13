@@ -551,7 +551,7 @@ able to talk about.
 
 - **Nine test binaries** under ctest, each failing on its own line
 - **A differential fuzz** comparing greedy against naive face-for-face
-  over 180 cases
+  over 10,020 cases
 - **A CI performance gate**: if the greedy ratio drops below 4.5×, the
   build fails. A performance win that is not gated is a win that quietly
   regresses.
@@ -652,7 +652,7 @@ field, not the heightfield. Measured in
 [bench/terrain-cost.md](bench/terrain-cost.md).
 
 **"How do you know greedy meshing is correct?"**
-The differential fuzz: 180 cases, every quad from both meshers decomposed
+The differential fuzz: 10,020 cases, every quad from both meshers decomposed
 back to unit faces and compared as sets. And `--validate`, which reads
 the meshes back off the GPU and checks each triangle against the voxel
 data.

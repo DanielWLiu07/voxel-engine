@@ -387,16 +387,39 @@ void test_unit_face_decomposition_is_sane() {
            "the merged lid explodes back into one face per column");
 }
 
+// Seeds per fill x neighbour pair.
+//
+// 167 of them puts the sweep at 10,020 cases. It was 3, which is enough
+// to show the two meshers agree and not enough to go looking: the
+// randomized fills draw a different chunk every seed, so seeds are the
+// only axis along which this test actually searches. The fills and the
+// neighbour configurations are fixed lists.
+//
+// Overridable through MESHER_FUZZ_SEEDS because the sanitizer build runs
+// this same binary at roughly three times the cost, and a suite nobody
+// waits for is a suite that gets run less often.
+unsigned seeds_per_case() {
+    if (const char* e = std::getenv("MESHER_FUZZ_SEEDS")) {
+        const long v = std::strtol(e, nullptr, 10);
+        if (v > 0) return static_cast<unsigned>(v);
+    }
+    return 167;
+}
+
 void test_greedy_matches_naive_face_for_face() {
-    // The sweep. Every fill against every neighbour configuration, three
-    // seeds each, so the randomized fills get more than one draw.
+    // The sweep. Every fill against every neighbour configuration, many
+    // seeds each, so the randomized fills get a great many draws.
+    const unsigned kSeeds = seeds_per_case();
     int cases = 0;
     int failures_before = g_failures;
     for (int fill = 0; fill < kFillCount; ++fill) {
         for (int nb = 0; nb < kNeighborCount; ++nb) {
-            for (unsigned s = 0; s < 3; ++s) {
+            for (unsigned s = 0; s < kSeeds; ++s) {
+                // Stride the fill/neighbour block wide enough that no
+                // two pairs can share a seed at this many per pair.
                 const unsigned seed =
-                    0x5eed0000u + static_cast<unsigned>(fill * 1000 + nb * 10) + s;
+                    0x5eed0000u
+                    + static_cast<unsigned>(fill * 100000 + nb * 10000) + s;
                 ++cases;
                 ++g_checks;
                 if (!compare_case(fill, nb, seed)) ++g_failures;

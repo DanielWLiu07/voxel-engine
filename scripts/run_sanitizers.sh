@@ -31,7 +31,12 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$SUPP"
 # The differential fuzzer walks randomized meshes vertex by vertex and
 # indexes back into the chunk, so ASan here is checking the oracle's own
 # bounds as much as the mesher's.
-./build-asan/mesher_fuzz_tests
+# Fewer seeds here than the plain build's 167. Under ASan+UBSan this
+# binary costs about three times as much, and what this run is looking
+# for is a memory error on the mesher's own indexing - which every case
+# exercises - not more of the search the Release build already does at
+# full width.
+MESHER_FUZZ_SEEDS=12 ./build-asan/mesher_fuzz_tests
 # The CLI suite redirects stderr through dup2 onto a tmpfile and reads it
 # back, which is the only raw file-descriptor handling in the tests.
 ./build-asan/cli_tests

@@ -225,7 +225,7 @@ making the measurements hard to fake.
 
 - **Nine test binaries** run by ctest, including a differential fuzz that
   decomposes every quad from the greedy and naive meshers back into unit
-  faces and compares them as sets, over 180 fill x neighbour x seed cases
+  faces and compares them as sets, over 10,020 fill x neighbour x seed cases
 - **20 four-dimensional invariants** in `--verify-4d`, among them a
   byte-identical rotation round-trip: turn the cut 0.25 rad and back, and
   every byte of the world has to return
