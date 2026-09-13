@@ -234,6 +234,7 @@ making the measurements hard to fake.
 | --- | --- |
 | [docs/how-it-works.md](docs/how-it-works.md) | How the engine works, from scratch - start here if graphics is new to you |
 | [docs/cross-section.md](docs/cross-section.md) | How the cross-section works, with pictures |
+| [docs/atmosphere.md](docs/atmosphere.md) | Wind, fireflies, weather, birds, mist - one idea used five times |
 | [docs/4d.md](docs/4d.md) | The engineering log: what broke, and what it cost |
 | [docs/performance.md](docs/performance.md) | Every measurement, with its command |
 | [docs/design.md](docs/design.md) | Architecture and layering |
