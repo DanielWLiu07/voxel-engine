@@ -2579,6 +2579,37 @@ int main(int argc, char** argv) {
             // window size than about what the player sees - judging by it
             // failed this check at radius 12 while the visible world was
             // entirely current.
+            // If two seconds produced no near-field progress at all,
+            // keep holding the key and keep pumping until it does, or
+            // until a deadline well past any plausible stall.
+            //
+            // The fixed window was still a throughput measurement, which
+            // is the thing the note below says this gate stopped being.
+            // Relaxing the threshold from "half the distance travelled"
+            // to "> 0" narrowed the window it could fail in without
+            // closing it: the prism path costs several times what the
+            // cube path does per rebuild, and at radius 6 it misses even
+            // "> 0" roughly one run in three on an IDLE machine. Measured
+            // that way, twice, before this loop existed.
+            //
+            // Waiting for the property instead of sampling for it is what
+            // makes it load-independent. A real stall - a throttle that
+            // refuses every rebuild - still fails, it just takes the
+            // deadline to say so.
+            {
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(20);
+                while (wrld.near_meshed_w() - held_w0 <= 0.0f &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    const auto frame_end = std::chrono::steady_clock::now() +
+                        std::chrono::microseconds(16667);
+                    wrld.advance_w(world::World::kWalkSpeedW * kDt);
+                    if (wrld.stream_slice(terrain, pool) > 0) ++rebuilds;
+                    wrld.drain_finished(wrld.pending_async() > 32 ? 48 : 16);
+                    wrld.flush_pending_remeshes(pool, 4);
+                    std::this_thread::sleep_until(frame_end);
+                }
+            }
             const float held_geometry  = wrld.near_meshed_w() - held_w0;
             // Two seconds of walking must move the player and must move
             // the geometry with them, and once the walking stops the
