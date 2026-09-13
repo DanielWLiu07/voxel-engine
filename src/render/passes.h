@@ -85,6 +85,27 @@ void draw_motes(const gfx::Shader& motes_shader, GLuint vao,
 void draw_precip(const gfx::Shader& precip_shader, GLuint vao,
                  const FrameView& fv);
 
+// Everything that lives in the air, in the order it has to be drawn.
+//
+// The three passes below share more than a VAO. Each one wants the depth
+// test on and depth writes off, each restores the blend state the next
+// one assumes, and the order between them is a decision rather than an
+// accident: motes and precipitation are additive and translucent against
+// the world, birds are silhouettes that should sit over both. Calling
+// them individually from the render loop meant that ordering was recorded
+// only by the order of three lines in main.cpp.
+//
+// None of them own geometry. All three derive every vertex from
+// gl_VertexID and the clock, so this is three draw calls and no CPU work.
+struct AtmosphereShaders {
+    const gfx::Shader& motes;
+    const gfx::Shader& precip;
+    const gfx::Shader& birds;
+};
+
+void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
+                     const FrameView& fv, const LightingFrame& light);
+
 // Flocks circling overhead. Four vertices a bird, two line segments
 // forming a V, billboarded so one never turns edge-on and flickers out.
 void draw_birds(const gfx::Shader& birds_shader, GLuint vao,

@@ -148,6 +148,18 @@ void draw_birds(const gfx::Shader& birds_shader, GLuint vao,
     glDisable(GL_BLEND);
 }
 
+void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
+                     const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("atmosphere");
+    // Depth writes stay off for all of it: a mote must not occlude the
+    // drop behind it, and neither should hide a bird. Each pass leaves
+    // the state as it found it, so the order below is the only thing that
+    // decides what sits over what.
+    draw_motes(shaders.motes, vao, fv, light);
+    draw_precip(shaders.precip, vao, fv);
+    draw_birds(shaders.birds, vao, fv, light);
+}
+
 void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
               const FrameView& fv, const LightingFrame& light,
               bool depth_test) {

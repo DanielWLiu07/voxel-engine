@@ -1522,11 +1522,12 @@ int main(int argc, char** argv) {
         }
         sampler.end_pass(sampler.passes().water);
 
-        // After the world, still inside the HDR target: terrain occludes a
-        // mote, and a mote's bright core reaches the bloom pass.
-        render::draw_motes(shaders.motes, sky_vao, fv, light);
-        render::draw_precip(shaders.precip, sky_vao, fv);
-        render::draw_birds(shaders.birds, sky_vao, fv, light);
+        // After the world, still inside the HDR target: terrain occludes
+        // what is in the air, and a firefly's bright core reaches the
+        // bloom pass. See render::draw_atmosphere for why the three are
+        // one call and what decides their order.
+        render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds},
+                                sky_vao, fv, light);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.
