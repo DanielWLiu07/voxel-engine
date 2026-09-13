@@ -66,13 +66,14 @@ void print_pass_breakdown(const PassSamples& p) {
     const double s_sk = mean(p.sky);
     const double s_te = mean(p.terrain);
     const double s_wa = mean(p.water);
+    const double s_at = mean(p.atmosphere);
     const double s_pf = mean(p.postfx);
     std::printf("PASS_BREAKDOWN frames=%zu"
                 " shadow=%.2f sky=%.2f terrain=%.2f"
-                " water=%.2f postfx=%.2f sum_passes=%.2f\n",
+                " water=%.2f atmos=%.2f postfx=%.2f sum_passes=%.2f\n",
                 p.shadow.size(),
-                s_sh, s_sk, s_te, s_wa, s_pf,
-                s_sh + s_sk + s_te + s_wa + s_pf);
+                s_sh, s_sk, s_te, s_wa, s_at, s_pf,
+                s_sh + s_sk + s_te + s_wa + s_at + s_pf);
 }
 
 }  // namespace bench
@@ -105,6 +106,7 @@ FrameSampler::FrameSampler(int target_frames, bool pass_breakdown)
         passes_.sky.reserve(n);
         passes_.terrain.reserve(n);
         passes_.water.reserve(n);
+        passes_.atmosphere.reserve(n);
         passes_.postfx.reserve(n);
     }
 }

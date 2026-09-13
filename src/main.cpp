@@ -1526,8 +1526,10 @@ int main(int argc, char** argv) {
         // what is in the air, and a firefly's bright core reaches the
         // bloom pass. See render::draw_atmosphere for why the three are
         // one call and what decides their order.
+        sampler.begin_pass();
         render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds},
                                 sky_vao, fv, light);
+        sampler.end_pass(sampler.passes().atmosphere);
 
         // Same ray the place/break logic uses, so the outline matches a
         // potential click target.

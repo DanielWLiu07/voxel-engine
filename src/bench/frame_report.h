@@ -55,6 +55,12 @@ struct PassSamples {
     std::vector<double> sky;
     std::vector<double> terrain;
     std::vector<double> water;
+    // Everything drawn in the air: motes, precipitation, birds. One entry
+    // because they are one call and one decision - see
+    // render::draw_atmosphere - and because splitting three passes that
+    // each cost a fraction of a millisecond would report noise as
+    // structure.
+    std::vector<double> atmosphere;
     std::vector<double> postfx;
 };
 
