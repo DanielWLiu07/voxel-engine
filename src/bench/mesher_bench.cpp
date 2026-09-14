@@ -221,7 +221,6 @@ int run_mesher_bench(int stream_radius) {
     // air, so every face on them counts as "merged" work that the naive
     // baseline also has to do. Counting only faces a camera can reach is
     // the number that survives being asked "merged relative to what?".
-    std::size_t world_greedy_alone_quads = 0;
     {
         const auto at = [&](int cx, int cz) -> const world::Chunk* {
             if (cx < -kRadius || cx > kRadius || cz < -kRadius || cz > kRadius)
@@ -242,8 +241,6 @@ int run_mesher_bench(int stream_radius) {
                 world_greedy_quads += gq;
                 world_naive_quads  += naive.vertices.size() / 4;
                 world_max_quads = std::max(world_max_quads, gq);
-                world_greedy_alone_quads +=
-                    world::build_chunk_mesh_greedy(c).vertices.size() / 4;
             }
         }
     }
