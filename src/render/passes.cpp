@@ -148,7 +148,7 @@ void draw_birds(const gfx::Shader& birds_shader, GLuint vao,
     glDisable(GL_BLEND);
 }
 
-void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
+void draw_creatures(const gfx::Shader& shader, const gfx::SolidCube& cube,
                     const game::Creatures& creatures,
                     const FrameView& fv, const LightingFrame& light) {
     ZoneScopedN("creatures_pass");
@@ -165,7 +165,6 @@ void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
     shader.set_float("u_fog_start", fv.fog_start);
     shader.set_float("u_fog_end", fv.fog_end);
 
-    glBindVertexArray(cube_vao);
     for (int i = 0; i < creatures.live_count(); ++i) {
         const game::Creature& c = creatures.all()[static_cast<std::size_t>(i)];
         const bool hopper = (c.kind == 0);
@@ -190,7 +189,7 @@ void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
         shader.set_vec3("u_size", body_size);
         shader.set_vec3("u_origin",
                         c.pos + glm::vec3(0.0f, body_size.y * 0.5f + lift + rock, 0.0f));
-        glDrawArrays(GL_TRIANGLES, 0, 36);
+        cube.draw();
 
         const glm::vec3 head_size = hopper ? glm::vec3(0.52f, 0.50f, 0.52f)
                                            : glm::vec3(0.62f, 0.58f, 0.62f);
@@ -201,9 +200,8 @@ void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
                                    body_size.y + head_size.y * 0.30f + lift,
                                    std::cos(c.heading) * fwd);
         shader.set_vec3("u_origin", c.pos + head_local);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
+        cube.draw();
     }
-    glBindVertexArray(0);
 }
 
 void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,

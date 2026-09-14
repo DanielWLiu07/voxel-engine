@@ -2,6 +2,7 @@
 
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
+#include "gfx/solid_cube.h"
 #include "gfx/cascaded_shadow_map.h"
 #include "gfx/water.h"
 #include "gfx/wireframe_cube.h"
@@ -110,7 +111,7 @@ void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
 // Creatures, as a handful of lit boxes each. Drawn with the world rather
 // than with the atmosphere: they are solid, they occlude, and they take
 // the same sun and the same fog the terrain does.
-void draw_creatures(const gfx::Shader& shader, GLuint cube_vao,
+void draw_creatures(const gfx::Shader& shader, const gfx::SolidCube& cube,
                     const game::Creatures& creatures,
                     const FrameView& fv, const LightingFrame& light);
 

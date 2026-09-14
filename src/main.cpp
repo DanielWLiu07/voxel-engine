@@ -19,6 +19,8 @@
 #include "gfx/camera.h"
 #include "gfx/frustum.h"
 #include "gfx/shader.h"
+#include "gfx/solid_cube.h"
+#include "gfx/vertex_array.h"
 #include "gfx/cascaded_shadow_map.h"
 #include "gfx/post_process.h"
 #include "gfx/screenshot.h"
@@ -399,55 +401,16 @@ int main(int argc, char** argv) {
     std::printf("[water] %.0fx%.0f plane (sea level y=%d, follows player)\n",
                 kWaterSize, kWaterSize, world::kSeaLevel);
 
-    GLuint sky_vao = 0;
-    glGenVertexArrays(1, &sky_vao);
+    gfx::VertexArray sky_vao;
+    sky_vao.init();
 
-    // A unit cube, position and normal, for the creatures. One buffer for
-    // all of them: a creature is a couple of boxes scaled and placed by
-    // uniform, so there is nothing per-creature to upload.
-    GLuint cube_vao = 0, cube_vbo = 0;
-    {
-        // 6 faces x 2 triangles x 3 vertices, each (pos, normal), the cube
-        // centred on the origin so a uniform scale grows it both ways.
-        static const float kFaces[6][6] = {
-            { 0, 0, 1,  0, 0, 1}, { 0, 0,-1,  0, 0,-1},
-            { 1, 0, 0,  1, 0, 0}, {-1, 0, 0, -1, 0, 0},
-            { 0, 1, 0,  0, 1, 0}, { 0,-1, 0,  0,-1, 0},
-        };
-        std::vector<float> verts;
-        verts.reserve(36 * 6);
-        for (const auto& f : kFaces) {
-            const glm::vec3 n(f[3], f[4], f[5]);
-            // Two vectors spanning the face, from the normal.
-            const glm::vec3 up = (std::fabs(n.y) > 0.5f) ? glm::vec3(0, 0, 1)
-                                                         : glm::vec3(0, 1, 0);
-            const glm::vec3 t = glm::normalize(glm::cross(up, n));
-            const glm::vec3 b = glm::cross(n, t);
-            const glm::vec3 c = n * 0.5f;
-            const glm::vec3 quad[4] = {
-                c - t * 0.5f - b * 0.5f, c + t * 0.5f - b * 0.5f,
-                c + t * 0.5f + b * 0.5f, c - t * 0.5f + b * 0.5f,
-            };
-            const int order[6] = {0, 1, 2, 0, 2, 3};
-            for (int k : order) {
-                verts.insert(verts.end(),
-                             {quad[k].x, quad[k].y, quad[k].z, n.x, n.y, n.z});
-            }
-        }
-        glGenVertexArrays(1, &cube_vao);
-        glGenBuffers(1, &cube_vbo);
-        glBindVertexArray(cube_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, cube_vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
-                     verts.data(), GL_STATIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                              reinterpret_cast<void*>(0));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                              reinterpret_cast<void*>(3 * sizeof(float)));
-        glBindVertexArray(0);
+    // A unit cube for the creatures, owned rather than handled: see
+    // gfx::SolidCube. The inline version of this leaked - it generated a
+    // VAO and a VBO and nothing deleted them.
+    gfx::SolidCube creature_cube;
+    if (!creature_cube.init()) {
+        std::fprintf(stderr, "creature cube init failed\n");
+        return EXIT_FAILURE;
     }
     game::Creatures creatures;
 
@@ -462,8 +425,8 @@ int main(int argc, char** argv) {
     }
     std::printf("[atlas] %d-layer %dpx block texture array (mipmapped)\n",
                 gfx::kAtlasLayers, gfx::kAtlasTilePx);
-    GLuint crosshair_vao = 0;
-    glGenVertexArrays(1, &crosshair_vao);
+    gfx::VertexArray crosshair_vao;
+    crosshair_vao.init();
 
     gfx::WireframeCube selection_cube;
     selection_cube.init();
@@ -1026,10 +989,13 @@ int main(int argc, char** argv) {
         // travel through the fourth dimension.
         if (opt.warp_walk > 0.0f && wrld.is_4d() && !capture.scripted_camera()) {
             static glm::vec3 warp_last = cam.position();
-            const glm::vec3 now = cam.position();
-            const float dx = now.x - warp_last.x;
-            const float dz = now.z - warp_last.z;
-            warp_last = now;
+            // Not `now`. The frame's timestamp is already called that, one
+            // scope out, and a vec3 by the same name reads as a time until
+            // you notice it is being subtracted from a position.
+            const glm::vec3 here = cam.position();
+            const float dx = here.x - warp_last.x;
+            const float dz = here.z - warp_last.z;
+            warp_last = here;
             // BOTH planes, split by which way you moved: walking forward
             // and back leans the cut in ZW, strafing leans it in XW.
             //
@@ -1050,10 +1016,10 @@ int main(int argc, char** argv) {
             const float forward = dx * fx + dz * fz;
             const float strafe  = dx * -fz + dz * fx;
             if (forward != 0.0f) {
-                wrld.rotate_slice(opt.warp_walk * forward, now.z);
+                wrld.rotate_slice(opt.warp_walk * forward, here.z);
             }
             if (strafe != 0.0f) {
-                wrld.rotate_slice_xw(opt.warp_walk * strafe, now.x);
+                wrld.rotate_slice_xw(opt.warp_walk * strafe, here.x);
             }
         }
 
@@ -1533,7 +1499,7 @@ int main(int argc, char** argv) {
         // restores the old sky-first order for the A/B.
         if (sky_overdraw) {
             sampler.begin_pass();
-            render::draw_sky(shaders.sky, sky_vao, fv, light, false);
+            render::draw_sky(shaders.sky, sky_vao.id(), fv, light, false);
             sampler.end_pass(sampler.passes().sky);
         }
         sampler.begin_pass();
@@ -1560,7 +1526,7 @@ int main(int argc, char** argv) {
         sampler.end_pass(sampler.passes().terrain);
         if (!sky_overdraw) {
             sampler.begin_pass();
-            render::draw_sky(shaders.sky, sky_vao, fv, light, true);
+            render::draw_sky(shaders.sky, sky_vao.id(), fv, light, true);
             sampler.end_pass(sampler.passes().sky);
         }
         sampler.begin_pass();
@@ -1582,13 +1548,13 @@ int main(int argc, char** argv) {
         // are drawn with it - solid, occluding, lit by the same sun.
         if (opt.creatures > 0.0f) {
             creatures.update(wrld, fv.camera_pos, fv.time_seconds);
-            render::draw_creatures(shaders.creature, cube_vao, creatures,
-                                   fv, light);
+            render::draw_creatures(shaders.creature, creature_cube,
+                                   creatures, fv, light);
         }
 
         sampler.begin_pass();
         render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds},
-                                sky_vao, fv, light);
+                                sky_vao.id(), fv, light);
         sampler.end_pass(sampler.passes().atmosphere);
 
         // Same ray the place/break logic uses, so the outline matches a
@@ -1605,7 +1571,7 @@ int main(int argc, char** argv) {
         }
         if (!capturing_image) render::draw_crosshair_and_selection(
             shaders.wireframe, selection_cube,
-            shaders.crosshair, crosshair_vao,
+            shaders.crosshair, crosshair_vao.id(),
             fv,
             target.hit,
             target.block_x, target.block_y, target.block_z);
@@ -3015,7 +2981,11 @@ int main(int argc, char** argv) {
                                  static_cast<int>(wrld.pending_remesh()),
                                  wrld.stream_slice(terrain, pool));
                 }
-                const double settle_ms =
+                // Named for the phase it belongs to: `settle_ms` one
+                // scope out is how long the initial world load took to
+                // converge, which is a different number in a different
+                // unit of work.
+                const double phase_settle_ms =
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - settle_t0).count();
                 char ahead[24];
@@ -3034,10 +3004,11 @@ int main(int argc, char** argv) {
                               lag.stale, lag.resident);
                 char settle[24];
                 if (converged) {
-                    std::snprintf(settle, sizeof settle, "%.0f", settle_ms);
+                    std::snprintf(settle, sizeof settle, "%.0f",
+                                  phase_settle_ms);
                 } else {
                     std::snprintf(settle, sizeof settle, "NEVER (%.0f)",
-                                  settle_ms);
+                                  phase_settle_ms);
                 }
                 std::printf("  %-11s %10.2f %10.2f %6.1f / %-5d %12s %10s %12s\n",
                             ph.name, mean, p99, issued_per_frame, kStreamBudget,
@@ -3365,8 +3336,6 @@ int main(int argc, char** argv) {
     }
 
     hud.shutdown();
-    if (sky_vao)       glDeleteVertexArrays(1, &sky_vao);
-    if (crosshair_vao) glDeleteVertexArrays(1, &crosshair_vao);
     if (block_atlas)   glDeleteTextures(1, &block_atlas);
     return EXIT_SUCCESS;  // window_guard tears down GLFW after the GL objects
 }
