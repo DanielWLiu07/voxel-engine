@@ -117,8 +117,16 @@ block face; right is the same surface after coplanar faces merge.
     ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
         --time-of-day 0.82 --radius 8 --screenshot-after 100
 
-Creatures wander the terrain too, following the ground over hills and
-onto whatever landscape the 4D cut leaves beneath them.
+![Hoppers and striders wandering the terrain](docs/media/creatures.jpg)
+
+    ./build/voxel_engine --3d --pose-at 20,58,20,-135,-45 \
+        --radius 8 --time-of-day 0.35 --screenshot-after 120
+
+Creatures wander the terrain too, in two kinds: orange hoppers that
+bounce and green striders that amble. They read the ground height under
+themselves and walk over hills rather than through them, and when the 4D
+cut turns and the land beneath them becomes a different landscape, they
+step onto the new one.
 
 Eight effects share that one idea, and each has a scale with 0 to turn it
 off: foliage that sways (the shadow pass applies the same offset, or a
