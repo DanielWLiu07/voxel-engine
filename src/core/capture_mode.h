@@ -26,6 +26,13 @@ struct CaptureMode {
     // and turns the 4D cut instead, which is the only capture where the
     // WORLD moves and the viewer does not.
     int tilt_frames  = 0;
+    // Frames sweeping the OTHER rotation plane, with whatever ZW tilt was
+    // given held. The distinction is the whole point of having two: a cut
+    // turned in one plane presents four-sided cells at every angle, so a
+    // cube is exact there and nothing about the block shape changes. Only
+    // a compound turn makes pentagons and hexagons, and this is the only
+    // capture that shows it happening.
+    int tilt_xw_frames = 0;
     // Frames of a walk along the camera's facing, one PNG each, with the
     // cut held still. The complement of tilt_frames: there the world
     // moves and the viewer does not, here the viewer moves and the world
@@ -46,7 +53,8 @@ struct CaptureMode {
     // pose and the orbit bench drives the camera through its own path.
     bool scripted_camera() const {
         return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0 ||
-               tilt_frames > 0 || walk_frames > 0;
+               tilt_frames > 0 || tilt_xw_frames > 0 ||
+               walk_frames > 0;
     }
 
     // The run exists to produce an image or a measurement, so interface
@@ -88,6 +96,7 @@ struct CaptureMode {
         if (orbit_frames > 0) return orbit_frames;
         if (cycle_frames > 0) return cycle_frames;
         if (tilt_frames > 0)  return tilt_frames;
+        if (tilt_xw_frames > 0) return tilt_xw_frames;
         return walk_frames;
     }
 };

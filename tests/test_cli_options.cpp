@@ -137,6 +137,12 @@ constexpr ValueFlag kValueFlags[] = {
     {"--slice-tilt",        "0.25",            true},
     {"--slice-tilt-xw",     "0.25",            true},
     {"--warp-walk",         "0.01",            true},
+    // The capture flags, absent for the same reason and with the same
+    // consequence: --capture-tilt-xw was written by copying its sibling,
+    // and a copy of an untested thing is another untested thing.
+    {"--capture-tilt",      "12",              true},
+    {"--capture-tilt-xw",   "12",              true},
+    {"--capture-walk",      "12",              true},
     {"--monitor",           "0",               true},
 };
 
