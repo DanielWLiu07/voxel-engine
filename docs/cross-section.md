@@ -111,6 +111,38 @@ Knowing the shape is one thing; the renderer emitting it is another.
     ./build/voxel_engine --slice-prisms --slice-tilt 0.45 --slice-tilt-xw 0.45 \
         --pose-at 22,44,26,-125,-14 --time-of-day 0.7 --screenshot-after 110
 
+And the same thing moving, which is the only way to see that the two
+pictures above are the same blocks:
+
+![Blocks drawn as their 4D cross-sections while the second rotation plane sweeps through zero: the shapes go from four-sided to five- and six-sided and back, and the material of each block never changes](media/cells_turn.gif)
+
+    CLIP_TIME_OF_DAY=0.76 scripts/capture_clip.sh tiltxw
+
+This is the one clip where the **block shapes** change rather than the
+terrain, and it is built to show the claim from the section above rather
+than to look impressive. The wheel's plane is held at 0.45 rad and the
+*other* plane sweeps 0 -> +0.45 -> 0 -> -0.45 -> 0. Halfway through the
+loop, where the XW angle passes through zero, the cut is turned in one
+plane only and every cell is square-on: that frame is the "cubes are
+exact" case, with a 0.45 rad rotation still applied. Away from it the
+pentagons and hexagons open up. Nothing about the terrain is reseeded on
+the way, and no block changes material - watch a single face and you can
+follow it through the whole sweep.
+
+The clip is also the reason the capture path converges *before* it draws.
+Each frame calls `resample_slice` and waits for the whole window, so a
+frame is a pure function of its cut rather than of the angles the sweep
+passed through on the way to it - which is what lets the return leg
+retrace the outbound one exactly and the loop close. `VOXEL_CAPTURE_TRACE=1`
+prints the `theta`/`phi`/`w` each frame was actually drawn at, which is how
+the clip is checked: the loop passes through the untilted XW angle twice,
+at frames 0 and 45, and those two frames differ by a mean of **0.02/255**
+per pixel while the effect the clip exists to show is **32/255**. The
+first version of this sweep had those two numbers the other way round -
+28/255 between frames that should have been identical and 0.02 between
+frames a whole step apart - because it converged after drawing rather
+than before, so every image was of the previous frame's cut.
+
 The mesher asks the inverted question: not "what is at this voxel" but
 "which cells of the 4D lattice does this chunk's footprint pass through,
 and what does each look like from here". The answer tiles the footprint

@@ -26,6 +26,15 @@ A boulder is a 4-ball, so the slice takes a sphere out of it with radius
 vanishes. A monolith is a 4-box, so turning the cut takes its footprint
 from a rectangle to a hexagon.
 
+![The second rotation plane sweeping through zero: block shapes go four-sided to six-sided and back while every block keeps its material](docs/media/cells_turn.gif)
+
+Turning the cut in **one** plane leaves every cell four-sided however far
+it goes, so drawing those blocks as cubes is exact rather than an
+approximation - the frame halfway through that loop is a 0.45 rad
+rotation where cubes are still right. It takes a second plane to open the
+pentagons and hexagons. Nothing is reseeded on the way: follow one face
+through the sweep and it keeps its material and only changes shape.
+
 ![Rock formations on a tilted cut](docs/media/structures.jpg)
 
 ## Greedy meshing works in four dimensions
