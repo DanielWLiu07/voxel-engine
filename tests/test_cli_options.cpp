@@ -143,6 +143,7 @@ constexpr ValueFlag kValueFlags[] = {
     {"--capture-tilt",      "12",              true},
     {"--capture-tilt-xw",   "12",              true},
     {"--capture-walk",      "12",              true},
+    {"--godrays",           "1.0",             true},
     {"--monitor",           "0",               true},
 };
 

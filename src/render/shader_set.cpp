@@ -30,6 +30,7 @@ bool ShaderSet::load(const std::filesystem::path& root) {
         && compile(bloom_down, root, "fullscreen.vert",   "bloom_down.frag",     "bloom_down")
         && compile(bloom_up,   root, "fullscreen.vert",   "bloom_up.frag",       "bloom_up")
         && compile(tonemap,    root, "fullscreen.vert",   "tonemap.frag",        "tonemap")
+        && compile(godray,     root, "fullscreen.vert",   "godray.frag",         "godray")
         && compile(wireframe,  root, "wireframe.vert",    "wireframe.frag",      "wireframe")
         && compile(crosshair,  root, "crosshair.vert",    "crosshair.frag",      "crosshair");
 }

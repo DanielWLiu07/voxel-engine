@@ -18,6 +18,7 @@ uniform vec3  u_sun_color;
 uniform vec3  u_moon_dir;     // points toward moon, normalized
 uniform float u_star_fade;    // 0 by day, 1 at night
 uniform float u_aurora;       // aurora strength, 0 disables
+uniform float u_submerged;    // 1 when the camera is under the waterline
 uniform float u_time;         // seconds, for cloud drift and twinkle
 uniform mat3  u_star_rot;     // rotates the fixed stars onto the night sky
 
@@ -89,6 +90,16 @@ float starfield(vec3 d) {
 
 void main() {
     vec3 dir = normalize(v_view_dir);
+
+    // Underwater there is no sky to draw. Everything past the fog is
+    // water, so the pass that would have drawn a sunset draws the water
+    // the terrain is already fading into - u_sky_horizon carries the
+    // underwater colour in that case, which keeps this to one branch
+    // instead of a second set of uniforms.
+    if (u_submerged > 0.5) {
+        frag_color = vec4(u_sky_horizon, 1.0);
+        return;
+    }
 
     // Gradient by elevation: 0 at the horizon, 1 at the zenith.
     float elev = clamp(dir.y * 1.2 + 0.1, 0.0, 1.0);

@@ -3,6 +3,8 @@
 #include "core/profiler.h"
 #include "gfx/shader.h"
 
+#include <glm/vec2.hpp>
+
 #include <algorithm>
 #include <cstdio>
 
@@ -48,6 +50,9 @@ void PostProcess::destroy() {
         bloom_mips_[i] = BloomMip{};
     }
     bloom_mip_count_ = 0;
+    if (godray_fbo_)   { glDeleteFramebuffers(1, &godray_fbo_);  godray_fbo_ = 0; }
+    if (godray_color_) { glDeleteTextures(1, &godray_color_);    godray_color_ = 0; }
+    godray_w_ = godray_h_ = 0;
     if (fs_vao_) { glDeleteVertexArrays(1, &fs_vao_); fs_vao_ = 0; }
     w_ = h_ = 0;
     samples_ = 1;
@@ -131,6 +136,33 @@ bool PostProcess::init(int w, int h, int samples) {
         mh = std::max(1, mh / 2);
     }
 
+    // Light shafts, at mip 0's resolution.
+    //
+    // Half rather than quarter, and that is a measurement rather than a
+    // default. Quartering the axes - a sixteenth of the pixels - did not
+    // make the pass cheaper: ABBA-paired 600-frame runs put it at +2.15 ms
+    // against +2.30 ms at half, which is inside the spread. The cost is
+    // not the pixels it writes, it is the 32 taps each one makes into a
+    // full-resolution RGBA16F scene target, and a smaller output makes
+    // those taps land FURTHER apart, trading fewer of them for worse
+    // locality. Cutting the taps instead (32 to 4, at quarter res) took
+    // it to +0.98 ms, which is the other half of the same story.
+    //
+    // So: half res, because it costs what quarter costs and looks better.
+    godray_w_ = bloom_mips_[0].w;
+    godray_h_ = bloom_mips_[0].h;
+    godray_color_ = make_color_texture(godray_w_, godray_h_, GL_RGBA16F);
+    glGenFramebuffers(1, &godray_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, godray_fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, godray_color_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::fprintf(stderr, "[postfx] godray target incomplete\n");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        destroy();
+        return false;
+    }
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glGenVertexArrays(1, &fs_vao_);
     return true;
@@ -144,11 +176,16 @@ void PostProcess::begin_scene() {
 void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
                                         const Shader& bloom_down,
                                         const Shader& bloom_up,
+                                        const Shader& godray,
                                         const Shader& tonemap,
                                         int backbuffer_w, int backbuffer_h,
                                         float bloom_threshold,
                                         float bloom_intensity,
-                                        float exposure) {
+                                        float exposure,
+                                        float sun_uv_x,
+                                        float sun_uv_y,
+                                        float godray_intensity,
+                                        float godray_threshold) {
     ZoneScopedN("postfx_resolve");
     // MSAA resolve: blit multisample scene -> single-sample resolve target.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo_);
@@ -170,6 +207,34 @@ void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
     glViewport(0, 0, bloom_mips_[0].w, bloom_mips_[0].h);
     glBindTexture(GL_TEXTURE_2D, resolve_color_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // Light shafts, marched over the resolved scene with a threshold of
+    // their own. Reusing the bloom's bright-extract was the first design
+    // and it does not work - see godray.frag for the measurement.
+    //
+    // Skipped outright when the sun is not contributing, which is most of
+    // the night and any frame facing away from it. The target still holds
+    // the last frame's shafts then, so the tonemap's own intensity is
+    // what zeroes them - clearing here would be a second full-target
+    // write to accomplish what a multiply by zero already does.
+    if (godray_intensity > 0.0f) {
+        godray.use();
+        godray.set_int("u_scene", 0);
+        godray.set_vec2("u_sun_uv", glm::vec2(sun_uv_x, sun_uv_y));
+        // Walked over three quarters of the distance to the sun, decaying
+        // to about a fifth across the march. Longer reads as fog, shorter
+        // reads as a halo.
+        godray.set_float("u_density", 0.75f);
+        godray.set_float("u_decay", 0.968f);
+        godray.set_float("u_weight", 0.55f);
+        // Set by the caller from the sky it just lit, so only what is
+        // brighter than the ambient sky emits.
+        godray.set_float("u_threshold", godray_threshold);
+        glBindFramebuffer(GL_FRAMEBUFFER, godray_fbo_);
+        glViewport(0, 0, godray_w_, godray_h_);
+        glBindTexture(GL_TEXTURE_2D, resolve_color_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
 
     // Downsample walk: mip[i-1] -> mip[i], halving each step.
     bloom_down.use();
@@ -202,12 +267,16 @@ void PostProcess::resolve_to_backbuffer(const Shader& bright_extract,
     tonemap.use();
     tonemap.set_int("u_scene", 0);
     tonemap.set_int("u_bloom", 1);
+    tonemap.set_int("u_godray", 2);
     tonemap.set_float("u_exposure", exposure);
     tonemap.set_float("u_bloom_intensity", bloom_intensity);
+    tonemap.set_float("u_godray_intensity", godray_intensity);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, resolve_color_);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, bloom_mips_[0].tex);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, godray_color_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glBindVertexArray(0);

@@ -1431,8 +1431,59 @@ int main(int argc, char** argv) {
         fv.camera_pos = cam.position();
         fv.window_w   = fb_w;
         fv.window_h   = fb_h;
+        // Lit before the fog rather than after it: the fog's colour is a
+        // fact about the sky, and underwater it is a fact about the water,
+        // so the frame has to know what hour it is before it can say what
+        // the distance fades to.
+        render::LightingFrame light = render::compute_lighting(time_of_day);
+
         fv.fog_end    = static_cast<float>(stream_radius * world::kChunkSizeX) * 0.95f;
         fv.fog_start  = fv.fog_end * 0.85f;  // keep midrange crisp; haze only far out
+        fv.fog_color  = light.sky_horizon;
+
+        // Under the waterline the whole atmosphere changes, and until now
+        // nothing did: the lake is the biggest thing in most shots and
+        // swimming into it rendered exactly as standing beside it, sky
+        // and all, which reads as the water having no inside.
+        //
+        // Three uniforms carry it, because three things are wrong at once
+        // down there. Sight is short - water absorbs over metres, not
+        // hundreds of them - so the fog closes to a fifth of its range.
+        // What it fades TO is the water, not the sky. And the sky is not
+        // visible at all; what is overhead is the underside of the
+        // surface, which is why draw_sky gets told rather than left to
+        // draw a sunset through ten metres of lake.
+        //
+        // Scaled by the day cycle like the water body is, so night diving
+        // is dark rather than a lit blue room.
+        // Below the waterline, and that is the whole test, because water
+        // in this engine is not a block - it is one plane drawn at sea
+        // level, so every pocket of air below that plane is under it by
+        // construction. A block query was written here first and could
+        // not compile: BlockId has no water member to ask about.
+        fv.submerged =
+            cam.position().y < static_cast<float>(world::kSeaLevel);
+        if (fv.submerged) {
+            const glm::vec3 daylight =
+                light.ambient +
+                light.sun_color * std::max(light.sun_height, 0.0f);
+            const float day_scale = glm::clamp(
+                (daylight.r + daylight.g + daylight.b) /
+                    (3.0f * render::kNoonDaylightMean),
+                0.05f, 1.0f);
+            fv.fog_color = day_scale * glm::vec3(0.045f, 0.16f, 0.22f);
+            fv.fog_end   = 34.0f;
+            fv.fog_start = 3.0f;
+            // Light that reached the camera came through the water too,
+            // so it arrives dimmer and blue-shifted. Without this the fog
+            // and the ceiling were right while the lake bed underneath
+            // them stayed lit like a beach at noon, which put the whole
+            // effect back in doubt - red is the first thing water takes
+            // out, and leaving it in is what makes a submerged shot read
+            // as a tinted photograph rather than as being under water.
+            light.sun_color *= glm::vec3(0.30f, 0.62f, 0.74f);
+            light.ambient   *= glm::vec3(0.34f, 0.66f, 0.78f);
+        }
         // Camera far plane sits just past the fog plane: anything further is
         // fully fogged out and contributes nothing. Tightening it from the
         // 500 m default also gives the frustum a real far-plane cull instead
@@ -1486,7 +1537,6 @@ int main(int argc, char** argv) {
                            >= static_cast<float>(world::kSnowBand) + 3.0f;
         }
 
-        render::LightingFrame light = render::compute_lighting(time_of_day);
 
         // Overcast. Precipitation with the sun still blazing reads as
         // confetti: the first version put white flakes over a white
@@ -1665,14 +1715,74 @@ int main(int argc, char** argv) {
             target.hit,
             target.block_x, target.block_y, target.block_z);
 
-        // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
+        // Where the sun lands on screen, and whether it is worth marching
+        // shafts from. The projection is only held here, so the decision
+        // is made here and the pass is handed a strength it can trust.
+        //
+        // Three things switch it off, and each one on its own would put
+        // rays on a frame that should not have them: the sun behind the
+        // camera (w <= 0, where the projection folds the point back into
+        // view mirrored), the sun off the edge of the screen, and the sun
+        // below the horizon. The screen-edge term is a fade rather than a
+        // cutoff because a hard one pops the whole effect off in a single
+        // frame as the camera turns.
+        float sun_uv_x = 0.5f, sun_uv_y = 0.5f, godray_strength = 0.0f;
+        // Only what outshines the ambient sky emits shafts. Taken from the
+        // brighter end of the gradient the sky shader was just handed, so
+        // it tracks the day cycle instead of being a constant that is
+        // right at one hour - the sky's luma runs 0.05 at night to 0.7 at
+        // noon, and a fixed threshold either floods the frame or does
+        // nothing depending on which end it was tuned at.
+        const auto luma = [](const glm::vec3& c) {
+            return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
+        };
+        const float godray_threshold =
+            1.12f * std::max(luma(light.sky_top), luma(light.sky_horizon));
+        if (opt.godrays > 0.0f) {
+            const glm::vec4 clip =
+                fv.proj * fv.view *
+                glm::vec4(cam.position() + light.sun_dir * 900.0f, 1.0f);
+            if (clip.w > 0.0f) {
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                sun_uv_x = ndc.x * 0.5f + 0.5f;
+                sun_uv_y = ndc.y * 0.5f + 0.5f;
+                // 1 inside the frame, falling to 0 half a screen outside
+                // it. Shafts from a sun just off the edge are real - that
+                // is most of what the effect is for - so the fade has to
+                // reach past the border rather than stop at it.
+                const float ox = std::max(0.0f, std::max(-sun_uv_x,
+                                                         sun_uv_x - 1.0f));
+                const float oy = std::max(0.0f, std::max(-sun_uv_y,
+                                                         sun_uv_y - 1.0f));
+                const float edge =
+                    1.0f - glm::clamp(std::max(ox, oy) / 0.5f, 0.0f, 1.0f);
+                // Strongest with the sun low, which is when a shaft has a
+                // treeline to be broken by. Overhead it has nothing to cut
+                // it and the march just brightens the sky.
+                const float low =
+                    1.0f - glm::clamp(light.sun_height / 0.55f, 0.0f, 1.0f);
+                // Fades in as the sun clears the horizon. The first
+                // version ramped over 0.04 of sun height, which put the
+                // gate at zero for exactly the hour the effect is for -
+                // at --time-of-day 0.75 the sun IS the horizon.
+                const float up =
+                    glm::smoothstep(-0.03f, 0.12f, light.sun_height);
+                godray_strength = opt.godrays * edge * up *
+                                  (0.35f + 0.65f * low);
+            }
+        }
+
+        // HDR -> bright extract -> shafts -> blur -> ACES tonemap.
         sampler.begin_pass();
         postfx.resolve_to_backbuffer(shaders.bright, shaders.bloom_down,
-                                     shaders.bloom_up, shaders.tonemap,
+                                     shaders.bloom_up, shaders.godray,
+                                     shaders.tonemap,
                                      fb_w, fb_h,
                                      /*threshold*/ 1.0f,
                                      /*intensity*/ 0.7f,
-                                     /*exposure*/  1.0f);
+                                     /*exposure*/  1.0f,
+                                     sun_uv_x, sun_uv_y, godray_strength,
+                                     godray_threshold);
         sampler.end_pass(sampler.passes().postfx);
 
         // Scripted clip capture: save the frame just rendered (pre-HUD),

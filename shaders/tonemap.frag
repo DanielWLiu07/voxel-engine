@@ -5,8 +5,10 @@ out vec4 frag_color;
 
 uniform sampler2D u_scene;
 uniform sampler2D u_bloom;
+uniform sampler2D u_godray;
 uniform float     u_exposure;
 uniform float     u_bloom_intensity;
+uniform float     u_godray_intensity;  // 0 when the sun is not on screen
 
 // Narkowicz 2015 ACES approximation. Compresses highlights cleanly but
 // desaturates - we lift saturation back up after the curve.
@@ -31,7 +33,12 @@ float vignette(vec2 uv) {
 void main() {
     vec3 scene = texture(u_scene, v_uv).rgb * u_exposure;
     vec3 bloom = texture(u_bloom, v_uv).rgb * u_bloom_intensity;
-    vec3 hdr = scene + bloom;
+    // Added before the curve, not after: shafts are light arriving at the
+    // camera, so they belong in the HDR sum where ACES can roll them off.
+    // Composited after the curve they read as a decal laid over the frame
+    // and blow out the sky they are supposed to be part of.
+    vec3 shafts = texture(u_godray, v_uv).rgb * u_godray_intensity;
+    vec3 hdr = scene + bloom + shafts;
 
     vec3 ldr = aces(hdr);
     ldr = saturate_boost(ldr, 0.22);              // recover ACES's loss

@@ -161,7 +161,7 @@ void draw_creatures(const gfx::Shader& shader, const gfx::SolidCube& cube,
     shader.set_vec3("u_light_color", light.sun_color);
     shader.set_vec3("u_ambient_color", light.ambient);
     shader.set_vec3("u_camera_pos", fv.camera_pos);
-    shader.set_vec3("u_fog_color", light.sky_horizon);
+    shader.set_vec3("u_fog_color", fv.fog_color);
     shader.set_float("u_fog_start", fv.fog_start);
     shader.set_float("u_fog_end", fv.fog_end);
 
@@ -240,7 +240,13 @@ void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
     sky_shader.use();
     sky_shader.set_mat4("u_inv_view_proj", inv_vp);
     sky_shader.set_vec3("u_sky_top", light.sky_top);
-    sky_shader.set_vec3("u_sky_horizon", light.sky_horizon);
+    // Underwater the "sky" is the water, and the shader early-outs on
+    // u_submerged reading this as the colour to fill with - so the two
+    // stay one value and the horizon a diver sees is the same one the
+    // terrain in front of them is fading into.
+    sky_shader.set_vec3("u_sky_horizon",
+                        fv.submerged ? fv.fog_color : light.sky_horizon);
+    sky_shader.set_float("u_submerged", fv.submerged ? 1.0f : 0.0f);
     sky_shader.set_vec3("u_sun_dir", light.sun_dir);
     sky_shader.set_vec3("u_sun_color", light.sun_color);
     sky_shader.set_vec3("u_moon_dir", light.moon_dir);
@@ -289,7 +295,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.set_vec3("u_light_color", light.sun_color);
     terrain_shader.set_vec3("u_ambient_color", light.ambient);
     terrain_shader.set_vec3("u_camera_pos", fv.camera_pos);
-    terrain_shader.set_vec3("u_fog_color", light.sky_horizon);
+    terrain_shader.set_vec3("u_fog_color", fv.fog_color);
     terrain_shader.set_float("u_fog_start", fv.fog_start);
     terrain_shader.set_float("u_fog_end", fv.fog_end);
     terrain_shader.set_int("u_shadow_array", 1);
@@ -364,7 +370,15 @@ void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
                           day_scale * glm::vec3(0.15f, 0.42f, 0.60f));
     water_shader.set_vec3("u_sun_dir", light.sun_dir);
     water_shader.set_vec3("u_sun_color", light.sun_color);
-    water_shader.set_vec3("u_fog_color", light.sky_horizon);
+    // The sky the surface reflects. sky_horizon doubles as the fog colour
+    // above and as the low end of the reflected gradient here, which is
+    // why water and the distance it fades into agree at every hour.
+    water_shader.set_vec3("u_sky_top", light.sky_top);
+    water_shader.set_vec3("u_sky_horizon", light.sky_horizon);
+    water_shader.set_vec3("u_moon_dir", light.moon_dir);
+    water_shader.set_float("u_star_fade", light.star_fade);
+    water_shader.set_float("u_submerged", fv.submerged ? 1.0f : 0.0f);
+    water_shader.set_vec3("u_fog_color", fv.fog_color);
     water_shader.set_float("u_fog_start", fv.fog_start);
     water_shader.set_float("u_fog_end", fv.fog_end);
     water_shader.set_float("u_alpha", 0.95f);

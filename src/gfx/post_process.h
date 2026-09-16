@@ -24,14 +24,23 @@ public:
 
     void begin_scene();
 
+    // sun_uv_x/y are the sun's position in [0,1] screen space and
+    // godray_intensity is 0 whenever it is off screen or below the
+    // horizon, which is what switches the shaft pass off - the caller owns
+    // that decision because it is the only one holding the projection.
     void resolve_to_backbuffer(const Shader& bright_extract,
                                const Shader& bloom_down,
                                const Shader& bloom_up,
+                               const Shader& godray,
                                const Shader& tonemap,
                                int backbuffer_w, int backbuffer_h,
                                float bloom_threshold = 1.0f,
                                float bloom_intensity = 0.6f,
-                               float exposure = 1.0f);
+                               float exposure = 1.0f,
+                               float sun_uv_x = 0.5f,
+                               float sun_uv_y = 0.5f,
+                               float godray_intensity = 0.0f,
+                               float godray_threshold = 1.0f);
 
     int bloom_mip_count() const { return bloom_mip_count_; }
 
@@ -67,6 +76,14 @@ private:
     };
     BloomMip bloom_mips_[kMaxBloomMips];
     int      bloom_mip_count_ = 0;
+
+    // Light shafts, at the same half res as bloom mip 0 and read by the
+    // tonemap. A separate target rather than another mip because the
+    // upsample walk accumulates back into level 0 and would overwrite it.
+    GLuint godray_fbo_   = 0;
+    GLuint godray_color_ = 0;
+    int    godray_w_     = 0;
+    int    godray_h_     = 0;
 
     GLuint fs_vao_ = 0;
 };

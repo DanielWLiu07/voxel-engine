@@ -121,6 +121,25 @@ block face; right is the same surface after coplanar faces merge.
 
 ## What it looks like
 
+![Sunset over the lake: the water carries the sky's colour and the sun lays a path on it, with shafts breaking past the ridge](docs/media/water_reflect.jpg)
+
+    ./build/voxel_engine --pose-at 300,30,-300,-108,3 --time-of-day 0.728 \
+        --godrays 1.4 --radius 12 --screenshot-after 150
+
+The water reflects the sky it is under rather than a colour authored to
+look like one, so a low sun is the best hour for a lake rather than the
+worst. `--godrays` marches shafts from whatever is brighter than the sky
+itself; it is off by default because it costs +2.30 ms of a 5.0 ms frame,
+and every number in this README comes off a benchmark that must not
+quietly acquire it. Swimming under the surface closes sight to 34 m and
+takes the red out of the light. [The details](docs/atmosphere.md#light-and-water).
+
+![Under the surface: sight closes to 34 m, the ceiling is the underside of the water, and the light has lost its red](docs/media/underwater.jpg)
+
+    ./build/voxel_engine --pose-at 300,22,-420,-60,10 --time-of-day 0.45 \
+        --radius 10 --screenshot-after 150
+
+
 ![Fireflies over a treeline at night](docs/media/fireflies.jpg)
 
     ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \

@@ -28,6 +28,14 @@ struct FrameView {
     int       window_h;
     float     fog_start;
     float     fog_end;
+    // What the distance fades TO. Three passes each derived this from
+    // light.sky_horizon on their own, which was fine while the answer was
+    // always the sky and wrong the moment it was not: underwater, terrain
+    // has to fade into the water, not into a sky the camera cannot see.
+    glm::vec3 fog_color{0.0f};
+    // Camera below the waterline. Shortens the fog, recolours it, and
+    // turns the sky into the underside of the surface.
+    bool      submerged = false;
     float     time_seconds;
     // Wind strength for foliage sway, 0 disables. A multiplier rather
     // than a flag so it can be dialled without touching the shader.

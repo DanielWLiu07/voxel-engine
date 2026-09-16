@@ -111,6 +111,97 @@ resolve this at all: three interleaved rounds with everything on gave
 showing the version doing *more* work as faster. The machine drifted
 further across the rounds than the feature moved the frame.
 
+## Light and water
+
+Three things that are all the same observation: the engine knew what hour
+it was everywhere except where it mattered most.
+
+![Sunset over the lake: the water carries the sky's colour and the sun lays a path on it, with shafts breaking past the ridge](media/water_reflect.jpg)
+
+    ./build/voxel_engine --pose-at 300,30,-300,-108,3 --time-of-day 0.728 \
+        --godrays 1.4 --radius 12 --screenshot-after 150
+
+**Water reflects the sky it is under.** It used to lerp between two
+authored colours - a deep blue body and a fixed sky-cyan at glancing
+angles - both scaled down by the day cycle. That is right at noon and
+wrong at every other hour, and the failure was documented rather than
+fixed: the capture notes told photographers to raise the sun for lake
+shots, because at sunset a peach sky sat over a navy lake. Now the
+glancing term is the sky evaluated along the reflection vector, so the
+water is gold at dusk, blue at noon, and dark with a moon path at night
+without anything being authored per hour.
+
+Two details carry it. The reflection is split into a gradient and a
+glitter term, and only the gradient picks up the water's own hue - the
+first version tinted both, and since the body colour is
+`(0.15, 0.42, 0.60)` it multiplied the red channel of a sunset by 0.33,
+deleting the one thing on a lake at that hour anybody would name. And the
+sky is sampled analytically, not from the sky pass: the gradient and the
+two light discs, but no clouds, stars or aurora, because those are high
+frequency and the surface they would land on is moving.
+
+**Shafts, from a threshold that moves with the sky.** `--godrays S` marches
+each pixel toward the sun's screen position over the resolved scene,
+accumulating what is brighter than the sky itself. Two thresholds failed
+before that one, in opposite directions and both instructive: reusing the
+bloom's bright-extract thresholds at 1.0, where nothing but the sun's disc
+clears it, and the march smeared a few hundred pixels into a halo worth
+0.097/255 against the frame with the pass off; a fixed 0.42 makes the
+*entire* sky an emitter, so every pixel picks up the same wash and the
+frame went milky corner to corner with no shafts in it. Crepuscular rays
+need the emitter to be mostly black. The threshold is now handed in from
+the CPU as 1.12x the brighter end of the sky gradient, which tracks a
+cycle whose luma runs 0.05 at night to 0.7 at noon.
+
+**Under the waterline is a different world.** The lake is the biggest
+thing in most shots and swimming into it used to render exactly like
+standing beside it, sky and all. Now sight closes to 34 m, the distance
+fades into water rather than sky, the sky pass draws the underside of the
+surface instead of a sunset, and the sunlight itself is attenuated and
+blue-shifted before it lights anything - red is the first thing water
+takes out, and leaving it in is what makes a submerged shot read as a
+tinted photograph rather than as being under water.
+
+![Under the surface: sight closes to 34 m, the ceiling is the underside of the water, and the light has lost its red](media/underwater.jpg)
+
+    ./build/voxel_engine --pose-at 300,22,-420,-60,10 --time-of-day 0.45 \
+        --radius 10 --screenshot-after 150
+
+Water here is one plane drawn at sea level rather than a block - `BlockId`
+has no water member, which a first version of the submerged test found
+out by failing to compile - so every pocket of air below that plane is
+under it by construction, and the camera's height is the whole test.
+
+## What the shafts cost, and why they are off by default
+
+`--godrays` is the one atmosphere flag that defaults to 0, and a
+measurement decided it rather than taste:
+
+```
+              p50 frame, radius 12, M4, --bench-frame 600
+  off         5.0 ms
+  on          7.3 ms          +2.30 ms  (range 2.20-2.44, three reps)
+```
+
+That is about 45% of the frame, and every perf figure this project
+publishes comes off `--bench-frame` and `--bench`. A default-on effect of
+that size would silently move all of them, so captures ask for it and
+benchmarks never get it by accident.
+
+Getting that number needed an ABBA-paired design - off, on, on, off per
+rep - because this machine drifts from 2.5 to 5.0 ms on one unchanged
+configuration across a session, and unpaired runs put the *same* build
+both faster and slower than itself. Paired, the three reps agreed to
+within 0.24 ms.
+
+The same measurement says where the cost is, and it is not where it
+looks. Quartering the axes - a sixteenth of the pixels - did not make it
+cheaper (+2.15 ms, inside the spread), while cutting the march from 32
+taps to 4 took it to +0.98 ms. The cost is the taps into a full-resolution
+RGBA16F target, and a smaller output makes those taps land further apart,
+trading fewer of them for worse locality. So the pass runs at half res,
+because it costs what quarter costs and looks better.
+
 ## Turning it off
 
 Every effect has a scale, and 0 disables it:
@@ -123,6 +214,7 @@ Every effect has a scale, and 0 disables it:
 --birds S          flocks circling overhead by day
 --aurora S         aurora on the night sky
 --cloud-shadow S   clouds dappling the ground
+--godrays S        sun shafts; DEFAULT 0, see the cost section above
 ```
 
 `--weather` is an override rather than a scale, and its default is
