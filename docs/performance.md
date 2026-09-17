@@ -34,7 +34,7 @@ Going 4D costs nothing in the 3D path - it is opt-in, and every
 hardware-independent 3D figure below is unchanged by its existence.
 Larger worlds and the per-pass split are in
 [Frame cost](#frame-cost-on-an-m4); the meshing ratios behind the
-triangle column are in [A fourth spatial dimension](#a-fourth-spatial-dimension).
+triangle column are in [What the fourth dimension costs](#what-the-fourth-dimension-costs).
 
 ## The numbers that do not depend on the machine
 

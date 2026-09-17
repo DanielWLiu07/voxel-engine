@@ -12,6 +12,13 @@ The camera is locked in that clip. Nothing moves except the hyperplane
 the slice is cut on, and the landscape rebuilds itself because you are
 looking at a different cross-section of the same fixed world.
 
+```
+cmake -B build -G Ninja && cmake --build build -j && ./build/voxel_engine
+```
+
+Scroll the wheel to turn the cut. [Full build notes](#build),
+[controls](#controls), [what it is checked against](#how-it-is-checked).
+
 ## Blocks are cross-sections, not cubes
 
 ![Blinking between cubes and true 4D cross-sections](docs/media/blocks_blink.gif)
@@ -134,37 +141,6 @@ and every number in this README comes off a benchmark that must not
 quietly acquire it. Swimming under the surface closes sight to 34 m and
 takes the red out of the light. [The details](docs/atmosphere.md#light-and-water).
 
-![Under the surface: sight closes to 34 m, the ceiling is the underside of the water, and the light has lost its red](docs/media/underwater.jpg)
-
-    ./build/voxel_engine --pose-at 300,22,-420,-60,10 --time-of-day 0.45 \
-        --radius 10 --screenshot-after 150
-
-
-![Fireflies over a treeline at night](docs/media/fireflies.jpg)
-
-    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
-        --time-of-day 0.82 --radius 8 --screenshot-after 100
-
-![Hoppers and striders wandering the terrain](docs/media/creatures.jpg)
-
-    ./build/voxel_engine --3d --pose-at 20,58,20,-135,-45 \
-        --radius 8 --time-of-day 0.35 --screenshot-after 120
-
-Creatures wander the terrain too, in two kinds: orange hoppers that
-bounce and green striders that amble. They read the ground height under
-themselves and walk over hills rather than through them, and when the 4D
-cut turns and the land beneath them becomes a different landscape, they
-step onto the new one.
-
-Eight effects share that one idea, and each has a scale with 0 to turn it
-off: foliage that sways (the shadow pass applies the same offset, or a
-canopy's shadow stays where the canopy no longer is), fireflies at night
-thinning to dust by day, rain and snow, mist pooling in the valleys,
-flocks circling overhead, the aurora, and clouds dappling the ground as
-they pass. Together they cost about a tenth of the instrumented pass
-time - measured, not assumed:
-[docs/atmosphere.md](docs/atmosphere.md).
-
 ![Aurora over a firefly-lit treeline at night](docs/media/aurora.jpg)
 
     ./build/voxel_engine --3d --pose-at 30,46,30,180,12 \
@@ -177,18 +153,17 @@ the fireflies derive every position from `gl_VertexID` and the clock, so
 nine thousand of them are one draw call with no CPU work and nothing to
 keep in sync.
 
-![Rain over a lake, with the sun behind an overcast sky](docs/media/rain.jpg)
+Eight effects share that idea, and each has a scale with 0 to turn it
+off: swaying foliage (the shadow pass applies the same offset, or a
+canopy's shadow stays where the canopy no longer is), fireflies thinning
+to dust by day, rain and snow, valley mist, flocks overhead, the aurora,
+and clouds dappling the ground. Together they cost about a tenth of the
+instrumented pass time - measured, not assumed. Creatures wander the
+terrain too, reading the ground height under themselves so they walk over
+hills rather than through them.
 
-    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
-        --time-of-day 0.40 --radius 8 --weather 0.85 --screenshot-after 100
-
-Weather comes and goes on its own - dry most of the time, with spells of
-rain below the snow line and snow above it. It is a lighting change
-first: the sun drops, shadows soften toward none, and the sky and its fog
-grey over. The first version left the sun blazing and the drops were
-invisible, which is the whole lesson. `--weather 0..1` pins it, because a
-capture pins the clock the cycle is read from.
-
+Swimming, weather, wildlife, and the rest of the stills, each with the
+command that regenerates it: [docs/atmosphere.md](docs/atmosphere.md).
 <p align="center">
   <img src="docs/media/vista_sunset.jpg" width="49%" alt="Sunset over dunes and hills">
   <img src="docs/media/cave.jpg" width="49%" alt="Underground, lit by placed glow blocks">
@@ -296,6 +271,27 @@ making the measurements hard to fake.
 | [docs/bench/](docs/bench/) | Benchmark artifacts and inputs |
 
 ## What is in here
+
+A frame crosses a thread boundary exactly once, and that is the rule the
+whole design is arranged around:
+
+```
+  nine workers                        main thread (owns every GL call)
+  ------------                        --------------------------------
+  4D terrain  ->  greedy mesh  -->  finished queue  ->  GPU upload
+  (Perlin in      (sweeps in        (owned buffers,      |
+   lattice         lattice           never pointers       v
+   space)          space)            into the map)    frustum + section cull
+                                                          |
+                                                          v
+                                            shadow -> sky -> terrain ->
+                                            water -> post (HDR, bloom)
+```
+
+Workers never touch GL, and the main thread never generates terrain. A
+worker gets a 16 KB copy of its neighbours' boundary layers rather than a
+pointer into the chunk map, so a chunk can be meshed against neighbours
+that are themselves still being rebuilt.
 
 ```
 src/core/     Window, input, timing, thread pool, CLI, frame stats
