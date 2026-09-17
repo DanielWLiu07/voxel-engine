@@ -153,12 +153,35 @@ the fireflies derive every position from `gl_VertexID` and the clock, so
 nine thousand of them are one draw call with no CPU work and nothing to
 keep in sync.
 
-Eight effects share that idea, and each has a scale with 0 to turn it
-off: swaying foliage (the shadow pass applies the same offset, or a
-canopy's shadow stays where the canopy no longer is), fireflies thinning
-to dust by day, rain and snow, valley mist, flocks overhead, the aurora,
-and clouds dappling the ground. Together they cost about a tenth of the
-instrumented pass time - measured, not assumed. Creatures wander the
+![A double rainbow over the treeline as a shower clears](docs/media/rainbow.jpg)
+
+    ./build/voxel_engine --3d --pose-at 18,52,18,-118,10 --time-of-day 0.30 \
+        --radius 8 --weather 0.35 --screenshot-after 100
+
+Nothing places that bow. A rainbow is a ring 42 degrees off the point
+opposite the sun, so it is drawn against the antisolar direction and it
+rises as the sun sets, on its own. Each colour channel gets its own angle
+- red leaves a droplet at 42.4 degrees and blue at 40.1 - which is why the
+secondary bow above it comes out with its colours reversed without
+anything asking for that.
+
+![A meteor over the moonlit ridge](docs/media/meteor.jpg)
+
+    ./build/voxel_engine --3d --pose-at 300,95,-360,112,18 \
+        --time-of-day 0.79 --radius 8 --screenshot-after 90
+
+Nine effects share that idea, and each has a scale with 0 to turn it off:
+swaying foliage (the shadow pass applies the same offset, or a canopy's
+shadow stays where the canopy no longer is), fireflies thinning to dust by
+day, leaves off the canopy, butterflies through the daylight hours, rain
+and snow, valley mist, flocks overhead, the aurora, and clouds dappling
+the ground. Meteors and the bow have no scale because they are conditions
+rather than features: one needs night, the other needs sun and rain at
+once. Rain also dimples the lake it falls on.
+
+Together the whole atmosphere is 1.08 ms of a frame, and the leaves and
+butterflies are 0.17 ms of that - measured interleaved against the same
+build with them off, three runs each, not assumed. Creatures wander the
 terrain too, reading the ground height under themselves so they walk over
 hills rather than through them.
 
@@ -201,6 +224,8 @@ Windows build clean on CI.
 ./build/voxel_engine --3d             # the ordinary three-dimensional world
 ./build/voxel_engine --wind 0         # still air; 1 is the default breeze
 ./build/voxel_engine --motes 0        # no fireflies or dust
+./build/voxel_engine --leaves 0       # no leaves off the canopy
+./build/voxel_engine --butterflies 0  # no butterflies
 ./build/voxel_engine --weather 0.9    # pin a downpour; omit for the natural cycle
 ./build/voxel_engine --creatures 0    # empty the world of wildlife
 ./build/voxel_engine --aurora 0       # ... and every other effect has a scale, 0 off

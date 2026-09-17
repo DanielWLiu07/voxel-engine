@@ -19,6 +19,7 @@ uniform vec3  u_sky_top;
 uniform vec3  u_sky_horizon;
 uniform vec3  u_moon_dir;
 uniform float u_star_fade;
+uniform float u_precip;       // rain this frame, 0..1, for surface dimples
 uniform float u_submerged;  // 1 when the camera is under this surface
 
 // Analytic surface normal from the wave field's exact derivatives. The
@@ -26,6 +27,37 @@ uniform float u_submerged;  // 1 when the camera is under this surface
 // higher-frequency detail waves on top (normal-only - displacing them
 // would need a much denser grid, but slope is what lighting sees, and
 // slope = amplitude * frequency survives small amplitudes).
+// Rings where drops land.
+//
+// A grid cell owns at most one impact, but MOST CELLS ARE EMPTY at any
+// moment. The first version gave every cell a ring on every cycle and the
+// lake came out looking like bubble wrap - a regular lattice of identical
+// circles, which is the one thing falling rain never produces.
+//
+// So a second hash, seeded by the cell AND the cycle index, decides
+// whether that cell fires at all, and the impact point is jittered inside
+// the cell. Roughly a third of cells carry a ring at a time and each one
+// lands somewhere different on the next pass.
+float rain_rings(vec2 xz, float t) {
+    vec2  g    = xz * 0.55;
+    vec2  cell = floor(g);
+    vec2  f    = fract(g) - 0.5;
+
+    float h    = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+    float cyc  = t * 0.85 + h;
+    float idx  = floor(cyc);
+    float age  = fract(cyc);
+
+    float fire = fract(sin(dot(cell + idx, vec2(39.34, 11.13))) * 24634.634);
+    if (fire > 0.34) return 0.0;
+
+    vec2  jit = vec2(fract(fire * 71.3), fract(fire * 133.7)) - 0.5;
+    float r   = length(f - jit * 0.55);
+
+    // A ring travelling outward and dying as it goes.
+    return exp(-pow((r - age * 0.40) / 0.045, 2.0)) * (1.0 - age);
+}
+
 vec3 wave_normal(vec2 xz, float t) {
     float dx = 0.18 * 0.18 * cos(xz.x * 0.18 + t * 1.30)
              + 0.10 * 0.10 * cos((xz.x + xz.y) * 0.10 + t * 0.55);
@@ -35,6 +67,17 @@ vec3 wave_normal(vec2 xz, float t) {
     // directions so the glints shimmer instead of marching in rows.
     dx += 0.045 * 0.90 * cos(xz.x * 0.90 + xz.y * 0.35 + t * 2.6);
     dz += 0.045 * 0.90 * cos(xz.x * 0.35 + xz.y * 0.90 - t * 2.2);
+    // Rain dimples the surface. Finite differences on the ring field
+    // rather than an analytic derivative: the field is already a hash and
+    // two extra samples are cheaper than differentiating it by hand.
+    if (u_precip > 0.02) {
+        const float e = 0.06;
+        float c  = rain_rings(xz, t);
+        float gx = rain_rings(xz + vec2(e, 0.0), t) - c;
+        float gz = rain_rings(xz + vec2(0.0, e), t) - c;
+        dx += gx * 1.15 * u_precip;
+        dz += gz * 1.15 * u_precip;
+    }
     return normalize(vec3(-dx, 1.0, -dz));
 }
 

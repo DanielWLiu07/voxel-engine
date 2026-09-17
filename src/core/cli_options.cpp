@@ -149,6 +149,8 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --slice-prisms           draw 4D cross-sections, not cubes\n"
                 "  voxel_engine --wind S                 foliage sway strength, 1 default, 0 still\n"
                 "  voxel_engine --motes S                fireflies at night / dust by day, 0 off\n"
+                "  voxel_engine --leaves S               leaves falling off the canopy, 0 off\n"
+                "  voxel_engine --butterflies S          butterflies by day, 0 off\n"
                 "  voxel_engine --weather S              pin weather 0 clear..1 downpour (default: a cycle)\n"
                 "  voxel_engine --mist S                 ground mist in the valleys, 0 off\n"
                 "  voxel_engine --birds S                flocks circling overhead by day, 0 off\n"
@@ -265,6 +267,22 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, 0.0f, 4.0f, "--motes",
                                    &o.motes, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--leaves") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 4.0f, "--leaves",
+                                   &o.leaves, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--butterflies") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 4.0f, "--butterflies",
+                                   &o.butterflies, exit_code)) {
                 return std::nullopt;
             }
             continue;

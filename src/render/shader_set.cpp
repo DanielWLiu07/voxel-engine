@@ -21,6 +21,8 @@ bool ShaderSet::load(const std::filesystem::path& root) {
     return compile(terrain,    root, "basic.vert",        "basic.frag",          "terrain")
         && compile(sky,        root, "sky.vert",          "sky.frag",            "sky")
         && compile(motes,      root, "motes.vert",        "motes.frag",          "motes")
+        && compile(leaves,     root, "leaves.vert",       "leaves.frag",         "leaves")
+        && compile(butterflies, root, "butterflies.vert", "butterflies.frag",    "butterflies")
         && compile(precip,     root, "precip.vert",       "precip.frag",         "precip")
         && compile(birds,      root, "birds.vert",        "birds.frag",          "birds")
         && compile(creature,   root, "creature.vert",     "creature.frag",       "creature")

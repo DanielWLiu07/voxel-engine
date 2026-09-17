@@ -134,6 +134,8 @@ struct CliOptions {
     // --motes S: drifting particle density, 1 default, 0 off. Fireflies
     // after dark, faint dust in daylight.
     float motes = 1.0f;
+    float leaves = 1.0f;
+    float butterflies = 1.0f;
     // --weather S: pin the weather to strength S, 0 clear .. 1 downpour.
     //
     // Negative means "not given", and then the engine runs its own slow

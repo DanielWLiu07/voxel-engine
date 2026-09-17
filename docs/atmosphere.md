@@ -8,6 +8,64 @@ a tenth of the instrumented pass time.
 This is how, and what looking at the renders taught that reasoning about
 them did not.
 
+## Leaves, butterflies, meteors, the bow, and rain on water
+
+Five later additions, all on the same plan as the rest of this document:
+the position is a function of a seed and the clock, there is no buffer to
+fill, and the CPU never touches one.
+
+**Leaves** fall rather than drift, so the wrap has to run along the
+direction of travel - subtracting from y before the mod is what keeps the
+column continuous, and per-leaf fall speeds stop them dropping as a sheet.
+The sideways motion is two sines at different rates, which is what makes
+it read as a leaf slipping and stalling rather than as rain. The point
+sprite is cut to a spinning lens in the fragment stage, because a leaf
+that stays a disc all the way down reads as orange snow.
+
+**Butterflies** are the daytime answer to the fireflies, which go to pale
+dust by day on purpose and left the daylit world with no small moving life
+in it. Six vertices each: two triangles hinged about the body's forward
+axis so the wings actually beat. The first version drew what those
+vertices literally describe - hard-cornered wedges meeting at a point -
+and it read as a paper plane. The wing is cut to a rounded shape in the
+fragment stage instead, with a dark margin just inside the edge, which is
+what the eye reads as "wing" rather than "triangle".
+
+Count is the other thing that needed a second look: 44 of them put exactly
+ONE butterfly in a 1440p frame, because the slab is centred on the camera
+and half of it is inside the hill the camera is standing on. Those are
+correctly hidden by the depth test. 130 puts a dozen in frame.
+
+**Meteors** cut time into slices and seed the streak from the slice index,
+so "which meteor" is a function of the clock rather than state that has to
+be spawned and retired, and only about a third of slices carry one. The
+period is 3.55 s rather than a round 3.5 for a reason worth writing down:
+scripted captures pin the clock to exactly 100.0 so frames stay diffable,
+and 100/3.5 lands between streaks, so a still could never show one and
+nothing could test it. 100/3.55 lands mid-flight.
+
+**The bow** is geometry, not decoration. It is a ring 42 degrees off the
+antisolar point, so it is drawn against that direction and rises as the
+sun sets without anything placing it. Each channel gets its own angle -
+42.4 red, 41.3 green, 40.1 blue - and the secondary at ~51 degrees comes
+out with its colours reversed for free. Summing one white gaussian and
+tinting it, which is what this did first, adds the same light to all three
+channels and renders a WHITE arc: the shape was right and the physics was
+missing.
+
+**Rain rings** on the water are a grid where most cells are empty. The
+first version gave every cell a ring every cycle and the lake came out
+looking like bubble wrap - a regular lattice of identical circles, the one
+thing falling rain never produces. A second hash seeded by the cell and
+the cycle index decides whether a cell fires at all, and the impact point
+is jittered inside it.
+
+Measured against the same build with them off, interleaved, three runs
+each on an M4: the atmosphere pass goes 0.91 to 1.08 ms with leaves and
+butterflies on. The rain rings add 0.03 ms to the water pass, which is
+inside the run-to-run spread. The meteor and the bow are branch-guarded to
+night and to rain, so a default daytime frame pays nothing for either.
+
 ## The stills
 
 Every one regenerates from the command beneath it.

@@ -1497,6 +1497,8 @@ int main(int argc, char** argv) {
                               : static_cast<float>(now);
         fv.wind = opt.wind;
         fv.motes = opt.motes;
+        fv.leaves = opt.leaves;
+        fv.butterflies = opt.butterflies;
         // Mist sits a little above the waterline: that is where the low
         // ground is, and it puts the effect where a valley actually is
         // rather than at a fixed height the terrain may not reach.
@@ -1692,7 +1694,8 @@ int main(int argc, char** argv) {
         }
 
         sampler.begin_pass();
-        render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds},
+        render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds,
+                                 shaders.leaves, shaders.butterflies},
                                 sky_vao.id(), fv, light);
         sampler.end_pass(sampler.passes().atmosphere);
 
