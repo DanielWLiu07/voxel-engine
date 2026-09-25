@@ -22,6 +22,11 @@ it read as a leaf slipping and stalling rather than as rain. The point
 sprite is cut to a spinning lens in the fragment stage, because a leaf
 that stays a disc all the way down reads as orange snow.
 
+![Leaves off the canopy over the lake, with butterflies through the daylight](media/leaves.jpg)
+
+    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
+        --time-of-day 0.38 --radius 8 --screenshot-after 110
+
 **Butterflies** are the daytime answer to the fireflies, which go to pale
 dust by day on purpose and left the daylit world with no small moving life
 in it. Six vertices each: two triangles hinged about the body's forward
