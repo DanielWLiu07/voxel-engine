@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -43,12 +44,26 @@ std::string save_screenshot(int w, int h, const std::string& dir,
                             const std::string& filename) {
     if (w <= 0 || h <= 0) return {};
 
+    // Where the file actually lands, which is not always `dir`.
+    //
+    // operator/ resolves an ABSOLUTE filename by discarding dir entirely,
+    // and a relative one carrying its own subdirectory ("docs/media/x.jpg")
+    // lands under dir at a path deeper than dir itself. Creating dir alone
+    // left that parent missing, stbi_write_png returned a bare failure, and
+    // --shot-file docs/media/x.jpg printed "FAILED" with no reason while the
+    // same path spelled absolutely worked.
+    const std::filesystem::path out = std::filesystem::path(dir) /
+        (filename.empty() ? timestamp_filename() : filename);
+
     std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    if (ec) {
-        std::fprintf(stderr, "[screenshot] mkdir %s failed: %s\n",
-                     dir.c_str(), ec.message().c_str());
-        return {};
+    if (!out.parent_path().empty()) {
+        std::filesystem::create_directories(out.parent_path(), ec);
+        if (ec) {
+            std::fprintf(stderr, "[screenshot] mkdir %s failed: %s\n",
+                         out.parent_path().string().c_str(),
+                         ec.message().c_str());
+            return {};
+        }
     }
 
     const int channels = 3;
@@ -69,10 +84,19 @@ std::string save_screenshot(int w, int h, const std::string& dir,
                     &pixels[static_cast<size_t>(h - 1 - y) * row], row);
     }
 
-    std::filesystem::path out = std::filesystem::path(dir) /
-        (filename.empty() ? timestamp_filename() : filename);
-    if (!stbi_write_png(out.string().c_str(), w, h, channels,
-                        flipped.data(), static_cast<int>(row))) {
+    // Honour the extension the caller asked for. Writing PNG bytes into a
+    // file named .jpg is the kind of thing that works until something reads
+    // it by extension, and every capture in docs/media is a .jpg.
+    std::string ext = out.extension().string();
+    for (char& c : ext) c = static_cast<char>(std::tolower(c));
+    const bool jpeg = (ext == ".jpg" || ext == ".jpeg");
+
+    const int ok = jpeg
+        ? stbi_write_jpg(out.string().c_str(), w, h, channels,
+                         flipped.data(), 92)
+        : stbi_write_png(out.string().c_str(), w, h, channels,
+                         flipped.data(), static_cast<int>(row));
+    if (!ok) {
         std::fprintf(stderr, "[screenshot] write %s failed\n", out.string().c_str());
         return {};
     }

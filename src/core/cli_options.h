@@ -112,6 +112,9 @@ struct CliOptions {
     // --capture-tilt N: hold the camera and sweep the slice rotation
     // through a ping-pong, one PNG per frame. Implies --4d.
     int  capture_tilt = 0;
+    // --capture-tilt-xw N: the same ping-pong in the OTHER rotation
+    // plane, with whatever --slice-tilt gave held. Implies --4d.
+    int  capture_tilt_xw = 0;
     // --capture-walk N: hold the cut and walk the camera forward, one PNG
     // per frame. Implies --4d.
     //
@@ -131,6 +134,8 @@ struct CliOptions {
     // --motes S: drifting particle density, 1 default, 0 off. Fireflies
     // after dark, faint dust in daylight.
     float motes = 1.0f;
+    float leaves = 1.0f;
+    float butterflies = 1.0f;
     // --weather S: pin the weather to strength S, 0 clear .. 1 downpour.
     //
     // Negative means "not given", and then the engine runs its own slow
@@ -146,6 +151,17 @@ struct CliOptions {
     // --aurora S: aurora on the night sky, 0 off.
     // --cloud-shadow S: clouds dapple the ground, 0 off.
     // --creatures S: wandering creatures, 0 off.
+    // --godrays S: crepuscular rays from the sun, 0 off.
+    //
+    // The one atmosphere flag that defaults OFF, and it is a cost that
+    // decides it rather than taste. The shaft pass measures +2.30 ms
+    // (range 2.20-2.44 over three ABBA-paired 600-frame reps) against a
+    // 5.0 ms frame at radius 12 on an M4 - call it 45%. Every perf figure
+    // this project publishes comes off --bench-frame and --bench, so a
+    // default-on effect of that size would silently move all of them, and
+    // the honest ratios are the thing being sold. Captures ask for it
+    // explicitly; benchmarks never get it by accident.
+    float godrays = 0.0f;
     float creatures = 1.0f;
     float cloud_shadow = 1.0f;
     float aurora = 1.0f;

@@ -12,6 +12,13 @@ The camera is locked in that clip. Nothing moves except the hyperplane
 the slice is cut on, and the landscape rebuilds itself because you are
 looking at a different cross-section of the same fixed world.
 
+```
+cmake -B build -G Ninja && cmake --build build -j && ./build/voxel_engine
+```
+
+Scroll the wheel to turn the cut. [Full build notes](#build),
+[controls](#controls), [what it is checked against](#how-it-is-checked).
+
 ## Blocks are cross-sections, not cubes
 
 ![Blinking between cubes and true 4D cross-sections](docs/media/blocks_blink.gif)
@@ -25,6 +32,15 @@ A boulder is a 4-ball, so the slice takes a sphere out of it with radius
 `sqrt(r² - d²)`. Travel along the fourth axis and it swells, peaks, and
 vanishes. A monolith is a 4-box, so turning the cut takes its footprint
 from a rectangle to a hexagon.
+
+![The second rotation plane sweeping through zero: block shapes go four-sided to six-sided and back while every block keeps its material](docs/media/cells_turn.gif)
+
+Turning the cut in **one** plane leaves every cell four-sided however far
+it goes, so drawing those blocks as cubes is exact rather than an
+approximation - the frame halfway through that loop is a 0.45 rad
+rotation where cubes are still right. It takes a second plane to open the
+pentagons and hexagons. Nothing is reseeded on the way: follow one face
+through the sweep and it keeps its material and only changes shape.
 
 ![Rock formations on a tilted cut](docs/media/structures.jpg)
 
@@ -112,30 +128,18 @@ block face; right is the same surface after coplanar faces merge.
 
 ## What it looks like
 
-![Fireflies over a treeline at night](docs/media/fireflies.jpg)
+![Sunset over the lake: the water carries the sky's colour and the sun lays a path on it, with shafts breaking past the ridge](docs/media/water_reflect.jpg)
 
-    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
-        --time-of-day 0.82 --radius 8 --screenshot-after 100
+    ./build/voxel_engine --pose-at 300,30,-300,-108,3 --time-of-day 0.728 \
+        --godrays 1.4 --radius 12 --screenshot-after 150
 
-![Hoppers and striders wandering the terrain](docs/media/creatures.jpg)
-
-    ./build/voxel_engine --3d --pose-at 20,58,20,-135,-45 \
-        --radius 8 --time-of-day 0.35 --screenshot-after 120
-
-Creatures wander the terrain too, in two kinds: orange hoppers that
-bounce and green striders that amble. They read the ground height under
-themselves and walk over hills rather than through them, and when the 4D
-cut turns and the land beneath them becomes a different landscape, they
-step onto the new one.
-
-Eight effects share that one idea, and each has a scale with 0 to turn it
-off: foliage that sways (the shadow pass applies the same offset, or a
-canopy's shadow stays where the canopy no longer is), fireflies at night
-thinning to dust by day, rain and snow, mist pooling in the valleys,
-flocks circling overhead, the aurora, and clouds dappling the ground as
-they pass. Together they cost about a tenth of the instrumented pass
-time - measured, not assumed:
-[docs/atmosphere.md](docs/atmosphere.md).
+The water reflects the sky it is under rather than a colour authored to
+look like one, so a low sun is the best hour for a lake rather than the
+worst. `--godrays` marches shafts from whatever is brighter than the sky
+itself; it is off by default because it costs +2.30 ms of a 5.0 ms frame,
+and every number in this README comes off a benchmark that must not
+quietly acquire it. Swimming under the surface closes sight to 34 m and
+takes the red out of the light. [The details](docs/atmosphere.md#light-and-water).
 
 ![Aurora over a firefly-lit treeline at night](docs/media/aurora.jpg)
 
@@ -149,18 +153,40 @@ the fireflies derive every position from `gl_VertexID` and the clock, so
 nine thousand of them are one draw call with no CPU work and nothing to
 keep in sync.
 
-![Rain over a lake, with the sun behind an overcast sky](docs/media/rain.jpg)
+![A double rainbow over the treeline as a shower clears](docs/media/rainbow.jpg)
 
-    ./build/voxel_engine --3d --pose-at 18,40,18,-140,-8 \
-        --time-of-day 0.40 --radius 8 --weather 0.85 --screenshot-after 100
+    ./build/voxel_engine --3d --pose-at 18,52,18,-118,10 --time-of-day 0.30 \
+        --radius 8 --weather 0.35 --screenshot-after 100
 
-Weather comes and goes on its own - dry most of the time, with spells of
-rain below the snow line and snow above it. It is a lighting change
-first: the sun drops, shadows soften toward none, and the sky and its fog
-grey over. The first version left the sun blazing and the drops were
-invisible, which is the whole lesson. `--weather 0..1` pins it, because a
-capture pins the clock the cycle is read from.
+Nothing places that bow. A rainbow is a ring 42 degrees off the point
+opposite the sun, so it is drawn against the antisolar direction and it
+rises as the sun sets, on its own. Each colour channel gets its own angle
+- red leaves a droplet at 42.4 degrees and blue at 40.1 - which is why the
+secondary bow above it comes out with its colours reversed without
+anything asking for that.
 
+![A meteor over the moonlit ridge](docs/media/meteor.jpg)
+
+    ./build/voxel_engine --3d --pose-at 300,95,-360,112,18 \
+        --time-of-day 0.79 --radius 8 --screenshot-after 90
+
+Nine effects share that idea, and each has a scale with 0 to turn it off:
+swaying foliage (the shadow pass applies the same offset, or a canopy's
+shadow stays where the canopy no longer is), fireflies thinning to dust by
+day, leaves off the canopy, butterflies through the daylight hours, rain
+and snow, valley mist, flocks overhead, the aurora, and clouds dappling
+the ground. Meteors and the bow have no scale because they are conditions
+rather than features: one needs night, the other needs sun and rain at
+once. Rain also dimples the lake it falls on.
+
+Together the whole atmosphere is 1.08 ms of a frame, and the leaves and
+butterflies are 0.17 ms of that - measured interleaved against the same
+build with them off, three runs each, not assumed. Creatures wander the
+terrain too, reading the ground height under themselves so they walk over
+hills rather than through them.
+
+Swimming, weather, wildlife, and the rest of the stills, each with the
+command that regenerates it: [docs/atmosphere.md](docs/atmosphere.md).
 <p align="center">
   <img src="docs/media/vista_sunset.jpg" width="49%" alt="Sunset over dunes and hills">
   <img src="docs/media/cave.jpg" width="49%" alt="Underground, lit by placed glow blocks">
@@ -198,6 +224,8 @@ Windows build clean on CI.
 ./build/voxel_engine --3d             # the ordinary three-dimensional world
 ./build/voxel_engine --wind 0         # still air; 1 is the default breeze
 ./build/voxel_engine --motes 0        # no fireflies or dust
+./build/voxel_engine --leaves 0       # no leaves off the canopy
+./build/voxel_engine --butterflies 0  # no butterflies
 ./build/voxel_engine --weather 0.9    # pin a downpour; omit for the natural cycle
 ./build/voxel_engine --creatures 0    # empty the world of wildlife
 ./build/voxel_engine --aurora 0       # ... and every other effect has a scale, 0 off
@@ -268,6 +296,27 @@ making the measurements hard to fake.
 | [docs/bench/](docs/bench/) | Benchmark artifacts and inputs |
 
 ## What is in here
+
+A frame crosses a thread boundary exactly once, and that is the rule the
+whole design is arranged around:
+
+```
+  nine workers                        main thread (owns every GL call)
+  ------------                        --------------------------------
+  4D terrain  ->  greedy mesh  -->  finished queue  ->  GPU upload
+  (Perlin in      (sweeps in        (owned buffers,      |
+   lattice         lattice           never pointers       v
+   space)          space)            into the map)    frustum + section cull
+                                                          |
+                                                          v
+                                            shadow -> sky -> terrain ->
+                                            water -> post (HDR, bloom)
+```
+
+Workers never touch GL, and the main thread never generates terrain. A
+worker gets a 16 KB copy of its neighbours' boundary layers rather than a
+pointer into the chunk map, so a chunk can be meshed against neighbours
+that are themselves still being rebuilt.
 
 ```
 src/core/     Window, input, timing, thread pool, CLI, frame stats

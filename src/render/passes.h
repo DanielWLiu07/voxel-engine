@@ -28,12 +28,23 @@ struct FrameView {
     int       window_h;
     float     fog_start;
     float     fog_end;
+    // What the distance fades TO. Three passes each derived this from
+    // light.sky_horizon on their own, which was fine while the answer was
+    // always the sky and wrong the moment it was not: underwater, terrain
+    // has to fade into the water, not into a sky the camera cannot see.
+    glm::vec3 fog_color{0.0f};
+    // Camera below the waterline. Shortens the fog, recolours it, and
+    // turns the sky into the underside of the surface.
+    bool      submerged = false;
     float     time_seconds;
     // Wind strength for foliage sway, 0 disables. A multiplier rather
     // than a flag so it can be dialled without touching the shader.
     float     wind = 1.0f;
     // Mote density scale, 0 disables the pass entirely.
     float     motes = 1.0f;
+    // Leaves off the canopy, and butterflies by day. Both 0 to disable.
+    float     leaves = 1.0f;
+    float     butterflies = 1.0f;
     // Weather. `precip` is how hard it is coming down this frame, 0..1,
     // and `precip_snow` picks flakes over drops. Both are decided on the
     // CPU (see main) so the shader stays a pure function of them.
@@ -103,6 +114,8 @@ struct AtmosphereShaders {
     const gfx::Shader& motes;
     const gfx::Shader& precip;
     const gfx::Shader& birds;
+    const gfx::Shader& leaves;
+    const gfx::Shader& butterflies;
 };
 
 void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
@@ -119,6 +132,16 @@ void draw_creatures(const gfx::Shader& shader, const gfx::SolidCube& cube,
 // forming a V, billboarded so one never turns edge-on and flickers out.
 void draw_birds(const gfx::Shader& birds_shader, GLuint vao,
                 const FrameView& fv, const LightingFrame& light);
+
+// Leaves coming off the canopy. Alpha-blended rather than additive: a leaf
+// is a lit surface, not a light, and adding it washes out against the sky.
+void draw_leaves(const gfx::Shader& shader, GLuint vao,
+                 const FrameView& fv, const LightingFrame& light);
+
+// Butterflies, six vertices each so the wings beat. Daytime only - they
+// fill the hour the fireflies are dust.
+void draw_butterflies(const gfx::Shader& shader, GLuint vao,
+                      const FrameView& fv, const LightingFrame& light);
 
 void draw_shadow_pass(gfx::CascadedShadowMap& shadow_map,
                       const gfx::Shader& depth_shader,

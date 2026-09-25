@@ -18,8 +18,10 @@ uniform vec3  u_sun_color;
 uniform vec3  u_moon_dir;     // points toward moon, normalized
 uniform float u_star_fade;    // 0 by day, 1 at night
 uniform float u_aurora;       // aurora strength, 0 disables
+uniform float u_submerged;    // 1 when the camera is under the waterline
 uniform float u_time;         // seconds, for cloud drift and twinkle
 uniform mat3  u_star_rot;     // rotates the fixed stars onto the night sky
+uniform float u_precip;       // how hard it is raining, 0..1, for the bow
 
 // ---------------------------------------------------------------- noise
 
@@ -33,6 +35,13 @@ float hash31(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.yzx + 33.33);
     return fract((p.x + p.y) * p.z);
+}
+
+// Three uncorrelated values from one seed, for the meteor's endpoints.
+vec3 h3(float n) {
+    return vec3(hash21(vec2(n, 1.7)),
+                hash21(vec2(n, 9.3)),
+                hash21(vec2(n, 23.1)));
 }
 
 float vnoise(vec2 p) {
@@ -90,6 +99,16 @@ float starfield(vec3 d) {
 void main() {
     vec3 dir = normalize(v_view_dir);
 
+    // Underwater there is no sky to draw. Everything past the fog is
+    // water, so the pass that would have drawn a sunset draws the water
+    // the terrain is already fading into - u_sky_horizon carries the
+    // underwater colour in that case, which keeps this to one branch
+    // instead of a second set of uniforms.
+    if (u_submerged > 0.5) {
+        frag_color = vec4(u_sky_horizon, 1.0);
+        return;
+    }
+
     // Gradient by elevation: 0 at the horizon, 1 at the zenith.
     float elev = clamp(dir.y * 1.2 + 0.1, 0.0, 1.0);
     elev = pow(elev, 0.55);
@@ -107,6 +126,40 @@ void main() {
         float stars = starfield(sdir);
         sky += (vec3(0.72, 0.78, 1.0) * stars * 1.6 +
                 vec3(0.55, 0.60, 0.85) * haze) * u_star_fade;
+
+        // A meteor every few seconds, and never two at once.
+        //
+        // Time is cut into slices and the slice index seeds the streak, so
+        // "which meteor" is a function of the clock rather than state that
+        // has to be spawned and retired. A capture pins u_time, so a
+        // scripted frame gets the same meteor every run.
+        // 3.55 rather than a round 3.5 on purpose. Scripted captures pin
+        // u_time to exactly 100.0 so frames stay diffable, and 100/3.5
+        // lands at phase 0.571 - between streaks - so a still could never
+        // show one and nothing could test it. 100/3.55 lands at 0.169,
+        // mid-flight. The period is arbitrary either way; this choice
+        // makes the effect visible in a capture instead of invisible.
+        const float kPeriod = 3.55;
+        float slice = floor(u_time / kPeriod);
+        float t     = fract(u_time / kPeriod);
+        vec3  a     = normalize(h3(slice * 7.77) * 2.0 - 1.0);
+        a.y         = abs(a.y) * 0.9 + 0.08;          // never below the horizon
+        vec3  b     = normalize(a + (h3(slice * 3.31) - 0.5) * 1.2);
+
+        // Only a third of each slice actually carries one, so the sky is
+        // mostly empty and a streak is an event rather than a metronome.
+        float live = smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(0.22, 0.33, t));
+        if (live > 0.001) {
+            vec3  head = normalize(mix(a, b, t * 3.0));
+            // Distance to the trail behind the head, which is what gives
+            // the streak its taper instead of a uniform line.
+            float along = clamp(dot(sdir - head, normalize(b - a)), -0.25, 0.0);
+            vec3  onto  = normalize(head + normalize(b - a) * along);
+            float d     = length(sdir - onto);
+            float tail  = 1.0 + along * 4.0;          // 1 at the head, 0 behind
+            float streak = exp(-d * 900.0) * tail * tail;
+            sky += vec3(0.95, 0.97, 1.0) * streak * live * u_star_fade * 2.2;
+        }
 
         // Aurora: curtains over one quarter of the sky.
         //
@@ -167,6 +220,39 @@ void main() {
     float glow     = pow(sun_cos, 32.0) * 0.35;
     float sun_disc = smoothstep(0.9985, 0.999, sun_cos);
     sky += u_sun_color * (glow + sun_disc * 4.0);
+
+    // ---------------------------------------------------------- rainbow
+    // Geometry, not decoration: a bow is a ring 42 degrees off the point
+    // opposite the sun, so it is drawn against the ANTISOLAR direction and
+    // it rises as the sun sets, exactly as the real one does. Nothing
+    // needs to place it.
+    if (u_precip > 0.02 && u_star_fade < 0.6) {
+        float anti = dot(dir, -normalize(u_sun_dir));
+        float ang  = degrees(acos(clamp(anti, -1.0, 1.0)));
+
+        // Each channel gets its OWN angle, which is the whole reason a bow
+        // has colours: red exits a droplet at 42.4 deg and blue at 40.2.
+        // Summing one white gaussian and tinting it, as this first did,
+        // adds the same light to all three channels and renders a white
+        // arc - the shape was right and the physics was missing.
+        vec3 primary = vec3(exp(-pow((ang - 42.4) / 0.80, 2.0)),
+                            exp(-pow((ang - 41.3) / 0.80, 2.0)),
+                            exp(-pow((ang - 40.1) / 0.80, 2.0)));
+
+        // The secondary is one more internal reflection, so its order is
+        // reversed and it is far weaker.
+        vec3 secondary = vec3(exp(-pow((ang - 50.6) / 1.10, 2.0)),
+                              exp(-pow((ang - 51.8) / 1.10, 2.0)),
+                              exp(-pow((ang - 53.0) / 1.10, 2.0))) * 0.13;
+
+        // Needs sun AND rain AND sky above the horizon, and it thins out
+        // in the heaviest downpour the way visibility does.
+        float wet  = smoothstep(0.02, 0.35, u_precip)
+                   * (1.0 - smoothstep(0.75, 1.0, u_precip));
+        float high = smoothstep(-0.02, 0.18, dir.y);
+        float lit  = (1.0 - u_star_fade) * smoothstep(-0.05, 0.25, u_sun_dir.y);
+        sky += (primary + secondary) * wet * high * lit * 1.30;
+    }
 
     // ----------------------------------------------------------- clouds
     // The deck is a shell overhead, and the view ray is intersected with

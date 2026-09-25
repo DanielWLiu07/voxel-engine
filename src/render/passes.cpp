@@ -161,7 +161,7 @@ void draw_creatures(const gfx::Shader& shader, const gfx::SolidCube& cube,
     shader.set_vec3("u_light_color", light.sun_color);
     shader.set_vec3("u_ambient_color", light.ambient);
     shader.set_vec3("u_camera_pos", fv.camera_pos);
-    shader.set_vec3("u_fog_color", light.sky_horizon);
+    shader.set_vec3("u_fog_color", fv.fog_color);
     shader.set_float("u_fog_start", fv.fog_start);
     shader.set_float("u_fog_end", fv.fog_end);
 
@@ -204,6 +204,83 @@ void draw_creatures(const gfx::Shader& shader, const gfx::SolidCube& cube,
     }
 }
 
+void draw_leaves(const gfx::Shader& shader, GLuint vao,
+                 const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("leaves_pass");
+    if (fv.leaves <= 0.0f) return;
+
+    // 2200 in a slab that reaches a little above the canopy. Fewer than the
+    // motes because a leaf is far larger on screen: at the mote count this
+    // read as a blizzard.
+    constexpr int kCount = 2200;
+    const glm::vec3 kBoxHalfExtent(24.0f, 11.0f, 24.0f);
+
+    shader.use();
+    shader.set_mat4("u_view", fv.view);
+    shader.set_mat4("u_proj", fv.proj);
+    shader.set_vec3("u_camera_pos", fv.camera_pos);
+    shader.set_float("u_time", fv.time_seconds);
+    shader.set_vec3("u_box", kBoxHalfExtent);
+    shader.set_float("u_viewport_h", static_cast<float>(fv.window_h));
+    shader.set_float("u_strength", fv.leaves);
+    shader.set_float("u_wind", fv.wind);
+    shader.set_float("u_night", light.star_fade);
+
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);   // lit surface, not a light
+    glDepthMask(GL_FALSE);
+
+    glBindVertexArray(vao);
+    glDrawArrays(GL_POINTS, 0, kCount);
+    glBindVertexArray(0);
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_PROGRAM_POINT_SIZE);
+}
+
+void draw_butterflies(const gfx::Shader& shader, GLuint vao,
+                      const FrameView& fv, const LightingFrame& light) {
+    ZoneScopedN("butterflies_pass");
+    const float day = 1.0f - light.star_fade;
+    if (fv.butterflies <= 0.0f || day <= 0.01f) return;
+
+    // 130 of them, six vertices each - 780 vertices for the whole pass.
+    //
+    // 44 was the first guess and it put ONE butterfly in a 2560x1440
+    // frame: the slab is centred on the camera, so a good half of it is
+    // inside the hill the camera is standing on and those are correctly
+    // hidden by the depth test. The count has to be read as "how many are
+    // in the box", not "how many you will see".
+    constexpr int kCount = 130;
+    const glm::vec3 kBoxHalfExtent(20.0f, 5.0f, 20.0f);
+
+    shader.use();
+    shader.set_mat4("u_view", fv.view);
+    shader.set_mat4("u_proj", fv.proj);
+    shader.set_vec3("u_camera_pos", fv.camera_pos);
+    shader.set_float("u_time", fv.time_seconds);
+    shader.set_vec3("u_box", kBoxHalfExtent);
+    shader.set_float("u_strength", fv.butterflies);
+    shader.set_float("u_day", day);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    // Both faces: a wing is a single triangle and it is seen from either
+    // side as it beats.
+    glDisable(GL_CULL_FACE);
+
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, kCount * 6);
+    glBindVertexArray(0);
+
+    glEnable(GL_CULL_FACE);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
 void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
                      const FrameView& fv, const LightingFrame& light) {
     ZoneScopedN("atmosphere");
@@ -212,6 +289,8 @@ void draw_atmosphere(const AtmosphereShaders& shaders, GLuint vao,
     // the state as it found it, so the order below is the only thing that
     // decides what sits over what.
     draw_motes(shaders.motes, vao, fv, light);
+    draw_leaves(shaders.leaves, vao, fv, light);
+    draw_butterflies(shaders.butterflies, vao, fv, light);
     draw_precip(shaders.precip, vao, fv);
     draw_birds(shaders.birds, vao, fv, light);
 }
@@ -240,11 +319,18 @@ void draw_sky(const gfx::Shader& sky_shader, GLuint sky_vao,
     sky_shader.use();
     sky_shader.set_mat4("u_inv_view_proj", inv_vp);
     sky_shader.set_vec3("u_sky_top", light.sky_top);
-    sky_shader.set_vec3("u_sky_horizon", light.sky_horizon);
+    // Underwater the "sky" is the water, and the shader early-outs on
+    // u_submerged reading this as the colour to fill with - so the two
+    // stay one value and the horizon a diver sees is the same one the
+    // terrain in front of them is fading into.
+    sky_shader.set_vec3("u_sky_horizon",
+                        fv.submerged ? fv.fog_color : light.sky_horizon);
+    sky_shader.set_float("u_submerged", fv.submerged ? 1.0f : 0.0f);
     sky_shader.set_vec3("u_sun_dir", light.sun_dir);
     sky_shader.set_vec3("u_sun_color", light.sun_color);
     sky_shader.set_vec3("u_moon_dir", light.moon_dir);
     sky_shader.set_float("u_star_fade", light.star_fade);
+    sky_shader.set_float("u_precip", fv.precip);
     sky_shader.set_float("u_time", fv.time_seconds);
     sky_shader.set_float("u_aurora", fv.aurora);
     sky_shader.set_mat3("u_star_rot", light.star_rot);
@@ -289,7 +375,7 @@ world::DrawStats draw_terrain(const gfx::Shader& terrain_shader,
     terrain_shader.set_vec3("u_light_color", light.sun_color);
     terrain_shader.set_vec3("u_ambient_color", light.ambient);
     terrain_shader.set_vec3("u_camera_pos", fv.camera_pos);
-    terrain_shader.set_vec3("u_fog_color", light.sky_horizon);
+    terrain_shader.set_vec3("u_fog_color", fv.fog_color);
     terrain_shader.set_float("u_fog_start", fv.fog_start);
     terrain_shader.set_float("u_fog_end", fv.fog_end);
     terrain_shader.set_int("u_shadow_array", 1);
@@ -364,7 +450,16 @@ void draw_water(const gfx::Shader& water_shader, gfx::WaterPlane& water,
                           day_scale * glm::vec3(0.15f, 0.42f, 0.60f));
     water_shader.set_vec3("u_sun_dir", light.sun_dir);
     water_shader.set_vec3("u_sun_color", light.sun_color);
-    water_shader.set_vec3("u_fog_color", light.sky_horizon);
+    // The sky the surface reflects. sky_horizon doubles as the fog colour
+    // above and as the low end of the reflected gradient here, which is
+    // why water and the distance it fades into agree at every hour.
+    water_shader.set_vec3("u_sky_top", light.sky_top);
+    water_shader.set_vec3("u_sky_horizon", light.sky_horizon);
+    water_shader.set_vec3("u_moon_dir", light.moon_dir);
+    water_shader.set_float("u_star_fade", light.star_fade);
+    water_shader.set_float("u_precip", fv.precip);
+    water_shader.set_float("u_submerged", fv.submerged ? 1.0f : 0.0f);
+    water_shader.set_vec3("u_fog_color", fv.fog_color);
     water_shader.set_float("u_fog_start", fv.fog_start);
     water_shader.set_float("u_fog_end", fv.fog_end);
     water_shader.set_float("u_alpha", 0.95f);

@@ -139,6 +139,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --verify-4d              step along w and back, check it returns exactly, exit\n"
                 "  voxel_engine --bench-4d               cost of travelling and of rotating the slice, exit\n"
                 "  voxel_engine --capture-tilt N         N frames sweeping the 4D slice rotation, exit\n"
+                "  voxel_engine --capture-tilt-xw N      the same in the XW plane, where cells stop being cubes\n"
                 "  voxel_engine --list-monitors          list the displays and their indices, exit\n"
                 "  voxel_engine --monitor N              open on display N (default: wherever GLFW puts it)\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
@@ -148,12 +149,15 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --slice-prisms           draw 4D cross-sections, not cubes\n"
                 "  voxel_engine --wind S                 foliage sway strength, 1 default, 0 still\n"
                 "  voxel_engine --motes S                fireflies at night / dust by day, 0 off\n"
+                "  voxel_engine --leaves S               leaves falling off the canopy, 0 off\n"
+                "  voxel_engine --butterflies S          butterflies by day, 0 off\n"
                 "  voxel_engine --weather S              pin weather 0 clear..1 downpour (default: a cycle)\n"
                 "  voxel_engine --mist S                 ground mist in the valleys, 0 off\n"
                 "  voxel_engine --birds S                flocks circling overhead by day, 0 off\n"
                 "  voxel_engine --aurora S               aurora on the night sky, 0 off\n"
                 "  voxel_engine --cloud-shadow S         clouds dapple the ground, 0 off\n"
                 "  voxel_engine --creatures S            wandering creatures, 0 off\n"
+                "  voxel_engine --godrays S             sun shafts through the terrain (default 0; costs ~2.3 ms)\n"
                 "  voxel_engine --capture-walk N         N frames walking, cut held, one PNG each\n"
                 "  voxel_engine --bench-frame N --pass-breakdown\n"
                 "                                        wall time per render pass (glFinish-bracketed)\n"
@@ -211,6 +215,14 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             }
             continue;
         }
+        if (arg == "--godrays") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 3.0f, "--godrays",
+                                   &o.godrays, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
         if (arg == "--cloud-shadow") {
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, 0.0f, 2.0f, "--cloud-shadow",
@@ -255,6 +267,22 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_float(v, 0.0f, 4.0f, "--motes",
                                    &o.motes, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--leaves") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 4.0f, "--leaves",
+                                   &o.leaves, exit_code)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (arg == "--butterflies") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_float(v, 0.0f, 4.0f, "--butterflies",
+                                   &o.butterflies, exit_code)) {
                 return std::nullopt;
             }
             continue;
@@ -310,6 +338,16 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_count(v, 2, 100000, "--capture-tilt",
                                    &o.capture_tilt, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+
+        if (arg == "--capture-tilt-xw") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 2, 100000, "--capture-tilt-xw",
+                                   &o.capture_tilt_xw, exit_code)) {
                 return std::nullopt;
             }
             o.four_d = true;

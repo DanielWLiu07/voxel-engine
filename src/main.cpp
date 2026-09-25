@@ -301,6 +301,7 @@ int main(int argc, char** argv) {
     const int orbit_frames = opt.orbit_frames;
     const int cycle_frames = opt.cycle_frames;
     const int tilt_frames  = opt.capture_tilt;
+    const int tilt_xw_frames = opt.capture_tilt_xw;
     const int walk_frames  = opt.capture_walk;
     // Where --capture-walk measures its offsets from. Set on the first
     // settled frame of the walk, never after.
@@ -310,7 +311,7 @@ int main(int argc, char** argv) {
     // from the same values the locals above carry; shot_after is the one
     // that counts down, so `capture` is rebuilt where that matters.
     core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
-                              tilt_frames, walk_frames,
+                              tilt_frames, tilt_xw_frames, walk_frames,
                               bench_frames};
     const bool no_occlusion = opt.no_occlusion;
     const std::optional<world::ChunkCoord> only_chunk =
@@ -343,6 +344,7 @@ int main(int argc, char** argv) {
                           verify_4d || opt.bench_4d ||
                           shot_after > 0 || orbit_frames > 0 ||
                           cycle_frames > 0 || tilt_frames > 0 ||
+                          tilt_xw_frames > 0 ||
                           walk_frames > 0 ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
@@ -684,7 +686,59 @@ int main(int argc, char** argv) {
     // first for a seamless loop.
     bool  time_paused = capture.pins_time_of_day();
     int   capture_frame = 0;
+    // Frames of ordinary streaming before the first PNG. Shadows and the
+    // chunk window both need a while to stop moving, and a clip whose
+    // first frames are still filling in reads as a bug in the engine.
+    constexpr int kCaptureSettleFrames = 90;
     int   capture_settle = 0;
+    // Bring the world to the cut it is about to be drawn at.
+    //
+    // Three things had to be true at once for a sweep to film correctly,
+    // and each was wrong on its own before this:
+    //
+    // 1. BEFORE the draw, not after. The capture path used to converge in
+    //    the block that SAVES the frame, which runs downstream of the
+    //    draw - so every saved image showed the geometry of the PREVIOUS
+    //    frame's angle. At the tilt clip's 0.15 rad amplitude that is a
+    //    one-frame lag nobody sees; at the 0.45 rad the XW clip needs it
+    //    is the entire effect. Measured: two states that differ by a mean
+    //    of 28/255 when rendered independently came out of a 12-frame
+    //    sweep as images differing by 0.02, and the ping-pong's two
+    //    passes through the same angle differed by 28 instead of 0.
+    //
+    // 2. resample_slice, not the streaming threshold. slice_drift only
+    //    rebuilds a chunk once the cut has moved far enough to be worth
+    //    it - right while playing, wrong for a capture, where it leaves a
+    //    frame carrying geometry from the angles it passed through on the
+    //    way. A frame has to be a pure function of its cut or the return
+    //    leg is a different world from the outbound one and the loop can
+    //    never close.
+    //
+    // 3. Not during the settle frames. This is the reason the call sat
+    //    after the draw to begin with: run it on all 90 settle frames as
+    //    well and a convergence that falls back on its deadline burns
+    //    twenty seconds ninety times before the first PNG is written -
+    //    six frames took over ten minutes. Ordinary streaming is what the
+    //    settle frames are for; this is only for the angle changes after.
+    auto settle_cut_for_capture = [&]() {
+        if (capture_settle < kCaptureSettleFrames) return;
+        wrld.resample_slice(terrain, pool);
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(20);
+        while (std::chrono::steady_clock::now() < deadline) {
+            wrld.drain_finished(256);
+            wrld.flush_pending_remeshes(pool, 256);
+            if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0 &&
+                wrld.stream_slice(terrain, pool, 256) == 0) {
+                return;
+            }
+            std::this_thread::yield();
+        }
+        std::fprintf(stderr, "[capture] frame %d did not converge; "
+                             "%d chunks stale\n",
+                     capture_frame, wrld.slice_lag().stale);
+    };
+
 
     core::print_bindings();
 
@@ -1082,7 +1136,37 @@ int main(int argc, char** argv) {
                 static_cast<float>(tilt_frames);
             const float want = kTiltAmplitude * std::sin(phase);
             wrld.rotate_slice(want - wrld.slice_theta(), cam.position().z);
+            settle_cut_for_capture();
         }
+        // The XW sweep, and the only capture where the BLOCK SHAPES
+        // change rather than the terrain.
+        //
+        // A cut turned in ZW alone meets the lattice so that every cell
+        // still presents four sides - a cube is exact there, not an
+        // approximation, and nothing about a block looks different however
+        // far the wheel goes. Turning the second plane is what makes cells
+        // pentagons and hexagons. So this holds whatever --slice-tilt gave
+        // and sweeps the other plane, which walks the world from "cubes
+        // are right" to "cubes are a lie" and back.
+        //
+        // Pivoted on the camera's x, where the ZW sweep uses its z: each
+        // plane turns about the axis it does not contain.
+        if (tilt_xw_frames > 0 && world_settled) {
+            if (!have_pose_at) {
+                const OrbitPose op = orbit_pose_at(0, 1, orbit_center);
+                cam.set_position(op.pos);
+                cam.set_yaw_pitch(op.yaw, op.pitch);
+            }
+            const float kAmp =
+                (opt.slice_tilt_xw != 0.0f) ? std::fabs(opt.slice_tilt_xw) : 0.45f;
+            const float phase = 6.28318530718f *
+                static_cast<float>(capture_frame) /
+                static_cast<float>(tilt_xw_frames);
+            const float want = kAmp * std::sin(phase);
+            wrld.rotate_slice_xw(want - wrld.slice_phi(), cam.position().x);
+            settle_cut_for_capture();
+        }
+
         // The complement of the tilt clip: the cut is held and the
         // CAMERA moves. On a flat cut that shows nothing changing, which
         // is the control; on a tilted one the terrain reworks itself as
@@ -1119,6 +1203,9 @@ int main(int argc, char** argv) {
             const float yaw_rad = glm::radians(cam.yaw());
             const glm::vec3 fwd{std::cos(yaw_rad), 0.0f, std::sin(yaw_rad)};
             cam.set_position(walk_origin + fwd * along);
+            // Walking a TILTED cut is travel along w, so the world this
+            // frame wants is a function of where the camera just landed.
+            settle_cut_for_capture();
         }
         if ((orbit_frames > 0 || cycle_frames > 0) && world_settled) {
             // Cycle parks at the orbit start (frame 0) and spends its
@@ -1344,8 +1431,59 @@ int main(int argc, char** argv) {
         fv.camera_pos = cam.position();
         fv.window_w   = fb_w;
         fv.window_h   = fb_h;
+        // Lit before the fog rather than after it: the fog's colour is a
+        // fact about the sky, and underwater it is a fact about the water,
+        // so the frame has to know what hour it is before it can say what
+        // the distance fades to.
+        render::LightingFrame light = render::compute_lighting(time_of_day);
+
         fv.fog_end    = static_cast<float>(stream_radius * world::kChunkSizeX) * 0.95f;
         fv.fog_start  = fv.fog_end * 0.85f;  // keep midrange crisp; haze only far out
+        fv.fog_color  = light.sky_horizon;
+
+        // Under the waterline the whole atmosphere changes, and until now
+        // nothing did: the lake is the biggest thing in most shots and
+        // swimming into it rendered exactly as standing beside it, sky
+        // and all, which reads as the water having no inside.
+        //
+        // Three uniforms carry it, because three things are wrong at once
+        // down there. Sight is short - water absorbs over metres, not
+        // hundreds of them - so the fog closes to a fifth of its range.
+        // What it fades TO is the water, not the sky. And the sky is not
+        // visible at all; what is overhead is the underside of the
+        // surface, which is why draw_sky gets told rather than left to
+        // draw a sunset through ten metres of lake.
+        //
+        // Scaled by the day cycle like the water body is, so night diving
+        // is dark rather than a lit blue room.
+        // Below the waterline, and that is the whole test, because water
+        // in this engine is not a block - it is one plane drawn at sea
+        // level, so every pocket of air below that plane is under it by
+        // construction. A block query was written here first and could
+        // not compile: BlockId has no water member to ask about.
+        fv.submerged =
+            cam.position().y < static_cast<float>(world::kSeaLevel);
+        if (fv.submerged) {
+            const glm::vec3 daylight =
+                light.ambient +
+                light.sun_color * std::max(light.sun_height, 0.0f);
+            const float day_scale = glm::clamp(
+                (daylight.r + daylight.g + daylight.b) /
+                    (3.0f * render::kNoonDaylightMean),
+                0.05f, 1.0f);
+            fv.fog_color = day_scale * glm::vec3(0.045f, 0.16f, 0.22f);
+            fv.fog_end   = 34.0f;
+            fv.fog_start = 3.0f;
+            // Light that reached the camera came through the water too,
+            // so it arrives dimmer and blue-shifted. Without this the fog
+            // and the ceiling were right while the lake bed underneath
+            // them stayed lit like a beach at noon, which put the whole
+            // effect back in doubt - red is the first thing water takes
+            // out, and leaving it in is what makes a submerged shot read
+            // as a tinted photograph rather than as being under water.
+            light.sun_color *= glm::vec3(0.30f, 0.62f, 0.74f);
+            light.ambient   *= glm::vec3(0.34f, 0.66f, 0.78f);
+        }
         // Camera far plane sits just past the fog plane: anything further is
         // fully fogged out and contributes nothing. Tightening it from the
         // 500 m default also gives the frustum a real far-plane cull instead
@@ -1359,6 +1497,8 @@ int main(int argc, char** argv) {
                               : static_cast<float>(now);
         fv.wind = opt.wind;
         fv.motes = opt.motes;
+        fv.leaves = opt.leaves;
+        fv.butterflies = opt.butterflies;
         // Mist sits a little above the waterline: that is where the low
         // ground is, and it puts the effect where a valley actually is
         // rather than at a fixed height the terrain may not reach.
@@ -1399,7 +1539,6 @@ int main(int argc, char** argv) {
                            >= static_cast<float>(world::kSnowBand) + 3.0f;
         }
 
-        render::LightingFrame light = render::compute_lighting(time_of_day);
 
         // Overcast. Precipitation with the sun still blazing reads as
         // confetti: the first version put white flakes over a white
@@ -1555,7 +1694,8 @@ int main(int argc, char** argv) {
         }
 
         sampler.begin_pass();
-        render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds},
+        render::draw_atmosphere({shaders.motes, shaders.precip, shaders.birds,
+                                 shaders.leaves, shaders.butterflies},
                                 sky_vao.id(), fv, light);
         sampler.end_pass(sampler.passes().atmosphere);
 
@@ -1578,72 +1718,104 @@ int main(int argc, char** argv) {
             target.hit,
             target.block_x, target.block_y, target.block_z);
 
-        // HDR -> bright extract -> blur -> ACES tonemap to backbuffer.
+        // Where the sun lands on screen, and whether it is worth marching
+        // shafts from. The projection is only held here, so the decision
+        // is made here and the pass is handed a strength it can trust.
+        //
+        // Three things switch it off, and each one on its own would put
+        // rays on a frame that should not have them: the sun behind the
+        // camera (w <= 0, where the projection folds the point back into
+        // view mirrored), the sun off the edge of the screen, and the sun
+        // below the horizon. The screen-edge term is a fade rather than a
+        // cutoff because a hard one pops the whole effect off in a single
+        // frame as the camera turns.
+        float sun_uv_x = 0.5f, sun_uv_y = 0.5f, godray_strength = 0.0f;
+        // Only what outshines the ambient sky emits shafts. Taken from the
+        // brighter end of the gradient the sky shader was just handed, so
+        // it tracks the day cycle instead of being a constant that is
+        // right at one hour - the sky's luma runs 0.05 at night to 0.7 at
+        // noon, and a fixed threshold either floods the frame or does
+        // nothing depending on which end it was tuned at.
+        const auto luma = [](const glm::vec3& c) {
+            return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
+        };
+        const float godray_threshold =
+            1.12f * std::max(luma(light.sky_top), luma(light.sky_horizon));
+        if (opt.godrays > 0.0f) {
+            const glm::vec4 clip =
+                fv.proj * fv.view *
+                glm::vec4(cam.position() + light.sun_dir * 900.0f, 1.0f);
+            if (clip.w > 0.0f) {
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                sun_uv_x = ndc.x * 0.5f + 0.5f;
+                sun_uv_y = ndc.y * 0.5f + 0.5f;
+                // 1 inside the frame, falling to 0 half a screen outside
+                // it. Shafts from a sun just off the edge are real - that
+                // is most of what the effect is for - so the fade has to
+                // reach past the border rather than stop at it.
+                const float ox = std::max(0.0f, std::max(-sun_uv_x,
+                                                         sun_uv_x - 1.0f));
+                const float oy = std::max(0.0f, std::max(-sun_uv_y,
+                                                         sun_uv_y - 1.0f));
+                const float edge =
+                    1.0f - glm::clamp(std::max(ox, oy) / 0.5f, 0.0f, 1.0f);
+                // Strongest with the sun low, which is when a shaft has a
+                // treeline to be broken by. Overhead it has nothing to cut
+                // it and the march just brightens the sky.
+                const float low =
+                    1.0f - glm::clamp(light.sun_height / 0.55f, 0.0f, 1.0f);
+                // Fades in as the sun clears the horizon. The first
+                // version ramped over 0.04 of sun height, which put the
+                // gate at zero for exactly the hour the effect is for -
+                // at --time-of-day 0.75 the sun IS the horizon.
+                const float up =
+                    glm::smoothstep(-0.03f, 0.12f, light.sun_height);
+                godray_strength = opt.godrays * edge * up *
+                                  (0.35f + 0.65f * low);
+            }
+        }
+
+        // HDR -> bright extract -> shafts -> blur -> ACES tonemap.
         sampler.begin_pass();
         postfx.resolve_to_backbuffer(shaders.bright, shaders.bloom_down,
-                                     shaders.bloom_up, shaders.tonemap,
+                                     shaders.bloom_up, shaders.godray,
+                                     shaders.tonemap,
                                      fb_w, fb_h,
                                      /*threshold*/ 1.0f,
                                      /*intensity*/ 0.7f,
-                                     /*exposure*/  1.0f);
+                                     /*exposure*/  1.0f,
+                                     sun_uv_x, sun_uv_y, godray_strength,
+                                     godray_threshold);
         sampler.end_pass(sampler.passes().postfx);
 
         // Scripted clip capture: save the frame just rendered (pre-HUD),
         // one PNG per step after a settle period for streaming and shadows.
         const int capture_frames = capture.image_sequence_frames();
         if (capture_frames > 0 && world_settled) {
-            constexpr int kCaptureSettleFrames = 90;
             if (capture_settle < kCaptureSettleFrames) {
                 ++capture_settle;
             } else {
-                // The tilt clip changes the WHOLE window between frames,
-                // so it converges before the shot rather than riding the
-                // streaming budget the way a moving camera can. A GIF of
-                // a half-built world is worse than no GIF.
-                //
-                // Here, not next to the rotation at the top of the loop:
-                // there it ran on all 90 settle frames as well, and a
-                // convergence that fell back on its deadline burned
-                // twenty seconds ninety times before the first PNG was
-                // written. Six frames took over ten minutes.
-                if (tilt_frames > 0 || walk_frames > 0) {
-                    const auto deadline = std::chrono::steady_clock::now() +
-                                          std::chrono::seconds(10);
-                    bool converged = false;
-                    while (std::chrono::steady_clock::now() < deadline) {
-                        wrld.drain_finished(256);
-                        wrld.flush_pending_remeshes(pool, 256);
-                        if (wrld.pending_async() == 0 &&
-                            wrld.pending_remesh() == 0 &&
-                            wrld.stream_slice(terrain, pool, 256) == 0) {
-                            converged = true;
-                            break;
-                        }
-                        std::this_thread::yield();
-                    }
-                    if (!converged) {
-                        std::fprintf(stderr, "[capture] frame %d did not "
-                                     "converge; %d chunks stale\n",
-                                     capture_frame, wrld.slice_lag().stale);
-                    }
-                    // Behind an env var and off by default, but kept: this
-                    // is the instrument that found three separate defects
-                    // in the streaming path, none of which showed in the
-                    // image and none of which any counter already
-                    // reported. chunks=/pending=/remesh=/stale= say the
-                    // world converged; gpu= and short= say whether it
-                    // converged to the SAME world twice.
-                    if (std::getenv("VOXEL_CAPTURE_TRACE")) {
-                        std::fprintf(stderr, "[capture-trace] frame=%d "
-                                     "chunks=%zu pending=%d remesh=%zu "
-                                     "stale=%d gpu=%zu short=%d\n",
-                                     capture_frame, wrld.chunk_count(),
-                                     wrld.pending_async(),
-                                     wrld.pending_remesh(),
-                                     wrld.slice_lag().stale,
-                                     wrld.resident_gpu_bytes(),
-                                     wrld.chunks_meshed_short());
-                    }
+                // Behind an env var and off by default, but kept: this
+                // is the instrument that found four separate defects in
+                // the capture path, none of which showed in the image and
+                // none of which any counter already reported.
+                // chunks=/pending=/remesh=/stale= say the world
+                // converged; gpu= and short= say whether it converged to
+                // the SAME world twice; theta=/phi=/w= say which cut the
+                // frame about to be written is actually of.
+                if (std::getenv("VOXEL_CAPTURE_TRACE")) {
+                    std::fprintf(stderr, "[capture-trace] frame=%d "
+                                 "chunks=%zu pending=%d remesh=%zu "
+                                 "stale=%d gpu=%zu short=%d "
+                                 "theta=%.4f phi=%.4f w=%.4f\n",
+                                 capture_frame, wrld.chunk_count(),
+                                 wrld.pending_async(),
+                                 wrld.pending_remesh(),
+                                 wrld.slice_lag().stale,
+                                 wrld.resident_gpu_bytes(),
+                                 wrld.chunks_meshed_short(),
+                                 wrld.slice_theta(), wrld.slice_phi(),
+                                 wrld.slice_w());
                 }
                 char frame_name[32];
                 std::snprintf(frame_name, sizeof(frame_name),

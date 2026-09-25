@@ -24,9 +24,12 @@ struct ShaderSet {
     gfx::Shader bloom_down;
     gfx::Shader bloom_up;
     gfx::Shader tonemap;
+    gfx::Shader godray;
     gfx::Shader wireframe;
     gfx::Shader crosshair;
     gfx::Shader motes;
+    gfx::Shader leaves;
+    gfx::Shader butterflies;
     gfx::Shader precip;
     gfx::Shader birds;
     gfx::Shader creature;
