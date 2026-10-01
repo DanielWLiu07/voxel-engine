@@ -140,6 +140,7 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
                 "  voxel_engine --bench-4d               cost of travelling and of rotating the slice, exit\n"
                 "  voxel_engine --capture-tilt N         N frames sweeping the 4D slice rotation, exit\n"
                 "  voxel_engine --capture-tilt-xw N      the same in the XW plane, where cells stop being cubes\n"
+                "  voxel_engine --capture-w N            travel along w with the cut held: blocks swell and vanish\n"
                 "  voxel_engine --list-monitors          list the displays and their indices, exit\n"
                 "  voxel_engine --monitor N              open on display N (default: wherever GLFW puts it)\n"
                 "  voxel_engine --slice-w N              start on slice N of the 4D world (implies --4d)\n"
@@ -348,6 +349,15 @@ std::optional<CliOptions> parse_cli(int argc, char** argv,
             const char* v = value_for(arg, argc, argv, i, exit_code);
             if (!v || !parse_count(v, 2, 100000, "--capture-tilt-xw",
                                    &o.capture_tilt_xw, exit_code)) {
+                return std::nullopt;
+            }
+            o.four_d = true;
+            continue;
+        }
+        if (arg == "--capture-w") {
+            const char* v = value_for(arg, argc, argv, i, exit_code);
+            if (!v || !parse_count(v, 2, 100000, "--capture-w",
+                                   &o.capture_w, exit_code)) {
                 return std::nullopt;
             }
             o.four_d = true;

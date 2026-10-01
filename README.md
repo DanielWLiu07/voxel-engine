@@ -42,6 +42,26 @@ rotation where cubes are still right. It takes a second plane to open the
 pentagons and hexagons. Nothing is reseeded on the way: follow one face
 through the sweep and it keeps its material and only changes shape.
 
+![Travelling along w with the cut held flat: a lake and its treeline give way to a snowfield and a monolith, and nothing rotates](docs/media/w_travel.gif)
+
+    CLIP_TIME_OF_DAY=0.76 ./scripts/capture_clip.sh w 60
+
+The other clips turn the hyperplane. This one **moves** it, and the cut
+stays flat the whole way - `theta` and `phi` are zero in every frame, so
+nothing you see changing is changing because of an angle. A lake with a
+treeline becomes a snowfield with a monolith, nine units along the fourth
+axis, in the same world at the same camera.
+
+It is a one-way ramp played forward and then backward rather than a
+sweep that returns, and that is a measurement rather than a stylistic
+choice. A fresh process at `w=0` is byte-identical run to run and the
+clip's first frame matches it exactly, but a frame that arrives at `w=0`
+by travelling out to 9 and back differs by 9.77/255: **travel does not
+round-trip the way rotation does**, and rotation is the one with a
+byte-identical round-trip invariant. Rather than ship a loop whose two
+ends quietly disagree, every frame here is a fresh point on the outward
+journey and the return half is those same frames reversed.
+
 ![Rock formations on a tilted cut](docs/media/structures.jpg)
 
 ## Greedy meshing works in four dimensions
