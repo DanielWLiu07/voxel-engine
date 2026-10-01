@@ -302,6 +302,7 @@ int main(int argc, char** argv) {
     const int cycle_frames = opt.cycle_frames;
     const int tilt_frames  = opt.capture_tilt;
     const int tilt_xw_frames = opt.capture_tilt_xw;
+    const int w_frames       = opt.capture_w;
     const int walk_frames  = opt.capture_walk;
     // Where --capture-walk measures its offsets from. Set on the first
     // settled frame of the walk, never after.
@@ -311,7 +312,7 @@ int main(int argc, char** argv) {
     // from the same values the locals above carry; shot_after is the one
     // that counts down, so `capture` is rebuilt where that matters.
     core::CaptureMode capture{shot_after, orbit_frames, cycle_frames,
-                              tilt_frames, tilt_xw_frames, walk_frames,
+                              tilt_frames, tilt_xw_frames, w_frames, walk_frames,
                               bench_frames};
     const bool no_occlusion = opt.no_occlusion;
     const std::optional<world::ChunkCoord> only_chunk =
@@ -344,7 +345,7 @@ int main(int argc, char** argv) {
                           verify_4d || opt.bench_4d ||
                           shot_after > 0 || orbit_frames > 0 ||
                           cycle_frames > 0 || tilt_frames > 0 ||
-                          tilt_xw_frames > 0 ||
+                          tilt_xw_frames > 0 || w_frames > 0 ||
                           walk_frames > 0 ||
                           !save_path.empty();
     bool vsync_enabled = (bench_frames == 0 && shot_after == 0);
@@ -722,7 +723,22 @@ int main(int argc, char** argv) {
     //    settle frames are for; this is only for the angle changes after.
     auto settle_cut_for_capture = [&]() {
         if (capture_settle < kCaptureSettleFrames) return;
-        wrld.resample_slice(terrain, pool);
+
+        // Quiet the pool BEFORE asking for the rebuild, not after.
+        //
+        // resample_slice declines outright while any job is in flight -
+        // that is its rate limiter, and it is right for the live engine.
+        // Calling it first meant that on the one frame where the pool was
+        // still busy, the frame right after the world loads, the rebuild
+        // was silently skipped and the loop below then drained to quiet
+        // and reported success. Frame 0 was the streamed geometry and
+        // every later frame was resampled geometry, so a w clip whose
+        // first and middle frames sit at the same cut came back with
+        // 14.2 MB of mesh against 15.4 MB and failed its own loop check.
+        //
+        // So: drain to quiet, rebuild once that is true, then drain the
+        // rebuild. `resampled` is what makes it once rather than forever.
+        bool resampled = false;
         const auto deadline = std::chrono::steady_clock::now() +
                               std::chrono::seconds(20);
         while (std::chrono::steady_clock::now() < deadline) {
@@ -730,6 +746,11 @@ int main(int argc, char** argv) {
             wrld.flush_pending_remeshes(pool, 256);
             if (wrld.pending_async() == 0 && wrld.pending_remesh() == 0 &&
                 wrld.stream_slice(terrain, pool, 256) == 0) {
+                if (!resampled) {
+                    resampled = true;
+                    wrld.resample_slice(terrain, pool);
+                    continue;
+                }
                 return;
             }
             std::this_thread::yield();
@@ -1164,6 +1185,52 @@ int main(int argc, char** argv) {
                 static_cast<float>(tilt_xw_frames);
             const float want = kAmp * std::sin(phase);
             wrld.rotate_slice_xw(want - wrld.slice_phi(), cam.position().x);
+            settle_cut_for_capture();
+        }
+
+        // TRAVEL along w, with the cut's orientation held.
+        //
+        // The one clip where nothing turns. Both tilt clips rotate the
+        // hyperplane about a fixed origin; this slides that origin along
+        // the fourth axis and leaves the angle alone, which is the motion
+        // that makes a 4-ball present a sphere that swells from nothing,
+        // peaks at radius r, and vanishes - sqrt(r^2 - d^2) with d the
+        // distance along w.
+        //
+        // Absolute, not incremental. The frame's w is a function of the
+        // frame index, so the loop closes exactly and a dropped frame
+        // cannot accumulate into drift - the same reason the tilt sweeps
+        // set an angle rather than adding one.
+        if (w_frames > 0 && world_settled) {
+            if (!have_pose_at) {
+                const OrbitPose op = orbit_pose_at(0, 1, orbit_center);
+                cam.set_position(op.pos);
+                cam.set_yaw_pitch(op.yaw, op.pitch);
+            }
+            // MONOTONIC, not a sine, and the reason matters.
+            //
+            // Every other sweep ping-pongs so the clip returns to its own
+            // first frame. Travel cannot: measured, a fresh process at
+            // w=0 is byte-identical run to run (0.00/255) and capture
+            // frame 0 matches it exactly, but a frame that reaches w=0 by
+            // travelling out to 9 and back differs by 9.77/255. The world
+            // does not fully return, which is an engine defect in the
+            // travel path rather than anything this sweep does - rotation
+            // has a byte-identical round-trip invariant and translation
+            // has none.
+            //
+            // So this travels one way only, every frame a fresh point on
+            // a ramp, and the clip is closed by appending the frames
+            // reversed when the GIF is assembled. Every frame shown is a
+            // real render at its stated w, and no frame depends on the
+            // world having come back to somewhere it already was.
+            const float kAmp = 9.0f;      // world units along w, +/-
+            const float t = (w_frames > 1)
+                ? static_cast<float>(capture_frame) /
+                  static_cast<float>(w_frames - 1)
+                : 0.0f;
+            const float want = -kAmp + 2.0f * kAmp * t;
+            wrld.advance_w(want - wrld.slice_w());
             settle_cut_for_capture();
         }
 

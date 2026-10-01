@@ -115,6 +115,8 @@ struct CliOptions {
     // --capture-tilt-xw N: the same ping-pong in the OTHER rotation
     // plane, with whatever --slice-tilt gave held. Implies --4d.
     int  capture_tilt_xw = 0;
+    // Frames of travel along w with the cut held still.
+    int  capture_w = 0;
     // --capture-walk N: hold the cut and walk the camera forward, one PNG
     // per frame. Implies --4d.
     //

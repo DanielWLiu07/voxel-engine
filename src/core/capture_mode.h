@@ -40,6 +40,15 @@ struct CaptureMode {
     // leans into w, so walking forward IS travel along the fourth axis.
     // On a flat cut the same capture shows nothing changing, which is the
     // control and is worth being able to produce.
+    // Frames of TRAVEL along w, the fourth axis, with the cut held still.
+    //
+    // The complement of both tilt clips. Those turn the hyperplane and
+    // keep its origin; this keeps its orientation and slides it along w,
+    // which is the motion that makes a 4-ball's cross-section swell from
+    // nothing, peak, and vanish. Nothing rotates, so anything that
+    // changes shape here is changing because the cut moved, not because
+    // the camera or the angle did.
+    int w_frames     = 0;
     int walk_frames  = 0;
     int bench_frames = 0;  // frames to time; writes no image
 
@@ -53,7 +62,7 @@ struct CaptureMode {
     // pose and the orbit bench drives the camera through its own path.
     bool scripted_camera() const {
         return shot_after > 0 || orbit_frames > 0 || cycle_frames > 0 ||
-               tilt_frames > 0 || tilt_xw_frames > 0 ||
+               tilt_frames > 0 || tilt_xw_frames > 0 || w_frames > 0 ||
                walk_frames > 0;
     }
 
@@ -97,6 +106,7 @@ struct CaptureMode {
         if (cycle_frames > 0) return cycle_frames;
         if (tilt_frames > 0)  return tilt_frames;
         if (tilt_xw_frames > 0) return tilt_xw_frames;
+        if (w_frames > 0) return w_frames;
         return walk_frames;
     }
 };

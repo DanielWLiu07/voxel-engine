@@ -5,6 +5,7 @@
 #   ./scripts/capture_clip.sh cycle [frames] [out.gif]
 #   ./scripts/capture_clip.sh tilt  [frames] [out.gif]
 #   ./scripts/capture_clip.sh tiltxw [frames] [out.gif]
+#   ./scripts/capture_clip.sh w      [frames] [out.gif]
 #
 # orbit flies one deterministic camera circle; cycle holds the camera and
 # runs one full day of time-of-day; tilt holds the camera and turns the 4D
@@ -24,7 +25,7 @@ MODE=${1:-orbit}
 # second or two instead of a vsync. 90 frames is a nine-second loop at
 # the 10 fps these encode to, and takes about three minutes end to end.
 case "${1:-orbit}" in
-  tilt|tiltxw|walk) FRAMES=${2:-90} ;;
+  tilt|tiltxw|w|walk) FRAMES=${2:-90} ;;
   *)         FRAMES=${2:-360} ;;
 esac
 case "$MODE" in
@@ -32,8 +33,9 @@ case "$MODE" in
   cycle) OUT=${3:-docs/media/daycycle.gif} ;;
   tilt)  OUT=${3:-docs/media/slice_tilt.gif} ;;
   tiltxw) OUT=${3:-docs/media/cells_turn.gif} ;;
+  w) OUT=${3:-docs/media/w_travel.gif} ;;
   walk)  OUT=${3:-docs/media/slice_walk.gif} ;;
-  *) echo "usage: $0 orbit|cycle|tilt|tiltxw|walk [frames] [out.gif]" >&2; exit 1 ;;
+  *) echo "usage: $0 orbit|cycle|tilt|tiltxw|w|walk [frames] [out.gif]" >&2; exit 1 ;;
 esac
 # CLIP_ORBIT_CENTER="x,z[,look_y]" recenters the orbit (the lake clip uses
 # 288,-400,30); unset keeps the spawn triple-point circle.
@@ -64,6 +66,20 @@ rm -rf capture
 # triple point, which is where the biome variety is, and a rotation is
 # only legible against terrain that has something in it.
 POSE_ARGS=()
+if [ "$MODE" = "w" ]; then
+  # TRAVEL along w, with the cut flat and held.
+  #
+  # The only clip where nothing rotates: theta and phi stay at zero for
+  # every frame, so anything that changes is changing because the
+  # hyperplane MOVED along the fourth axis, not because it turned. That
+  # is what makes it the clearest demonstration of the dimension itself -
+  # a 4-ball's cross-section swelling from nothing, peaking, and going.
+  #
+  # Elevated and looking across the terrain, unlike the tiltxw clip:
+  # this one is about whole landforms appearing and leaving, not about
+  # the corners of single blocks, so it wants the wide view.
+  POSE_ARGS=(--pose-at 20,58,20,-130,-16 --radius 10 --slice-prisms)
+fi
 if [ "$MODE" = "tiltxw" ]; then
   # The one clip where the BLOCK SHAPES change rather than the terrain.
   #
@@ -113,6 +129,7 @@ fi
 # engine's, where it sits beside --slice-tilt-xw.
 CAPTURE_FLAG="--capture-$MODE"
 if [ "$MODE" = "tiltxw" ]; then CAPTURE_FLAG="--capture-tilt-xw"; fi
+if [ "$MODE" = "w" ]; then CAPTURE_FLAG="--capture-w"; fi
 
 ./build/voxel_engine "$CAPTURE_FLAG" "$FRAMES" \
     ${CENTER_ARGS[@]+"${CENTER_ARGS[@]}"} ${TOD_ARGS[@]+"${TOD_ARGS[@]}"} \
@@ -131,6 +148,12 @@ if [ "$MODE" = "tiltxw" ]; then CAPTURE_FLAG="--capture-tilt-xw"; fi
 # not a film of the angles it said it was. Measured, frames 0 and N/2 came
 # out 28/255 apart while consecutive frames were 0.02/255 apart, which is
 # the signature: the sweep lands in the file one frame late.
+#
+# The w clip is deliberately NOT checked here. The others ping-pong, so
+# frame 0 and frame FRAMES/2 sit at the same cut and must be the same
+# image. The w clip is a ONE-WAY ramp - its halfway frame is a different w
+# by construction - so this check has nothing to say about it, and it is
+# closed instead by appending its own frames reversed (see below).
 #
 # Not a ctest case because it needs a window and a GPU and CI has neither.
 # Here is the next best place: it runs every time a clip is made, which is
@@ -174,8 +197,17 @@ esac
 ffmpeg -y -framerate 30 -i capture/frame_%04d.png \
     -vf "fps=$FPS,scale=$WIDTH:-1:flags=lanczos,palettegen=max_colors=$COLORS" \
     /tmp/clip_palette.png
+# The w clip travels ONE WAY, so it is closed by playing its own frames
+# forward and then backward. Every frame shown is a real render at its
+# stated w, and the seam is exact because the return half IS the outward
+# half. The ping-pong clips need none of this: they already return.
+LOOP_FILTER=""
+if [ "$MODE" = "w" ]; then
+  LOOP_FILTER="split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0,"
+fi
+
 ffmpeg -y -framerate 30 -i capture/frame_%04d.png -i /tmp/clip_palette.png \
-    -lavfi "fps=$FPS,scale=$WIDTH:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5" \
+    -lavfi "fps=$FPS,scale=$WIDTH:-1:flags=lanczos,${LOOP_FILTER}setpts=N/FRAME_RATE/TB[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5" \
     "$OUT"
 
 ls -lh "$OUT"
